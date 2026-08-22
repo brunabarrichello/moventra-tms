@@ -41,10 +41,15 @@ jobs:
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
             "scripts/ci/build.sh"
+            "scripts/db/migrate.mjs"
+            "db/migrations/0001_foundation.sql"
+            "db/validation/0001_foundation_validation.sql"
             ".github/workflows/release-gate.yml"
             ".github/workflows/rollback-drill.yml"
             ".github/workflows/production-promotion.yml"
             "docs/implementation/004-cicd.md"
+            "docs/implementation/005-secrets-management.md"
+            "docs/implementation/006-banco-base.md"
           )
 
           for file in "${required_files[@]}"; do
@@ -114,9 +119,58 @@ jobs:
             exit 1
           fi
 
+  database-contract:
+    name: PostgreSQL migration contract
+    needs: repository-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: moventra_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: moventra-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d moventra_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
+      - name: Apply migrations to a clean PostgreSQL database
+        env:
+          DATABASE_URL: postgresql://postgres:moventra-ci-only@127.0.0.1:5432/moventra_ci
+        run: node scripts/db/migrate.mjs
+      - name: Re-run migrations to prove idempotent history behavior
+        env:
+          DATABASE_URL: postgresql://postgres:moventra-ci-only@127.0.0.1:5432/moventra_ci
+        run: node scripts/db/migrate.mjs
+      - name: Validate database foundation contract
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGDATABASE: moventra_ci
+          PGUSER: postgres
+          PGPASSWORD: moventra-ci-only
+        run: psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0001_foundation_validation.sql
+
   build:
     name: Build immutable artifact
-    needs: [lint, tests, security-baseline]
+    needs: [lint, tests, security-baseline, database-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -140,7 +194,7 @@ jobs:
 
   evidence:
     name: CI evidence
-    needs: [repository-contract, lint, tests, security-baseline, build]
+    needs: [repository-contract, lint, tests, security-baseline, database-contract, build]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -151,13 +205,14 @@ jobs:
           LINT_RESULT: ${{ needs.lint.result }}
           TEST_RESULT: ${{ needs.tests.result }}
           SECURITY_RESULT: ${{ needs.security-baseline.result }}
+          DATABASE_RESULT: ${{ needs.database-contract.result }}
           BUILD_RESULT: ${{ needs.build.result }}
         run: |
           set -euo pipefail
           mkdir -p evidence
           cat > evidence/ci-run.txt <<EOF
           product=Moventra TMS
-          phase=004-CI-CD
+          phase=foundation
           repository=${GITHUB_REPOSITORY}
           commit_sha=${GITHUB_SHA}
           ref=${GITHUB_REF}
@@ -168,10 +223,11 @@ jobs:
           lint=${LINT_RESULT}
           tests=${TEST_RESULT}
           security_baseline=${SECURITY_RESULT}
+          database_contract=${DATABASE_RESULT}
           build=${BUILD_RESULT}
           EOF
 
-          for result in "$CONTRACT_RESULT" "$LINT_RESULT" "$TEST_RESULT" "$SECURITY_RESULT" "$BUILD_RESULT"; do
+          for result in "$CONTRACT_RESULT" "$LINT_RESULT" "$TEST_RESULT" "$SECURITY_RESULT" "$DATABASE_RESULT" "$BUILD_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "::error::One or more CI controls failed."
               exit 1
