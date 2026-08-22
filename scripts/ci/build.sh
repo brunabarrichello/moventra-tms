@@ -33,5 +33,8 @@ tar \
   -C dist/app \
   -cf - . | gzip -n > "dist/artifacts/${ARTIFACT_NAME}"
 
-sha256sum "dist/artifacts/${ARTIFACT_NAME}" > "dist/artifacts/${ARTIFACT_NAME}.sha256"
-cat "dist/artifacts/${ARTIFACT_NAME}.sha256"
+(
+  cd dist/artifacts
+  sha256sum "${ARTIFACT_NAME}" > "${ARTIFACT_NAME}.sha256"
+  sha256sum -c "${ARTIFACT_NAME}.sha256"
+)
