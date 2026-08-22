@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  actions: read
+  actions: write
   contents: read
 
 jobs:
@@ -14,8 +14,38 @@ jobs:
     timeout-minutes: 5
     env:
       TARGET_BRANCH: phase/004-warning-cleanup-round2
+      STALE_RUN_ID: '32591576450'
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Cancel stale superseded CI run
+        run: |
+          set -euo pipefail
+          run_json="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${STALE_RUN_ID}")"
+
+          status="$(jq -r '.status' <<< "$run_json")"
+          branch="$(jq -r '.head_branch' <<< "$run_json")"
+          sha="$(jq -r '.head_sha' <<< "$run_json")"
+          test "$branch" = "$TARGET_BRANCH"
+          test "$sha" = '00beb364fe67e4e6cd15399e42c1ec273735a8fb'
+
+          if [[ "$status" != completed ]]; then
+            http_code="$(curl --silent --show-error --output /tmp/cancel.out --write-out '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${STALE_RUN_ID}/cancel")"
+            test "$http_code" = 202 || {
+              cat /tmp/cancel.out >&2
+              echo "::error::Could not cancel stale CI run; HTTP ${http_code}"
+              exit 1
+            }
+          fi
+
       - name: Enumerate remediation branch runs
         run: |
           set -euo pipefail
