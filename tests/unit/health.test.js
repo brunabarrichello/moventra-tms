@@ -14,3 +14,7 @@ test('health snapshot exposes stable service identity', () => {
 test('health snapshot is immutable', () => {
   assert.equal(Object.isFrozen(getHealthSnapshot()), true);
 });
+
+test('empty runtime version falls back to development', () => {
+  assert.equal(getHealthSnapshot('   ').version, 'development');
+});
