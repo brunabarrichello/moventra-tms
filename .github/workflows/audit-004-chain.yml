@@ -1,0 +1,49 @@
+name: Moventra 004 Chain Observer
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+  deployments: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Snapshot canonical main chain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: d3ab57a12c0e160e253d40688a6007eec350ec15
+        run: |
+          set -euo pipefail
+          api() {
+            curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "$1"
+          }
+
+          mkdir -p audit
+          runs_json="$(api "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TARGET_SHA}&per_page=100")"
+          printf '%s\n' "$runs_json" > audit/runs.json
+          jq -r '.workflow_runs[]
+            | [.id,.name,.run_number,.event,.status,(.conclusion//""),(.head_branch//""),(.head_sha//""),.created_at,.updated_at,(.actor.login//"")]
+            | @tsv' <<< "$runs_json" > audit/runs.tsv
+
+          echo "target_sha=${TARGET_SHA}" > audit/summary.txt
+          echo "run_count=$(jq '.workflow_runs | length' <<< "$runs_json")" >> audit/summary.txt
+          cat audit/runs.tsv >> audit/summary.txt
+          cat audit/summary.txt
+
+      - name: Upload chain snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: moventra-004-chain-snapshot
+          path: audit/
+          if-no-files-found: error
+          retention-days: 7
