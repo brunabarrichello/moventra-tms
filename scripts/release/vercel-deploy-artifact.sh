@@ -29,7 +29,9 @@ EOF
 
 vercel_cli_version="${VERCEL_CLI_VERSION:-59.3.0}"
 cd "$workdir"
-deployment_output="$(npx --yes "vercel@${vercel_cli_version}" deploy --prebuilt --prod --yes --token "$VERCEL_TOKEN" 2>&1)"
+# Keep Vercel command output authoritative while suppressing only npm/npx
+# installation deprecation noise and disabling CLI telemetry.
+deployment_output="$(NPM_CONFIG_LOGLEVEL=error VERCEL_TELEMETRY_DISABLED=1 npx --yes "vercel@${vercel_cli_version}" deploy --prebuilt --prod --yes --token "$VERCEL_TOKEN" 2>&1)"
 printf '%s\n' "$deployment_output" >&2
 
 # Vercel prints the immutable production deployment before any stable alias.
