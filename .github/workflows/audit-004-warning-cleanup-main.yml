@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  actions: read
+  actions: write
   contents: read
 
 jobs:
@@ -15,8 +15,37 @@ jobs:
     env:
       TARGET_SHA: 079d798368e47b44cbc28f9ed027446d8af0d2a8
       PRODUCTION_WORKFLOW_ID: '340095009'
+      STALE_PRODUCTION_RUN_ID: '32591200330'
+      STALE_SHA: a6ea6292696627fe02701a71213a402ee26950a8
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Cancel stale production promotion blocking canonical run
+        run: |
+          set -euo pipefail
+          run_json="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${STALE_PRODUCTION_RUN_ID}")"
+
+          test "$(jq -r '.name' <<< "$run_json")" = 'Moventra Production Promotion'
+          test "$(jq -r '.head_sha' <<< "$run_json")" = "$STALE_SHA"
+          status="$(jq -r '.status' <<< "$run_json")"
+
+          if [[ "$status" != completed ]]; then
+            http_code="$(curl --silent --show-error --output /tmp/cancel.out --write-out '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${STALE_PRODUCTION_RUN_ID}/cancel")"
+            test "$http_code" = 202 || {
+              cat /tmp/cancel.out >&2
+              echo "::error::Could not cancel stale production run; HTTP ${http_code}"
+              exit 1
+            }
+          fi
+
       - name: Enumerate canonical main runs
         run: |
           set -euo pipefail
@@ -31,16 +60,7 @@ jobs:
             .workflow_runs
             | sort_by(.created_at)
             | .[]
-            | [
-                (.id|tostring),
-                .name,
-                .event,
-                .status,
-                (.conclusion // "null"),
-                .head_branch,
-                .head_sha,
-                .created_at
-              ]
+            | [(.id|tostring), .name, .event, .status, (.conclusion // "null"), .head_branch, .head_sha, .created_at]
             | @tsv
           ' /tmp/runs.json
 
@@ -60,17 +80,8 @@ jobs:
             | sort_by(.created_at)
             | reverse
             | .[]
-            | [
-                (.id|tostring),
-                .status,
-                (.conclusion // "null"),
-                .event,
-                .head_branch,
-                .head_sha,
-                .created_at,
-                .updated_at
-              ]
+            | [(.id|tostring), .status, (.conclusion // "null"), .event, .head_branch, .head_sha, .created_at, .updated_at]
             | @tsv
           ' /tmp/production-runs.json
 
-# audit refresh: 2026-08-22T16:15-03:00
+# audit refresh: 2026-08-22T16:16-03:00
