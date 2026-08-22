@@ -45,6 +45,12 @@ jobs:
       prevent_self_review: ${{ steps.environment.outputs.prevent_self_review }}
       production_url: ${{ steps.source.outputs.production_url }}
     steps:
+      - name: Checkout promotion revision utilities
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
+          persist-credentials: false
+
       - name: Resolve and validate rollback run
         id: source
         env:
@@ -86,13 +92,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Download trusted rollback evidence
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          pattern: rollback-drill-*
-          path: rollback-evidence
-          merge-multiple: true
-          run-id: ${{ steps.source.outputs.rollback_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/github-download-artifact.sh \
+            "${{ steps.source.outputs.rollback_run_id }}" \
+            prefix \
+            rollback-drill- \
+            rollback-evidence
 
       - name: Validate rollback evidence and exact main artifact
         id: evidence
@@ -266,12 +274,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Download exact artifact proven by rollback
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: ${{ needs.preflight.outputs.artifact_name }}
-          path: release-artifact
-          run-id: ${{ needs.preflight.outputs.source_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/github-download-artifact.sh \
+            "${{ needs.preflight.outputs.source_run_id }}" \
+            exact \
+            "${{ needs.preflight.outputs.artifact_name }}" \
+            release-artifact
 
       - name: Validate production deployment configuration
         run: |
