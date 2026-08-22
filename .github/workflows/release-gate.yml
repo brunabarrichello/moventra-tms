@@ -1,0 +1,243 @@
+name: Moventra Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: GitHub Actions run ID that produced the immutable prebuilt artifact
+        required: true
+        type: string
+      artifact_name:
+        description: GitHub artifact name (moventra-tms-<commit-sha>)
+        required: true
+        type: string
+      staging_url:
+        description: Stable staging URL
+        required: true
+        default: https://moventra-tms-staging.vercel.app
+        type: string
+      production_url:
+        description: Stable production URL
+        required: true
+        default: https://moventra-tms-alebru.vercel.app
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: moventra-production-promotion
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    name: Staging prebuilt deployment
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 20
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_STAGING_PROJECT_ID }}
+    outputs:
+      commit_sha: ${{ steps.metadata.outputs.commit_sha }}
+      artifact_sha256: ${{ steps.metadata.outputs.artifact_sha256 }}
+      deployment_url: ${{ steps.deploy.outputs.deployment_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download immutable prebuilt artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: release-artifact
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate deployment configuration
+        id: credentials
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN is required'; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
+          test -n "$VERCEL_PROJECT_ID" || { echo '::error::VERCEL_STAGING_PROJECT_ID is required'; exit 1; }
+
+      - name: Verify immutable artifact contract
+        id: metadata
+        env:
+          SELECTED_ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          metadata="$(bash scripts/release/artifact-metadata.sh release-artifact)"
+          printf '%s\n' "$metadata"
+          while IFS='=' read -r key value; do
+            case "$key" in
+              commit_sha|github_artifact_name|artifact_name|artifact_format|artifact_sha256)
+                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          done <<< "$metadata"
+          discovered="$(printf '%s\n' "$metadata" | awk -F= '$1=="github_artifact_name" {print $2}')"
+          test "$SELECTED_ARTIFACT_NAME" = "$discovered"
+
+      - name: Deploy exact prebuilt artifact to staging
+        id: deploy
+        run: |
+          set -euo pipefail
+          result="$(bash scripts/release/vercel-deploy-artifact.sh release-artifact)"
+          printf '%s\n' "$result"
+          while IFS='=' read -r key value; do
+            case "$key" in
+              deployment_url|commit_sha|artifact_sha256)
+                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          done <<< "$result"
+
+      - name: Verify staging revision identity
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          STAGING_URL: ${{ inputs.staging_url }}
+          EXPECTED_SHA: ${{ steps.metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/smoke-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-health.sh "$STAGING_URL" "$EXPECTED_SHA"
+
+      - name: Record staging evidence
+        env:
+          SOURCE_RUN_ID: ${{ inputs.artifact_run_id }}
+          GITHUB_ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
+          ARTIFACT_SHA256: ${{ steps.metadata.outputs.artifact_sha256 }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/staging-deployment.txt <<EOF
+          product=Moventra TMS
+          phase=004-CI-CD
+          gate=staging-prebuilt-deployment
+          source_run_id=${SOURCE_RUN_ID}
+          github_artifact_name=${GITHUB_ARTIFACT_NAME}
+          commit_sha=${COMMIT_SHA}
+          artifact_sha256=${ARTIFACT_SHA256}
+          deployment_url=${DEPLOYMENT_URL}
+          stable_url=${STAGING_URL}
+          workflow_actor=${GITHUB_ACTOR}
+          workflow_run_id=${GITHUB_RUN_ID}
+          workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
+          result=success
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staging-deployment-${{ github.run_id }}
+          path: evidence/staging-deployment.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  production:
+    name: Production approval and prebuilt deployment
+    needs: staging
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PRODUCTION_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the same immutable prebuilt artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: release-artifact
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate production deployment configuration
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN is required'; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
+          test -n "$VERCEL_PROJECT_ID" || { echo '::error::VERCEL_PRODUCTION_PROJECT_ID is required'; exit 1; }
+
+      - name: Re-verify artifact and staging identity
+        id: metadata
+        env:
+          STAGING_COMMIT_SHA: ${{ needs.staging.outputs.commit_sha }}
+          STAGING_ARTIFACT_SHA256: ${{ needs.staging.outputs.artifact_sha256 }}
+        run: |
+          set -euo pipefail
+          metadata="$(bash scripts/release/artifact-metadata.sh release-artifact)"
+          printf '%s\n' "$metadata"
+          commit_sha="$(printf '%s\n' "$metadata" | awk -F= '$1=="commit_sha" {print $2}')"
+          artifact_sha256="$(printf '%s\n' "$metadata" | awk -F= '$1=="artifact_sha256" {print $2}')"
+          test "$commit_sha" = "$STAGING_COMMIT_SHA"
+          test "$artifact_sha256" = "$STAGING_ARTIFACT_SHA256"
+          printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
+          printf 'artifact_sha256=%s\n' "$artifact_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy exact approved prebuilt artifact to production
+        id: deploy
+        run: |
+          set -euo pipefail
+          result="$(bash scripts/release/vercel-deploy-artifact.sh release-artifact)"
+          printf '%s\n' "$result"
+          while IFS='=' read -r key value; do
+            case "$key" in
+              deployment_url|commit_sha|artifact_sha256)
+                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          done <<< "$result"
+
+      - name: Verify production revision identity
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          PRODUCTION_URL: ${{ inputs.production_url }}
+          EXPECTED_SHA: ${{ steps.metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/smoke-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-health.sh "$PRODUCTION_URL" "$EXPECTED_SHA"
+
+      - name: Record protected production evidence
+        env:
+          SOURCE_RUN_ID: ${{ inputs.artifact_run_id }}
+          GITHUB_ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
+          ARTIFACT_SHA256: ${{ steps.metadata.outputs.artifact_sha256 }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          PRODUCTION_URL: ${{ inputs.production_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/production-deployment.txt <<EOF
+          product=Moventra TMS
+          phase=004-CI-CD
+          gate=production-protected-deployment
+          approval_control=github-environment:production
+          source_run_id=${SOURCE_RUN_ID}
+          github_artifact_name=${GITHUB_ARTIFACT_NAME}
+          commit_sha=${COMMIT_SHA}
+          artifact_sha256=${ARTIFACT_SHA256}
+          deployment_url=${DEPLOYMENT_URL}
+          stable_url=${PRODUCTION_URL}
+          workflow_actor=${GITHUB_ACTOR}
+          workflow_run_id=${GITHUB_RUN_ID}
+          workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
+          result=success
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-deployment-${{ github.run_id }}
+          path: evidence/production-deployment.txt
+          if-no-files-found: error
+          retention-days: 180

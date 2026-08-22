@@ -1,0 +1,217 @@
+name: Moventra Rollback Drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      rollback_run_id:
+        description: GitHub Actions run ID that produced the rollback prebuilt artifact
+        required: true
+        type: string
+      rollback_artifact_name:
+        description: Immutable rollback artifact name (moventra-tms-<commit-sha>)
+        required: true
+        type: string
+      restore_run_id:
+        description: GitHub Actions run ID that produced the current prebuilt artifact
+        required: true
+        type: string
+      restore_artifact_name:
+        description: Immutable restoration artifact name (moventra-tms-<commit-sha>)
+        required: true
+        type: string
+      staging_url:
+        description: Stable staging URL used for revision-aware smoke validation
+        required: true
+        default: https://moventra-tms-staging.vercel.app
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: moventra-staging-rollback-drill
+  cancel-in-progress: false
+
+jobs:
+  rollback-drill:
+    name: Provider-neutral prebuilt rollback drill
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 30
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_STAGING_PROJECT_ID }}
+      STAGING_URL: ${{ inputs.staging_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download rollback prebuilt artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.rollback_artifact_name }}
+          path: rollback-artifact
+          run-id: ${{ inputs.rollback_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download current prebuilt artifact for restoration
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.restore_artifact_name }}
+          path: restore-artifact
+          run-id: ${{ inputs.restore_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate deployment configuration
+        id: credentials
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN is required'; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
+          test -n "$VERCEL_PROJECT_ID" || { echo '::error::VERCEL_STAGING_PROJECT_ID is required'; exit 1; }
+
+      - name: Verify rollback artifact contract
+        id: rollback_metadata
+        env:
+          SELECTED_ARTIFACT_NAME: ${{ inputs.rollback_artifact_name }}
+        run: |
+          set -euo pipefail
+          metadata="$(bash scripts/release/artifact-metadata.sh rollback-artifact)"
+          printf '%s\n' "$metadata"
+          commit_sha="$(printf '%s\n' "$metadata" | awk -F= '$1=="commit_sha" {print $2}')"
+          github_artifact_name="$(printf '%s\n' "$metadata" | awk -F= '$1=="github_artifact_name" {print $2}')"
+          artifact_sha256="$(printf '%s\n' "$metadata" | awk -F= '$1=="artifact_sha256" {print $2}')"
+          test "$SELECTED_ARTIFACT_NAME" = "$github_artifact_name"
+          printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
+          printf 'artifact_sha256=%s\n' "$artifact_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Verify restoration artifact contract
+        id: restore_metadata
+        env:
+          SELECTED_ARTIFACT_NAME: ${{ inputs.restore_artifact_name }}
+          ROLLBACK_SHA: ${{ steps.rollback_metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          metadata="$(bash scripts/release/artifact-metadata.sh restore-artifact)"
+          printf '%s\n' "$metadata"
+          commit_sha="$(printf '%s\n' "$metadata" | awk -F= '$1=="commit_sha" {print $2}')"
+          github_artifact_name="$(printf '%s\n' "$metadata" | awk -F= '$1=="github_artifact_name" {print $2}')"
+          artifact_sha256="$(printf '%s\n' "$metadata" | awk -F= '$1=="artifact_sha256" {print $2}')"
+          test "$SELECTED_ARTIFACT_NAME" = "$github_artifact_name"
+          test "$commit_sha" != "$ROLLBACK_SHA" || { echo '::error::Rollback and restoration revisions must differ'; exit 1; }
+          printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
+          printf 'artifact_sha256=%s\n' "$artifact_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy rollback prebuilt artifact
+        id: rollback
+        run: |
+          set -euo pipefail
+          result="$(bash scripts/release/vercel-deploy-artifact.sh rollback-artifact)"
+          printf '%s\n' "$result"
+          while IFS='=' read -r key value; do
+            case "$key" in
+              deployment_url|commit_sha|artifact_sha256)
+                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          done <<< "$result"
+
+      - name: Smoke test rolled-back revision
+        id: rollback_smoke
+        env:
+          DEPLOYMENT_URL: ${{ steps.rollback.outputs.deployment_url }}
+          EXPECTED_SHA: ${{ steps.rollback_metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/smoke-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-health.sh "$STAGING_URL" "$EXPECTED_SHA"
+
+      - name: Restore current prebuilt artifact
+        id: restore
+        if: always() && steps.credentials.outcome == 'success' && steps.restore_metadata.outcome == 'success'
+        run: |
+          set -euo pipefail
+          result="$(bash scripts/release/vercel-deploy-artifact.sh restore-artifact)"
+          printf '%s\n' "$result"
+          while IFS='=' read -r key value; do
+            case "$key" in
+              deployment_url|commit_sha|artifact_sha256)
+                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          done <<< "$result"
+
+      - name: Smoke test restored revision
+        id: restore_smoke
+        if: always() && steps.restore.outcome == 'success'
+        env:
+          DEPLOYMENT_URL: ${{ steps.restore.outputs.deployment_url }}
+          EXPECTED_SHA: ${{ steps.restore_metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/smoke-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-health.sh "$STAGING_URL" "$EXPECTED_SHA"
+
+      - name: Record rollback evidence
+        if: always()
+        env:
+          ROLLBACK_SHA: ${{ steps.rollback_metadata.outputs.commit_sha }}
+          ROLLBACK_ARTIFACT_SHA256: ${{ steps.rollback_metadata.outputs.artifact_sha256 }}
+          ROLLBACK_URL: ${{ steps.rollback.outputs.deployment_url }}
+          RESTORE_SHA: ${{ steps.restore_metadata.outputs.commit_sha }}
+          RESTORE_ARTIFACT_SHA256: ${{ steps.restore_metadata.outputs.artifact_sha256 }}
+          RESTORE_URL: ${{ steps.restore.outputs.deployment_url }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          ROLLBACK_SMOKE_OUTCOME: ${{ steps.rollback_smoke.outcome }}
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+          RESTORE_SMOKE_OUTCOME: ${{ steps.restore_smoke.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/rollback-drill.txt <<EOF
+          product=Moventra TMS
+          phase=004-CI-CD
+          gate=rollback-prebuilt-drill
+          workflow_actor=${GITHUB_ACTOR}
+          workflow_run_id=${GITHUB_RUN_ID}
+          workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
+          rollback_source_run=${{ inputs.rollback_run_id }}
+          rollback_github_artifact=${{ inputs.rollback_artifact_name }}
+          rollback_commit_sha=${ROLLBACK_SHA}
+          rollback_artifact_sha256=${ROLLBACK_ARTIFACT_SHA256}
+          rollback_deployment_url=${ROLLBACK_URL}
+          rollback_deploy=${ROLLBACK_OUTCOME}
+          rollback_smoke=${ROLLBACK_SMOKE_OUTCOME}
+          restore_source_run=${{ inputs.restore_run_id }}
+          restore_github_artifact=${{ inputs.restore_artifact_name }}
+          restore_commit_sha=${RESTORE_SHA}
+          restore_artifact_sha256=${RESTORE_ARTIFACT_SHA256}
+          restore_deployment_url=${RESTORE_URL}
+          restore_deploy=${RESTORE_OUTCOME}
+          restore_smoke=${RESTORE_SMOKE_OUTCOME}
+          stable_staging_url=${STAGING_URL}
+          EOF
+
+      - name: Upload rollback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-drill-${{ github.run_id }}
+          path: evidence/rollback-drill.txt
+          if-no-files-found: error
+          retention-days: 180
+
+      - name: Enforce drill result
+        if: always()
+        env:
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          ROLLBACK_SMOKE_OUTCOME: ${{ steps.rollback_smoke.outcome }}
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+          RESTORE_SMOKE_OUTCOME: ${{ steps.restore_smoke.outcome }}
+        run: |
+          set -euo pipefail
+          test "$ROLLBACK_OUTCOME" = success
+          test "$ROLLBACK_SMOKE_OUTCOME" = success
+          test "$RESTORE_OUTCOME" = success
+          test "$RESTORE_SMOKE_OUTCOME" = success

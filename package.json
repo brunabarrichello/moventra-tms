@@ -1,0 +1,15 @@
+{
+  "name": "moventra-tms",
+  "version": "0.1.0-foundation",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "lint": "./scripts/ci/lint.sh",
+    "test": "./scripts/ci/test.sh",
+    "build": "./scripts/ci/build.sh"
+  }
+}
