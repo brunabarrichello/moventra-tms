@@ -5,7 +5,9 @@ import { requestHandler } from '../../src/http/request-handler.js';
 
 async function withServer(run) {
   const server = createServer(requestHandler);
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
 
   try {
     const address = server.address();
