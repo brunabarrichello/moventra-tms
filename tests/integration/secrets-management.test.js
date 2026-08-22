@@ -47,7 +47,9 @@ test('tracked files exclude dotenv secrets, private keys and credential exports'
   ];
 
   for (const file of tracked) {
-    if (file === '.env.example') continue;
+    if (file === '.env.example') {
+      continue;
+    }
     for (const pattern of forbidden) {
       assert.doesNotMatch(file, pattern, `forbidden secret material is tracked: ${file}`);
     }
