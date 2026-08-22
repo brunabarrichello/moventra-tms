@@ -36,6 +36,7 @@ jobs:
             "README.md"
             "LICENSE"
             "package.json"
+            "package-lock.json"
             "eslint.config.js"
             "src/server.js"
             "src/infrastructure/database/postgres.js"
@@ -133,8 +134,8 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
-      - name: Install exact runtime dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Install locked runtime dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify dependency tree and adapter import
         run: |
           set -euo pipefail
