@@ -16,7 +16,7 @@ const workflowFiles = [
 const approvedActions = new Map([
   ['actions/checkout', '3d3c42e5aac5ba805825da76410c181273ba90b1'], // v7.0.1
   ['actions/setup-node', '249970729cb0ef3589644e2896645e5dc5ba9c38'], // v6.5.0
-  ['actions/download-artifact', '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'], // v8.0.1
+  ['actions/download-artifact', '37930b1c2abaa49bbe596cd826c3c89aef350131'], // v7.0.0
   ['actions/upload-artifact', '043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'], // v7.0.1
 ]);
 
@@ -25,6 +25,10 @@ const retiredNode20Pins = [
   '49933ea5288caeca8642d1e84afbd3f7d6820020', // setup-node v4.4.0
   'd3f86a106a0bac45b974a628896c90dbdf5c8093', // download-artifact v4.3.0
   'ea165f8d65b6e75b540449e92b4886f43607fa02', // upload-artifact v4.6.2
+];
+
+const retiredWarningPins = [
+  '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c', // download-artifact v8.0.1: DEP0005 Buffer() on canonical runner
 ];
 
 test('foundation workflows pin only approved Node 24 compatible GitHub Actions', async () => {
@@ -36,6 +40,9 @@ test('foundation workflows pin only approved Node 24 compatible GitHub Actions',
 
     for (const retiredPin of retiredNode20Pins) {
       assert.doesNotMatch(workflow, new RegExp(retiredPin), `${relativePath} still references retired Node 20 action ${retiredPin}`);
+    }
+    for (const retiredPin of retiredWarningPins) {
+      assert.doesNotMatch(workflow, new RegExp(retiredPin), `${relativePath} still references warning-producing action ${retiredPin}`);
     }
 
     for (const match of workflow.matchAll(/^\s*uses:\s+(actions\/[^@\s]+)@([^\s]+)(?:\s+#.*)?$/gm)) {
@@ -67,6 +74,7 @@ test('Vercel npx invocations suppress npm deprecation noise without suppressing 
   ]) {
     const script = await readFile(path.join(root, relativePath), 'utf8');
     assert.match(script, /NPM_CONFIG_LOGLEVEL=error/, `${relativePath} must suppress npm-only warning noise`);
+    assert.match(script, /NO_UPDATE_NOTIFIER=1/, `${relativePath} must disable Vercel update-notifier output`);
     assert.match(script, /VERCEL_TELEMETRY_DISABLED=1/, `${relativePath} must disable Vercel telemetry output`);
     assert.doesNotMatch(script, /2>\/dev\/null[^\n]*npx/, `${relativePath} must not discard Vercel stderr`);
   }

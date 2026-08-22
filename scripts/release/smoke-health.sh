@@ -16,7 +16,7 @@ fi
 attempts="${SMOKE_ATTEMPTS:-12}"
 delay_seconds="${SMOKE_DELAY_SECONDS:-5}"
 auth_mode="${SMOKE_AUTH_MODE:-auto}"
-vercel_cli_version="${VERCEL_CLI_VERSION:-59.3.0}"
+vercel_cli_version="${VERCEL_CLI_VERSION:-59.4.0}"
 
 case "$auth_mode" in
   auto|http|vercel) ;;
@@ -63,13 +63,14 @@ EOF
 
   # VERCEL_TOKEN is already exported by the GitHub environment and is an
   # officially supported authentication mechanism for Vercel CLI commands.
-  # Do not pass --token on `vercel curl`: Vercel CLI 59.3.0 forwards that
-  # option to the underlying curl invocation, which rejects it. Use the native
-  # full deployment URL and preserve Vercel stderr for auditability. Suppress
-  # only npm install/deprecation noise emitted by npx and disable CLI telemetry.
+  # Do not pass --token on `vercel curl`: the CLI forwards that option to the
+  # underlying curl invocation. Use the native full deployment URL and preserve
+  # Vercel stderr for auditability. Suppress only npm install/deprecation noise,
+  # update-notifier output and CLI telemetry.
   (
     cd "$workdir"
     NPM_CONFIG_LOGLEVEL=error \
+    NO_UPDATE_NOTIFIER=1 \
     VERCEL_TELEMETRY_DISABLED=1 \
       npx --yes "vercel@${vercel_cli_version}" \
         curl "${base_url}/health" || true

@@ -104,7 +104,7 @@ test('protected Vercel smoke uses native full deployment URL and VERCEL_TOKEN fr
   await runProcess('mkdir', ['-p', bin]);
 
   const mockNpx = path.join(bin, 'npx');
-  await writeFile(mockNpx, `#!/usr/bin/env bash\nset -euo pipefail\ntest "\${VERCEL_TOKEN:-}" = 'test-token'\nprintf '%s\\n' "$@" > "${log}"\nprintf '%s\\n' '{"status":"ok","product":"Moventra TMS","service":"moventra-api","version":"${expectedSha}"}'\n`);
+  await writeFile(mockNpx, `#!/usr/bin/env bash\nset -euo pipefail\ntest "\${VERCEL_TOKEN:-}" = 'test-token'\ntest "\${NPM_CONFIG_LOGLEVEL:-}" = 'error'\ntest "\${NO_UPDATE_NOTIFIER:-}" = '1'\ntest "\${VERCEL_TELEMETRY_DISABLED:-}" = '1'\nprintf '%s\\n' "$@" > "${log}"\nprintf '%s\\n' '{"status":"ok","product":"Moventra TMS","service":"moventra-api","version":"${expectedSha}"}'\n`);
   await chmod(mockNpx, 0o755);
 
   try {
@@ -124,7 +124,7 @@ test('protected Vercel smoke uses native full deployment URL and VERCEL_TOKEN fr
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /health smoke passed \(vercel\)/);
     const args = await readFile(log, 'utf8');
-    assert.match(args, /vercel@59\.3\.0/);
+    assert.match(args, /vercel@59\.4\.0/);
     assert.match(args, /curl/);
     assert.match(args, /https:\/\/moventra-example-immutable\.vercel\.app\/health/);
     assert.doesNotMatch(args, /--deployment/);
@@ -159,7 +159,7 @@ test('production evidence capture survives checkout cleanup and records approval
 test('Vercel output parser preserves the immutable deployment URL before mutable aliases', async () => {
   const immutableUrl = 'https://moventra-qdeqqgj3y-alebru.vercel.app';
   const output = [
-    'Vercel CLI 59.3.0',
+    'Vercel CLI 59.4.0',
     'Inspect https://vercel.com/alebru/moventra-tms/HCh9jAeUNvD3FeSkeLB8TP48wkVv',
     `Production ${immutableUrl}`,
     'Building…',
