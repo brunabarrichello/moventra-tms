@@ -2,7 +2,7 @@
 
 ## Estado
 
-`ACTIVE / BLOCKED ON RUNTIME CREDENTIAL PROVISIONING`
+`ACTIVE / BLOCKED ON B006-02`
 
 Dependência satisfeita: `005 — Secrets Management`.
 
@@ -31,7 +31,7 @@ Timezone do servidor: `GMT`.
 | Ambiente lógico | Branch Neon | Branch ID | Estado |
 |---|---|---|---|
 | production/base | `main` | `br-morning-glitter-au97suq4` | ready / baseline 0001 aplicado |
-| staging | `staging` | `br-rapid-math-au6j6xut` | ready |
+| staging | `staging` | `br-rapid-math-au6j6xut` | ready / baseline 0001 aplicado |
 | development | `development` | `br-summer-cloud-aulfwdsv` | ready |
 
 Não criar projeto Neon duplicado enquanto este permanecer como source of truth.
@@ -60,7 +60,7 @@ Características:
 - validation SQL correspondente a cada migration;
 - política de correção por forward-fix, com restore/PITR reservado a incidentes de estado.
 
-## Evidências de CI
+## Evidências de CI e implementação
 
 ### PR #28 — framework e baseline
 
@@ -85,20 +85,53 @@ Foi integrado:
 - domínio/core sem dependência de `pg`, Neon ou Vercel;
 - pooled connection para runtime e conexão direta para migrations.
 
-Todos os gates passaram, inclusive `PostgreSQL runtime dependencies` e `PostgreSQL migration contract`.
-
 PR #29 foi squash-merged em `20bb82e9a82fa0a88d4670681ab0cebd05c17d05`.
 
 ### PR #30 — reprodutibilidade de dependências
 
 - `package-lock.json` versionado;
 - CI alterado para instalação travada por lockfile com `npm ci`;
-- emissão temporária do lockfile removida antes do merge;
 - Foundation CI #117 = success;
 - Moventra CI #112 = success;
 - lint, testes, security baseline, runtime dependencies, migration contract, build e CI evidence = success.
 
 PR #30 foi squash-merged em `992fd332185b97aed2407b440b5c3de664ad1823`.
+
+### PR #32 — readiness PostgreSQL sanitizado
+
+Foi criado um probe de runtime que retorna somente:
+
+- `status=ready|unavailable`;
+- `service=database`;
+- revisão imutável servida.
+
+O probe não retorna host, usuário, database, senha, versão do servidor ou `DATABASE_URL`. Falhas de configuração/conectividade resultam em HTTP 503.
+
+### PR #33 — database health no artefato imutável
+
+Foi identificado que o source do PR #32 ainda não entrava no Build Output API v3 canônico. O builder foi corrigido para empacotar `api/database-health.func`, suas dependências travadas e as rotas `/database-health` e `/api/database-health`.
+
+Controles adicionados/reforçados:
+
+- dependências instaladas por `npm ci` nos testes e no build;
+- teste arquitetural exige as rotas e dependências do bundle;
+- `build.sh` valida sintaxe e import da função PostgreSQL empacotada;
+- repository contract exige os arquivos do database health e o builder Vercel.
+
+Evidência final do PR #33:
+
+- Foundation CI #126 = success;
+- Moventra CI #121 = success;
+- Repository contract = success;
+- Tests = success;
+- Lint = success;
+- Security baseline = success;
+- PostgreSQL runtime dependencies = success;
+- PostgreSQL migration contract = success;
+- Build immutable artifact = success;
+- CI evidence = success.
+
+PR #33 foi squash-merged em `ec86e2810d90f61d9a23dd3a2dd0d71caebcb3de`.
 
 ## Validação e promoção Neon
 
@@ -118,66 +151,98 @@ Validações executadas antes da promoção:
 
 Após aprovação explícita, a migration `dbd7fa04-53d5-4f1e-90e8-740d33d819af` foi promovida para a branch Neon `main`. A branch temporária foi removida automaticamente pelo fluxo seguro.
 
-### Validação pós-promoção em `main`
-
-A validation oficial foi reexecutada diretamente em `br-morning-glitter-au97suq4` sem exceção.
-
-Registro canônico:
+### Registro canônico
 
 - migration version: `1`;
 - migration name: `0001_foundation.sql`;
 - checksum: `465a15f85d98c7d81cb40bcd6ac902085eb017b99e8cc604dd279a53726c1efa`;
-- applied at: `2026-08-22T22:01:21.377Z`;
-- applied by: `neondb_owner`.
+- applied by em `main`: `neondb_owner`.
 
-Inventário pós-promoção de tabelas:
+Inventário de tabelas de fundação:
 
 - `moventra_meta.database_contract`;
 - `moventra_meta.schema_migrations`.
 
 Nenhuma entidade de Tenant, Empresa, Filial, Usuários, Memberships, RBAC ou Auditoria foi criada.
 
+### Alinhamento de staging
+
+Durante a validação do runtime foi detectado que a branch Neon `staging` ainda não possuía o baseline 0001. O ambiente foi alinhado com o mesmo contrato e o mesmo checksum de `main`, sem introduzir entidade de negócio.
+
+## Segregação de roles — B006-01 RESOLVED
+
+Roles de autorização:
+
+- production: `moventra_runtime_production` (`NOLOGIN`);
+- staging: `moventra_runtime_staging` (`NOLOGIN`).
+
+Principals de aplicação:
+
+- production: `moventra_app_production`;
+- staging: `moventra_app_staging`.
+
+Os principals foram criados com `PASSWORD NULL`, deliberadamente sem gerar segredo durante a automação.
+
+Validações de menor privilégio em ambos os ambientes:
+
+- `LOGIN = true` no principal;
+- `SUPERUSER = false`;
+- `CREATEDB = false`;
+- `CREATEROLE = false`;
+- `REPLICATION = false`;
+- `BYPASSRLS = false`;
+- `CONNECT = true`;
+- `CREATE` no database = false;
+- `USAGE` em `public` = true;
+- `CREATE` em `public` = false;
+- acesso a `moventra_meta` = false;
+- membership somente na respectiva role `moventra_runtime_*`.
+
+DDL/migrations permanecem segregados da identidade de runtime.
+
 ## Runtime e environments Vercel
 
-Projetos oficiais identificados:
+Projetos oficiais:
 
 | Ambiente | Projeto Vercel | Project ID |
 |---|---|---|
 | staging | `moventra-tms-staging` | `prj_4USELVoAr0FsHg2vBNGXws7hU22Q` |
 | production | `moventra-tms` | `prj_5qFenjyeGE1joaGomaNrUIRGSBQs` |
 
-O conector Vercel disponível permite consultar projetos/deployments/logs, mas não expõe nem administra Environment Variables/Secrets. O conector GitHub também não expõe administração de secrets para esse requisito.
+O conector Vercel disponível permite consultar projetos, deployments e runtime, mas não expõe nem administra Environment Variables/Secrets. Portanto, a gravação de `DATABASE_URL` continua sendo uma operação administrativa externa ao conector.
 
-Consequentemente, a existência/configuração de `DATABASE_URL` de runtime ainda não pode ser comprovada ou criada por automação segura nesta sessão.
+### Evidência operacional de staging pós-PR #33
 
-## Blockers finais
+- novo deployment de staging = `READY`;
+- alias canônico `/health` = HTTP 200;
+- revisão servida = `ec86e2810d90f61d9a23dd3a2dd0d71caebcb3de`;
+- `/database-health` = HTTP 503;
+- payload sanitizado = `status=unavailable`, `service=database`, mesma revisão.
 
-### B006-01 — role de aplicação com menor privilégio
+Essa evidência prova que source, CI, artefato e rota foram promovidos corretamente. O HTTP 503 é coerente com `moventra_app_staging` ainda sem senha e com `DATABASE_URL` ainda não provisionada no runtime.
 
-A aplicação ainda não possui evidência de uma role PostgreSQL de runtime separada da role administrativa/migration. Não é aceitável consolidar `neondb_owner` como credencial permanente da aplicação.
+## Blocker final B006-02 — credencial e `DATABASE_URL` por ambiente
 
-Requisito para fechamento:
+O único blocker restante da fase é transformar os principals já segregados em credenciais operacionais e armazenar as respectivas connection strings pooled no secret store do Vercel.
 
-- criar/selecionar role de runtime dedicada;
-- conceder somente privilégios necessários;
-- manter DDL/migrations restritos à role administrativa/migration;
-- registrar owner, escopo e procedimento de rotação sem expor a senha.
+Sequência obrigatória:
 
-### B006-02 — `DATABASE_URL` de runtime por ambiente
+1. staging primeiro: definir senha forte para `moventra_app_staging` fora de logs/chat;
+2. obter no Neon Console a pooled connection string para branch `staging`, role `moventra_app_staging`, database `neondb`;
+3. configurar `DATABASE_URL` no projeto `moventra-tms-staging`, environment `Production`;
+4. redeploy e validar `/database-health` = HTTP 200 / `ready`;
+5. somente depois repetir o processo em production com branch `main`, role `moventra_app_production` e projeto `moventra-tms`;
+6. validar production via `/database-health` sem revelar credenciais.
 
-Ainda falta evidência segura de que staging e production possuem `DATABASE_URL` apropriada para suas respectivas credenciais/branches, armazenada no secret store do runtime e nunca versionada.
+Não são necessários screenshots. A evidência final é o readiness operacional com a revisão correta.
 
-Aceitar como evidência:
+Nunca registrar ou transmitir em documentação/chat:
 
-- metadata/tela administrativa com nome da variável e environment, sem mostrar o valor; ou
-- integração administrativa que confirme presença/escopo sem retornar o valor.
-
-Nunca aceitar:
-
-- valor da connection string;
 - senha;
-- hash/prefixo do segredo;
-- screenshot com material sensível exposto.
+- `DATABASE_URL`;
+- hash ou prefixo do segredo;
+- connection string parcial;
+- conteúdo de secret store.
 
 ## Decisões da fase
 
@@ -190,7 +255,8 @@ Nunca aceitar:
 7. Alterações são testadas em branch temporária/ambiente não produtivo antes de aplicação em `main`.
 8. Esta fase não cria entidades das fases posteriores.
 9. Convenções detalhadas de dados permanecem reservadas à fase `007 — Convenções de Dados`.
-10. A role de runtime deve ser separada da role administrativa/migration antes da conclusão da fase.
+10. Runtime e migration usam identidades segregadas por menor privilégio.
+11. Health/readiness nunca expõe metadados de conexão ou material sensível.
 
 ## Trabalho ativo
 
@@ -205,11 +271,17 @@ Nunca aceitar:
 - [x] comparar formalmente o delta de schema;
 - [x] promover migration 0001 para Neon `main` após aprovação explícita;
 - [x] validar `main` após promoção;
+- [x] alinhar `staging` ao baseline 0001;
 - [x] integrar adapter PostgreSQL ao runtime Vercel;
 - [x] validar dependências/adapter no CI;
 - [x] consolidar `package-lock.json` e `npm ci`;
-- [ ] criar/selecionar role de runtime com menor privilégio distinta da role de migration;
-- [ ] definir/provar `DATABASE_URL` nos environments necessários sem expor valores;
+- [x] criar roles e principals segregados de runtime com menor privilégio;
+- [x] implementar e empacotar readiness PostgreSQL sanitizado;
+- [x] validar staging pós-promoção e confirmar blocker de credencial por HTTP 503;
+- [ ] definir credencial de runtime de staging e configurar `DATABASE_URL`;
+- [ ] validar staging `ready`;
+- [ ] definir credencial de runtime de production e configurar `DATABASE_URL`;
+- [ ] validar production `ready`;
 - [ ] validar evidências finais e concluir 006.
 
 ## Gate de conclusão
@@ -222,8 +294,9 @@ A fase 006 somente será `CONCLUDED` quando houver:
 - execução e validação em Neon não produtivo;
 - promoção controlada do baseline oficial;
 - role de aplicação com menor privilégio e segregação da role de migration;
-- `DATABASE_URL` provisionada por ambiente de runtime com evidência segura;
-- CI cobrindo migrations e dependências de runtime;
+- `DATABASE_URL` provisionada por ambiente de runtime;
+- readiness operacional `ready` em staging e production;
+- CI cobrindo migrations, dependências de runtime e artefato imutável;
 - documentação de aplicação e recuperação;
 - nenhuma entidade de fase posterior antecipada indevidamente.
 
@@ -231,7 +304,7 @@ Estado oficial:
 
 ```text
 005 = CONCLUDED
-006 = ACTIVE / BLOCKED ON B006-01 + B006-02
+006 = ACTIVE / BLOCKED ON B006-02
 007 = NOT ACTIVE
 G1  = NOT APPROVED
 ```
