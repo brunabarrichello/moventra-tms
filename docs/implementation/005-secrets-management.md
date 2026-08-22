@@ -19,7 +19,8 @@ Separar completamente secrets de código e configuração comum, mantendo segreg
 - política `docs/security/SECRETS-POLICY.md` ampliada com classificação, stores, segregação, rotação, auditoria e resposta a incidente;
 - contrato explícito entre `secrets`, `vars` e credenciais efêmeras;
 - teste automatizado que rejeita arquivos secretos rastreados e valores preenchidos no `.env.example`;
-- manutenção do consumo de `VERCEL_TOKEN` por GitHub Environment, sem persistência no repositório.
+- manutenção do consumo de `VERCEL_TOKEN` por GitHub Environment, sem persistência no repositório;
+- modelo seguro de evidência administrativa definido em `docs/implementation/005-secrets-evidence-model.md`.
 
 ## Inventário lógico atual
 
@@ -38,11 +39,20 @@ Separar completamente secrets de código e configuração comum, mantendo segreg
 
 A cadeia 004 demonstrou que `VERCEL_TOKEN` é resolvido em jobs vinculados aos environments `staging` e `production`, com valor mascarado nos logs e falha fechada se ausente. Nenhum valor secreto foi persistido nos artifacts de evidência.
 
+A auditoria da fase 005 também comprovou a existência dos environments `staging` e `production` e suas regras de proteção. A integração disponível, porém, não possui permissão administrativa suficiente para listar a metadata dos environment secrets.
+
 ## Limitação administrativa conhecida
 
-A conexão GitHub disponível neste projeto não expõe administração/listagem de repository/environment secrets. Portanto, a fase 005 não deve tentar ler ou exibir valores secretos para provar conformidade.
+A API do GitHub Actions Secrets não retorna valores secretos; endpoints de leitura retornam apenas metadata, como nome, `created_at` e `updated_at`. Portanto, comparar valores de `staging` e `production` não é um mecanismo de auditoria permitido nem tecnicamente necessário.
 
-A distinção de **valores** entre `staging` e `production`, bem como metadata de última rotação/acesso, precisa ser comprovada pelo painel administrativo/audit log do provedor ou por uma futura integração que exponha apenas metadata segura.
+A tentativa com a integração atual de consultar a metadata administrativa de environment secrets retornou `403 Resource not accessible by integration` em `staging` e `production`. Essa limitação deve ser registrada, não contornada por exposição ou exfiltração do secret.
+
+A independência entre ambientes deve ser comprovada por metadata/processo administrativo seguro, conforme `005-secrets-evidence-model.md`, por exemplo:
+
+- IDs/labels distintos de credenciais no provider;
+- provisionamento/rotação independente documentado por environment;
+- metadata de criação/atualização combinada com registro administrativo;
+- workload identity/OIDC com scopes/subjects distintos por environment.
 
 ## Gate de conclusão
 
@@ -54,10 +64,22 @@ Para marcar 005 como `CONCLUDED`, todos os itens abaixo devem ser verdadeiros:
 - [x] `secrets` separados de `vars`;
 - [x] logs/evidências sem valores secretos;
 - [x] política de rotação/revogação definida;
-- [ ] evidência administrativa de que os valores de secrets são distintos entre ambientes;
-- [ ] evidência administrativa/auditável de controle de acesso e rotação dos secrets existentes.
+- [x] modelo seguro de evidência administrativa definido sem comparação de valores secretos;
+- [ ] evidência administrativa de credenciais independentemente provisionadas/rotacionadas por ambiente;
+- [ ] evidência administrativa/auditável de controle de acesso e última rotação dos secrets existentes.
 
 Enquanto os dois itens administrativos finais não forem comprovados, o estado correto permanece `005 = ACTIVE` e `006 = NOT ACTIVE`.
+
+## Regra de segurança da evidência
+
+Nunca usar como evidência de segregação:
+
+- valor do secret;
+- hash calculado a partir do valor para comparação entre ambientes;
+- screenshot exibindo o valor;
+- exportação/cópia do secret para outro sistema.
+
+A evidência deve ser baseada em metadata, identidade não sensível da credencial, escopo, owner, timestamps, audit log e processo de rotação.
 
 ## Restrições
 
