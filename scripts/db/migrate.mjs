@@ -7,14 +7,9 @@ const MIGRATION_PATTERN = /^(\d{4})_([a-z0-9_]+)\.sql$/;
 const MIGRATION_LOCK_NAMESPACE = 6006;
 const root = process.cwd();
 const migrationsDirectory = resolve(root, 'db/migrations');
-const databaseUrl = process.env.DATABASE_URL;
 const statusOnly = process.argv.includes('--status');
 
-if (!databaseUrl) {
-  throw new Error('DATABASE_URL is required to run database migrations');
-}
-
-const connectionEnvironment = buildConnectionEnvironment(databaseUrl);
+const connectionEnvironment = buildConnectionEnvironment();
 const migrations = loadMigrations();
 
 bootstrapMigrationMetadata();
@@ -51,37 +46,48 @@ process.stdout.write(
   `migration summary: applied=${appliedCount} existing=${skippedCount} total=${migrations.length}\n`,
 );
 
-function buildConnectionEnvironment(value) {
-  const parsed = new URL(value);
-
-  if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
-    throw new Error('DATABASE_URL must use the postgres or postgresql protocol');
-  }
-
-  if (!parsed.hostname || !parsed.pathname || parsed.pathname === '/') {
-    throw new Error('DATABASE_URL must include host and database name');
-  }
-
+function buildConnectionEnvironment() {
   const environment = { ...process.env };
+  const databaseUrl = environment.DATABASE_URL;
   delete environment.DATABASE_URL;
 
-  environment.PGHOST = parsed.hostname;
-  environment.PGPORT = parsed.port || '5432';
-  environment.PGDATABASE = decodeURIComponent(parsed.pathname.slice(1));
-  environment.PGUSER = decodeURIComponent(parsed.username);
-  environment.PGPASSWORD = decodeURIComponent(parsed.password);
+  if (databaseUrl) {
+    const parsed = new URL(databaseUrl);
+
+    if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
+      throw new Error('DATABASE_URL must use the postgres or postgresql protocol');
+    }
+
+    if (!parsed.hostname || !parsed.pathname || parsed.pathname === '/') {
+      throw new Error('DATABASE_URL must include host and database name');
+    }
+
+    environment.PGHOST = parsed.hostname;
+    environment.PGPORT = parsed.port || '5432';
+    environment.PGDATABASE = decodeURIComponent(parsed.pathname.slice(1));
+    environment.PGUSER = decodeURIComponent(parsed.username);
+    environment.PGPASSWORD = decodeURIComponent(parsed.password);
+
+    const sslMode = parsed.searchParams.get('sslmode');
+    const channelBinding = parsed.searchParams.get('channel_binding');
+
+    if (sslMode) {
+      environment.PGSSLMODE = sslMode;
+    }
+
+    if (channelBinding) {
+      environment.PGCHANNELBINDING = channelBinding;
+    }
+  }
+
+  for (const key of ['PGHOST', 'PGDATABASE', 'PGUSER']) {
+    if (!environment[key]) {
+      throw new Error(`DATABASE_URL or ${key} connection settings are required`);
+    }
+  }
+
+  environment.PGPORT ||= '5432';
   environment.PGAPPNAME = 'moventra-migrations';
-
-  const sslMode = parsed.searchParams.get('sslmode');
-  const channelBinding = parsed.searchParams.get('channel_binding');
-
-  if (sslMode) {
-    environment.PGSSLMODE = sslMode;
-  }
-
-  if (channelBinding) {
-    environment.PGCHANNELBINDING = channelBinding;
-  }
 
   return environment;
 }
