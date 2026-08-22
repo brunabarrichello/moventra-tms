@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const smokeScript = path.join(root, 'scripts/release/smoke-health.sh');
 const deploymentUrlParser = path.join(root, 'scripts/release/vercel-deployment-url.sh');
+const productionPromotionWorkflow = path.join(root, '.github/workflows/production-promotion.yml');
 const expectedSha = 'a'.repeat(40);
 
 function runProcess(command, args, { env = {}, input = '' } = {}) {
@@ -132,6 +133,27 @@ test('protected Vercel smoke uses native full deployment URL and VERCEL_TOKEN fr
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
+});
+
+test('production evidence capture survives checkout cleanup and records approval history', async () => {
+  const workflow = await readFile(productionPromotionWorkflow, 'utf8');
+  const checkoutIndex = workflow.indexOf('- name: Checkout exact approved revision');
+  const approvalIndex = workflow.indexOf('- name: Capture authoritative environment approval');
+  const recordIndex = workflow.indexOf('- name: Record production evidence');
+  const uploadIndex = workflow.indexOf('- name: Upload protected production evidence');
+
+  assert.ok(checkoutIndex >= 0, 'production checkout step must exist');
+  assert.ok(approvalIndex > checkoutIndex, 'approval evidence must be captured after checkout cleanup');
+  assert.ok(recordIndex > approvalIndex, 'production evidence must be recorded after approval capture');
+  assert.ok(uploadIndex > recordIndex, 'production evidence must be uploaded after it is recorded');
+
+  const approvalSection = workflow.slice(approvalIndex, recordIndex);
+  assert.match(approvalSection, /mkdir -p evidence/);
+  assert.match(approvalSection, /> evidence\/approval-history\.json/);
+
+  const recordSection = workflow.slice(recordIndex, uploadIndex);
+  assert.match(recordSection, /mkdir -p evidence/);
+  assert.match(recordSection, /evidence\/production-deployment\.txt/);
 });
 
 test('Vercel output parser preserves the immutable deployment URL before mutable aliases', async () => {

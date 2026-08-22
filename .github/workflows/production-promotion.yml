@@ -222,6 +222,12 @@ jobs:
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PRODUCTION_PROJECT_ID }}
       PRODUCTION_URL: ${{ needs.preflight.outputs.production_url }}
     steps:
+      - name: Checkout exact approved revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.preflight.outputs.commit_sha }}
+          persist-credentials: false
+
       - name: Capture authoritative environment approval
         id: approval
         env:
@@ -258,12 +264,6 @@ jobs:
             printf 'approver=%s\n' "$approver"
             printf 'state=%s\n' "$state"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Checkout exact approved revision
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ needs.preflight.outputs.commit_sha }}
-          persist-credentials: false
 
       - name: Download exact artifact proven by rollback
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -328,6 +328,7 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
         run: |
           set -euo pipefail
+          mkdir -p evidence
           cat > evidence/production-deployment.txt <<EOF
           product=Moventra TMS
           phase=004-CI-CD
