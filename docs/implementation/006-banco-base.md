@@ -2,7 +2,7 @@
 
 ## Estado
 
-`ACTIVE / RUNTIME + NEON PROMOTION PENDING`
+`ACTIVE / BLOCKED ON RUNTIME CREDENTIAL PROVISIONING`
 
 Dependência satisfeita: `005 — Secrets Management`.
 
@@ -24,34 +24,23 @@ PostgreSQL: `18.6`
 
 Database inicial: `neondb`
 
-Timezone atual do servidor: `GMT`.
+Timezone do servidor: `GMT`.
 
 ### Branches Neon permanentes
 
 | Ambiente lógico | Branch Neon | Branch ID | Estado |
 |---|---|---|---|
-| production/base | `main` | `br-morning-glitter-au97suq4` | ready |
+| production/base | `main` | `br-morning-glitter-au97suq4` | ready / baseline 0001 aplicado |
 | staging | `staging` | `br-rapid-math-au6j6xut` | ready |
 | development | `development` | `br-summer-cloud-aulfwdsv` | ready |
 
 Não criar projeto Neon duplicado enquanto este permanecer como source of truth.
 
-## Baseline verificado em `main`
+## Baseline e correção P0
 
-- database `neondb` acessível com role proprietária;
-- schema de aplicação atual: `public`;
-- zero tabelas de aplicação;
-- zero views de aplicação;
-- extensão instalada: apenas `plpgsql`;
-- existe função utilitária `public.show_db_tree`, criada pela infraestrutura/ferramenta;
-- nenhum domínio TMS foi materializado;
-- `DATABASE_URL` existe somente como nome de contrato em `.env.example`, sem valor versionado.
+Ao ativar a 006 foi identificado que a antiga `db/migrations/0001_foundation.sql` antecipava tenants, companies, branches, users, memberships, RBAC e auditoria, pertencentes às fases 008–017. Como essa versão não havia sido aplicada no Neon oficial, ela foi corrigida antes da primeira promoção.
 
-## Delta audit da migration preexistente
-
-Ao ativar a 006 foi identificado que a antiga `db/migrations/0001_foundation.sql` antecipava tenants, companies, branches, users, memberships, RBAC e auditoria. Essa migration não havia sido aplicada no Neon oficial, pois a branch `main` permanecia sem tabelas de aplicação.
-
-A migration foi corrigida antes da primeira aplicação para um baseline estritamente não-domínio. Testes arquiteturais e validation agora bloqueiam regressão dessa antecipação.
+O baseline 0001 agora é estritamente não-domínio e cria somente metadados técnicos em `moventra_meta`. Testes arquiteturais e validation bloqueiam regressão dessa antecipação.
 
 ## Framework de migrations implementado
 
@@ -66,103 +55,161 @@ Características:
 - transação por migration;
 - advisory lock transacional;
 - reaplicação segura de migrations já registradas;
-- aceita `DATABASE_URL` nos ambientes reais e contrato `PG*` em contextos controlados de CI/administração;
-- remove `DATABASE_URL` do ambiente do processo filho `psql` e não passa a connection string como argumento;
-- validation SQL correspondente a cada migration.
+- `DATABASE_URL` nos ambientes reais e contrato `PG*` em contextos controlados de CI/administração;
+- `DATABASE_URL` removida do ambiente do processo filho `psql` e nunca passada como argumento;
+- validation SQL correspondente a cada migration;
+- política de correção por forward-fix, com restore/PITR reservado a incidentes de estado.
 
-A migration `0001_foundation.sql` cria somente `moventra_meta.database_contract`; o runner cria o histórico técnico `moventra_meta.schema_migrations`. Nenhuma entidade de tenant, empresa, filial, usuário, RBAC ou auditoria é criada nesta fase.
+## Evidências de CI
 
-## Evidência de CI
-
-PR #28 validou o framework com:
+### PR #28 — framework e baseline
 
 - Foundation CI #111 = success;
 - Moventra CI #106 = success;
-- Repository contract = success;
-- Tests = success;
-- Security baseline = success;
-- Lint = success;
-- PostgreSQL migration contract = success;
-- aplicação da migration em PostgreSQL 18 limpo = success;
-- segunda execução do runner/idempotência do histórico = success;
+- PostgreSQL 18 limpo = migration aplicada;
+- segunda execução = histórico idempotente;
 - validation 0001 = success;
-- build imutável = success;
-- CI evidence = success.
+- lint, testes, security baseline, build imutável e CI evidence = success.
 
-PR #28 foi squash-merged na `main` como `ee4a5a265efbcccc4b825d2eda272359b160238d`.
+PR #28 foi squash-merged em `ee4a5a265efbcccc4b825d2eda272359b160238d`.
 
-## Validação Neon temporária
+### PR #29 — runtime PostgreSQL
 
-Foi criada uma branch Neon temporária filha da `main` para validar o baseline sem alterar o banco principal.
+Foi integrado:
 
-Resultado:
+- `pg` (node-postgres);
+- Vercel Fluid Compute;
+- `attachDatabasePool`;
+- adapter isolado em `src/infrastructure/database/postgres.js`;
+- helper transacional com `BEGIN/COMMIT/ROLLBACK` e release garantido;
+- domínio/core sem dependência de `pg`, Neon ou Vercel;
+- pooled connection para runtime e conexão direta para migrations.
+
+Todos os gates passaram, inclusive `PostgreSQL runtime dependencies` e `PostgreSQL migration contract`.
+
+PR #29 foi squash-merged em `20bb82e9a82fa0a88d4670681ab0cebd05c17d05`.
+
+### PR #30 — reprodutibilidade de dependências
+
+- `package-lock.json` versionado;
+- CI alterado para instalação travada por lockfile com `npm ci`;
+- emissão temporária do lockfile removida antes do merge;
+- Foundation CI #117 = success;
+- Moventra CI #112 = success;
+- lint, testes, security baseline, runtime dependencies, migration contract, build e CI evidence = success.
+
+PR #30 foi squash-merged em `992fd332185b97aed2407b440b5c3de664ad1823`.
+
+## Validação e promoção Neon
+
+A migration 0001 foi inicialmente aplicada e validada em branch temporária Neon filha da `main`.
+
+Validações executadas antes da promoção:
 
 - PostgreSQL 18+ confirmado;
 - `moventra_meta.schema_migrations` presente;
 - `moventra_meta.database_contract` presente;
-- registro de contrato `Moventra TMS / moventra-tms / version 1` válido;
+- contrato `Moventra TMS / moventra-tms / version 1` válido;
 - migration 0001 registrada com checksum SHA-256 válido;
 - somente 2 tabelas internas em `moventra_meta`;
-- schema `public` permanece com zero tabelas;
-- nenhum schema ou tabela das fases 008+ foi criado;
-- validation oficial executada sem exceção.
+- `public` sem tabelas de aplicação;
+- nenhum schema ou tabela das fases 008+ criado;
+- diff formal contra a `main` continha somente `moventra_meta` e seus dois objetos técnicos.
 
-A promoção da migration temporária para a branch Neon `main` permanece pendente de confirmação explícita exigida pelo fluxo seguro de migration.
+Após aprovação explícita, a migration `dbd7fa04-53d5-4f1e-90e8-740d33d819af` foi promovida para a branch Neon `main`. A branch temporária foi removida automaticamente pelo fluxo seguro.
 
-## Runtime PostgreSQL em implementação
+### Validação pós-promoção em `main`
 
-Decisão para o runtime atual em Vercel:
+A validation oficial foi reexecutada diretamente em `br-morning-glitter-au97suq4` sem exceção.
 
-- `pg` (node-postgres) como driver PostgreSQL;
-- Vercel Fluid Compute habilitado;
-- `attachDatabasePool` para lifecycle do pool no ambiente Vercel;
-- adapter isolado em `src/infrastructure/database/postgres.js`;
-- domínio/core sem dependência de `pg`, Neon ou Vercel;
-- `DATABASE_URL` como secret de runtime;
-- connection pooled para runtime e conexão direta para migrations;
-- fronteira transacional explícita com `BEGIN/COMMIT/ROLLBACK` e liberação garantida do client.
+Registro canônico:
 
-Versões diretas inicialmente fixadas:
+- migration version: `1`;
+- migration name: `0001_foundation.sql`;
+- checksum: `465a15f85d98c7d81cb40bcd6ac902085eb017b99e8cc604dd279a53726c1efa`;
+- applied at: `2026-08-22T22:01:21.377Z`;
+- applied by: `neondb_owner`.
 
-- `pg = 8.23.0`;
-- `@vercel/functions = 3.9.3`.
+Inventário pós-promoção de tabelas:
 
-A branch `phase/006-runtime-postgres` adiciona CI para instalar/verificar essas dependências antes de permitir build.
+- `moventra_meta.database_contract`;
+- `moventra_meta.schema_migrations`.
+
+Nenhuma entidade de Tenant, Empresa, Filial, Usuários, Memberships, RBAC ou Auditoria foi criada.
+
+## Runtime e environments Vercel
+
+Projetos oficiais identificados:
+
+| Ambiente | Projeto Vercel | Project ID |
+|---|---|---|
+| staging | `moventra-tms-staging` | `prj_4USELVoAr0FsHg2vBNGXws7hU22Q` |
+| production | `moventra-tms` | `prj_5qFenjyeGE1joaGomaNrUIRGSBQs` |
+
+O conector Vercel disponível permite consultar projetos/deployments/logs, mas não expõe nem administra Environment Variables/Secrets. O conector GitHub também não expõe administração de secrets para esse requisito.
+
+Consequentemente, a existência/configuração de `DATABASE_URL` de runtime ainda não pode ser comprovada ou criada por automação segura nesta sessão.
+
+## Blockers finais
+
+### B006-01 — role de aplicação com menor privilégio
+
+A aplicação ainda não possui evidência de uma role PostgreSQL de runtime separada da role administrativa/migration. Não é aceitável consolidar `neondb_owner` como credencial permanente da aplicação.
+
+Requisito para fechamento:
+
+- criar/selecionar role de runtime dedicada;
+- conceder somente privilégios necessários;
+- manter DDL/migrations restritos à role administrativa/migration;
+- registrar owner, escopo e procedimento de rotação sem expor a senha.
+
+### B006-02 — `DATABASE_URL` de runtime por ambiente
+
+Ainda falta evidência segura de que staging e production possuem `DATABASE_URL` apropriada para suas respectivas credenciais/branches, armazenada no secret store do runtime e nunca versionada.
+
+Aceitar como evidência:
+
+- metadata/tela administrativa com nome da variável e environment, sem mostrar o valor; ou
+- integração administrativa que confirme presença/escopo sem retornar o valor.
+
+Nunca aceitar:
+
+- valor da connection string;
+- senha;
+- hash/prefixo do segredo;
+- screenshot com material sensível exposto.
 
 ## Decisões da fase
 
 1. PostgreSQL/Neon é o banco transacional primário inicial do monólito modular.
-2. O banco deve ser criado/evoluído exclusivamente por migrations versionadas e reproduzíveis.
+2. O banco evolui exclusivamente por migrations versionadas e reproduzíveis.
 3. Nenhuma credencial ou connection string real será versionada.
 4. `DATABASE_URL` será resolvida por secret store por ambiente.
 5. Migrations aplicadas são imutáveis; correções posteriores usam nova migration.
 6. A política padrão de recuperação de schema é forward-fix; restore/PITR é reservado a incidentes que justifiquem recuperação de estado.
 7. Alterações são testadas em branch temporária/ambiente não produtivo antes de aplicação em `main`.
-8. Esta fase não cria entidades de fases posteriores.
+8. Esta fase não cria entidades das fases posteriores.
 9. Convenções detalhadas de dados permanecem reservadas à fase `007 — Convenções de Dados`.
-10. A role de runtime deverá ser separada da role administrativa/migration antes da conclusão da fase.
+10. A role de runtime deve ser separada da role administrativa/migration antes da conclusão da fase.
 
 ## Trabalho ativo
 
 - [x] identificar projeto Neon oficial existente;
-- [x] identificar versão PostgreSQL, região e database inicial;
-- [x] inventariar branches `main`, `staging` e `development`;
-- [x] confirmar baseline vazio de tabelas/views de aplicação;
-- [x] corrigir migration preexistente que antecipava fases posteriores;
-- [x] implementar mecanismo de migrations baseado em SQL + `psql`;
-- [x] criar controle de versão/checksum de migrations;
-- [x] criar migration baseline não-domínio;
-- [x] criar validation do baseline;
-- [x] adicionar teste arquitetural impedindo entidades antecipadas na migration 0001;
-- [x] documentar política de migration, forward-fix e recuperação;
-- [x] validar job PostgreSQL no GitHub Actions;
+- [x] inventariar PostgreSQL, região, database e branches;
+- [x] corrigir migration que antecipava fases posteriores;
+- [x] implementar framework SQL + `psql` com checksum/history/lock;
+- [x] criar migration e validation 0001;
+- [x] validar reconstrução em PostgreSQL 18 limpo no CI;
+- [x] validar reaplicação idempotente;
 - [x] validar migration em branch temporária Neon;
-- [x] selecionar e implementar adapter PostgreSQL de runtime em branch de feature;
-- [ ] validar dependências e adapter de runtime pelo CI/PR;
-- [ ] promover a migration validada para Neon `main` após confirmação explícita;
+- [x] comparar formalmente o delta de schema;
+- [x] promover migration 0001 para Neon `main` após aprovação explícita;
+- [x] validar `main` após promoção;
+- [x] integrar adapter PostgreSQL ao runtime Vercel;
+- [x] validar dependências/adapter no CI;
+- [x] consolidar `package-lock.json` e `npm ci`;
 - [ ] criar/selecionar role de runtime com menor privilégio distinta da role de migration;
-- [ ] definir `DATABASE_URL` de runtime nos environments necessários sem expor valores;
-- [ ] consolidar lock/reprodutibilidade das dependências de runtime;
+- [ ] definir/provar `DATABASE_URL` nos environments necessários sem expor valores;
 - [ ] validar evidências finais e concluir 006.
 
 ## Gate de conclusão
@@ -175,15 +222,16 @@ A fase 006 somente será `CONCLUDED` quando houver:
 - execução e validação em Neon não produtivo;
 - promoção controlada do baseline oficial;
 - role de aplicação com menor privilégio e segregação da role de migration;
+- `DATABASE_URL` provisionada por ambiente de runtime com evidência segura;
 - CI cobrindo migrations e dependências de runtime;
 - documentação de aplicação e recuperação;
 - nenhuma entidade de fase posterior antecipada indevidamente.
 
-Até lá:
+Estado oficial:
 
 ```text
 005 = CONCLUDED
-006 = ACTIVE
+006 = ACTIVE / BLOCKED ON B006-01 + B006-02
 007 = NOT ACTIVE
 G1  = NOT APPROVED
 ```
