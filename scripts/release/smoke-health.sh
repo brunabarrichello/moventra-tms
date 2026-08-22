@@ -64,13 +64,16 @@ fetch_vercel() {
 {"orgId":"${VERCEL_ORG_ID}","projectId":"${VERCEL_PROJECT_ID}"}
 EOF
 
+  # Vercel CLI >= 48.8 supports protected requests and current releases accept
+  # a full deployment URL directly. Using the native full-URL form avoids the
+  # beta --deployment resolution path that failed against protected immutable
+  # production URLs in the previous canonical execution. Keep stderr visible
+  # so a future protection-bypass failure is auditably diagnosable.
   (
     cd "$workdir"
     npx --yes "vercel@${vercel_cli_version}" \
       --token "$VERCEL_TOKEN" \
-      curl /health \
-      --deployment "$base_url" \
-      2>/dev/null || true
+      curl "${base_url}/health" || true
   )
   rm -rf "$workdir"
 }
