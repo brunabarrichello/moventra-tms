@@ -135,6 +135,11 @@ jobs:
           package-manager-cache: false
       - name: Install exact runtime dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Emit generated lockfile for one-time capture
+        run: |
+          echo 'MOVENTRA_PACKAGE_LOCK_BEGIN'
+          cat package-lock.json
+          echo 'MOVENTRA_PACKAGE_LOCK_END'
       - name: Verify dependency tree and adapter import
         run: |
           set -euo pipefail
