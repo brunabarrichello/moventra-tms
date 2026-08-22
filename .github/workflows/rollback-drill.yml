@@ -1,6 +1,10 @@
 name: Moventra Rollback Drill
 
 on:
+  workflow_run:
+    workflows: ["Moventra Release Gate"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       rollback_run_id:
@@ -36,6 +40,7 @@ concurrency:
 jobs:
   rollback-drill:
     name: Provider-neutral prebuilt rollback drill
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_run') }}
     runs-on: ubuntu-latest
     environment: staging
     timeout-minutes: 30
@@ -43,26 +48,181 @@ jobs:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_STAGING_PROJECT_ID }}
-      STAGING_URL: ${{ inputs.staging_url }}
+      STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging.vercel.app' || inputs.staging_url }}
+
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Download trusted staging evidence
+        if: ${{ github.event_name == 'workflow_run' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          pattern: staging-deployment-*
+          path: staging-evidence
+          merge-multiple: true
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Resolve automatic rollback sources
+        id: auto_source
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          evidence="$(find staging-evidence -type f -name 'staging-deployment.txt' -print -quit)"
+          test -n "$evidence" || { echo '::error::Trusted staging evidence was not found'; exit 1; }
+
+          current_sha="$(awk -F= '$1=="commit_sha" {print $2}' "$evidence")"
+          restore_run_id="$(awk -F= '$1=="source_run_id" {print $2}' "$evidence")"
+          restore_artifact_name="$(awk -F= '$1=="github_artifact_name" {print $2}' "$evidence")"
+          staging_result="$(awk -F= '$1=="result" {print $2}' "$evidence")"
+
+          [[ "$current_sha" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Invalid staging commit SHA'; exit 1; }
+          [[ "$restore_run_id" =~ ^[0-9]+$ ]] || { echo '::error::Invalid staging source run ID'; exit 1; }
+          test "$restore_artifact_name" = "moventra-tms-${current_sha}" || {
+            echo '::error::Staging evidence artifact name does not match its commit SHA'
+            exit 1
+          }
+          test "$staging_result" = success || { echo '::error::Staging evidence is not successful'; exit 1; }
+
+          commit_json="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/commits/${current_sha}")"
+
+          parent_count="$(jq '.parents | length' <<< "$commit_json")"
+          test "$parent_count" -eq 1 || {
+            echo "::error::Expected linear-history commit with exactly one parent, found ${parent_count}"
+            exit 1
+          }
+
+          rollback_sha="$(jq -r '.parents[0].sha' <<< "$commit_json")"
+          [[ "$rollback_sha" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Invalid rollback parent SHA'; exit 1; }
+          rollback_artifact_name="moventra-tms-${rollback_sha}"
+
+          artifact_json="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${rollback_artifact_name}&per_page=100")"
+
+          rollback_run_id="$(jq -r \
+            --arg name "$rollback_artifact_name" \
+            --arg sha "$rollback_sha" \
+            '[.artifacts[]
+              | select(.name == $name)
+              | select(.expired == false)
+              | select(.workflow_run.head_branch == "main")
+              | select(.workflow_run.head_sha == $sha)]
+             | sort_by(.created_at)
+             | last
+             | .workflow_run.id // empty' <<< "$artifact_json")"
+
+          [[ "$rollback_run_id" =~ ^[0-9]+$ ]] || {
+            echo "::error::No non-expired prebuilt artifact from previous main SHA ${rollback_sha} was found"
+            exit 1
+          }
+
+          printf 'rollback_run_id=%s\n' "$rollback_run_id" >> "$GITHUB_OUTPUT"
+          printf 'rollback_artifact_name=%s\n' "$rollback_artifact_name" >> "$GITHUB_OUTPUT"
+          printf 'rollback_sha=%s\n' "$rollback_sha" >> "$GITHUB_OUTPUT"
+          printf 'restore_run_id=%s\n' "$restore_run_id" >> "$GITHUB_OUTPUT"
+          printf 'restore_artifact_name=%s\n' "$restore_artifact_name" >> "$GITHUB_OUTPUT"
+          printf 'restore_sha=%s\n' "$current_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve manual rollback sources
+        id: manual_source
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          ROLLBACK_RUN_ID: ${{ inputs.rollback_run_id }}
+          ROLLBACK_ARTIFACT_NAME: ${{ inputs.rollback_artifact_name }}
+          RESTORE_RUN_ID: ${{ inputs.restore_run_id }}
+          RESTORE_ARTIFACT_NAME: ${{ inputs.restore_artifact_name }}
+        run: |
+          set -euo pipefail
+          [[ "$ROLLBACK_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RESTORE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$ROLLBACK_ARTIFACT_NAME" =~ ^moventra-tms-[0-9a-f]{40}$ ]]
+          [[ "$RESTORE_ARTIFACT_NAME" =~ ^moventra-tms-[0-9a-f]{40}$ ]]
+
+          rollback_sha="${ROLLBACK_ARTIFACT_NAME#moventra-tms-}"
+          restore_sha="${RESTORE_ARTIFACT_NAME#moventra-tms-}"
+          test "$rollback_sha" != "$restore_sha" || { echo '::error::Rollback and restore SHAs must differ'; exit 1; }
+
+          printf 'rollback_run_id=%s\n' "$ROLLBACK_RUN_ID" >> "$GITHUB_OUTPUT"
+          printf 'rollback_artifact_name=%s\n' "$ROLLBACK_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          printf 'rollback_sha=%s\n' "$rollback_sha" >> "$GITHUB_OUTPUT"
+          printf 'restore_run_id=%s\n' "$RESTORE_RUN_ID" >> "$GITHUB_OUTPUT"
+          printf 'restore_artifact_name=%s\n' "$RESTORE_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          printf 'restore_sha=%s\n' "$restore_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Consolidate trusted artifact sources
+        id: source
+        env:
+          AUTO_ROLLBACK_RUN_ID: ${{ steps.auto_source.outputs.rollback_run_id }}
+          AUTO_ROLLBACK_ARTIFACT_NAME: ${{ steps.auto_source.outputs.rollback_artifact_name }}
+          AUTO_ROLLBACK_SHA: ${{ steps.auto_source.outputs.rollback_sha }}
+          AUTO_RESTORE_RUN_ID: ${{ steps.auto_source.outputs.restore_run_id }}
+          AUTO_RESTORE_ARTIFACT_NAME: ${{ steps.auto_source.outputs.restore_artifact_name }}
+          AUTO_RESTORE_SHA: ${{ steps.auto_source.outputs.restore_sha }}
+          MANUAL_ROLLBACK_RUN_ID: ${{ steps.manual_source.outputs.rollback_run_id }}
+          MANUAL_ROLLBACK_ARTIFACT_NAME: ${{ steps.manual_source.outputs.rollback_artifact_name }}
+          MANUAL_ROLLBACK_SHA: ${{ steps.manual_source.outputs.rollback_sha }}
+          MANUAL_RESTORE_RUN_ID: ${{ steps.manual_source.outputs.restore_run_id }}
+          MANUAL_RESTORE_ARTIFACT_NAME: ${{ steps.manual_source.outputs.restore_artifact_name }}
+          MANUAL_RESTORE_SHA: ${{ steps.manual_source.outputs.restore_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
+            rollback_run_id="$AUTO_ROLLBACK_RUN_ID"
+            rollback_artifact_name="$AUTO_ROLLBACK_ARTIFACT_NAME"
+            rollback_sha="$AUTO_ROLLBACK_SHA"
+            restore_run_id="$AUTO_RESTORE_RUN_ID"
+            restore_artifact_name="$AUTO_RESTORE_ARTIFACT_NAME"
+            restore_sha="$AUTO_RESTORE_SHA"
+          else
+            rollback_run_id="$MANUAL_ROLLBACK_RUN_ID"
+            rollback_artifact_name="$MANUAL_ROLLBACK_ARTIFACT_NAME"
+            rollback_sha="$MANUAL_ROLLBACK_SHA"
+            restore_run_id="$MANUAL_RESTORE_RUN_ID"
+            restore_artifact_name="$MANUAL_RESTORE_ARTIFACT_NAME"
+            restore_sha="$MANUAL_RESTORE_SHA"
+          fi
+
+          [[ "$rollback_run_id" =~ ^[0-9]+$ ]]
+          [[ "$restore_run_id" =~ ^[0-9]+$ ]]
+          [[ "$rollback_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$restore_sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$rollback_sha" != "$restore_sha"
+
+          printf 'rollback_run_id=%s\n' "$rollback_run_id" >> "$GITHUB_OUTPUT"
+          printf 'rollback_artifact_name=%s\n' "$rollback_artifact_name" >> "$GITHUB_OUTPUT"
+          printf 'rollback_sha=%s\n' "$rollback_sha" >> "$GITHUB_OUTPUT"
+          printf 'restore_run_id=%s\n' "$restore_run_id" >> "$GITHUB_OUTPUT"
+          printf 'restore_artifact_name=%s\n' "$restore_artifact_name" >> "$GITHUB_OUTPUT"
+          printf 'restore_sha=%s\n' "$restore_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact restoration revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.source.outputs.restore_sha }}
           persist-credentials: false
 
       - name: Download rollback prebuilt artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: ${{ inputs.rollback_artifact_name }}
+          name: ${{ steps.source.outputs.rollback_artifact_name }}
           path: rollback-artifact
-          run-id: ${{ inputs.rollback_run_id }}
+          run-id: ${{ steps.source.outputs.rollback_run_id }}
           github-token: ${{ github.token }}
 
       - name: Download current prebuilt artifact for restoration
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: ${{ inputs.restore_artifact_name }}
+          name: ${{ steps.source.outputs.restore_artifact_name }}
           path: restore-artifact
-          run-id: ${{ inputs.restore_run_id }}
+          run-id: ${{ steps.source.outputs.restore_run_id }}
           github-token: ${{ github.token }}
 
       - name: Validate deployment configuration
@@ -76,7 +236,8 @@ jobs:
       - name: Verify rollback artifact contract
         id: rollback_metadata
         env:
-          SELECTED_ARTIFACT_NAME: ${{ inputs.rollback_artifact_name }}
+          SELECTED_ARTIFACT_NAME: ${{ steps.source.outputs.rollback_artifact_name }}
+          EXPECTED_SHA: ${{ steps.source.outputs.rollback_sha }}
         run: |
           set -euo pipefail
           metadata="$(bash scripts/release/artifact-metadata.sh rollback-artifact)"
@@ -85,13 +246,15 @@ jobs:
           github_artifact_name="$(printf '%s\n' "$metadata" | awk -F= '$1=="github_artifact_name" {print $2}')"
           artifact_sha256="$(printf '%s\n' "$metadata" | awk -F= '$1=="artifact_sha256" {print $2}')"
           test "$SELECTED_ARTIFACT_NAME" = "$github_artifact_name"
+          test "$EXPECTED_SHA" = "$commit_sha"
           printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
           printf 'artifact_sha256=%s\n' "$artifact_sha256" >> "$GITHUB_OUTPUT"
 
       - name: Verify restoration artifact contract
         id: restore_metadata
         env:
-          SELECTED_ARTIFACT_NAME: ${{ inputs.restore_artifact_name }}
+          SELECTED_ARTIFACT_NAME: ${{ steps.source.outputs.restore_artifact_name }}
+          EXPECTED_SHA: ${{ steps.source.outputs.restore_sha }}
           ROLLBACK_SHA: ${{ steps.rollback_metadata.outputs.commit_sha }}
         run: |
           set -euo pipefail
@@ -101,6 +264,7 @@ jobs:
           github_artifact_name="$(printf '%s\n' "$metadata" | awk -F= '$1=="github_artifact_name" {print $2}')"
           artifact_sha256="$(printf '%s\n' "$metadata" | awk -F= '$1=="artifact_sha256" {print $2}')"
           test "$SELECTED_ARTIFACT_NAME" = "$github_artifact_name"
+          test "$EXPECTED_SHA" = "$commit_sha"
           test "$commit_sha" != "$ROLLBACK_SHA" || { echo '::error::Rollback and restoration revisions must differ'; exit 1; }
           printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
           printf 'artifact_sha256=%s\n' "$artifact_sha256" >> "$GITHUB_OUTPUT"
@@ -175,18 +339,19 @@ jobs:
           product=Moventra TMS
           phase=004-CI-CD
           gate=rollback-prebuilt-drill
+          trigger=${GITHUB_EVENT_NAME}
           workflow_actor=${GITHUB_ACTOR}
           workflow_run_id=${GITHUB_RUN_ID}
           workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
-          rollback_source_run=${{ inputs.rollback_run_id }}
-          rollback_github_artifact=${{ inputs.rollback_artifact_name }}
+          rollback_source_run=${{ steps.source.outputs.rollback_run_id }}
+          rollback_github_artifact=${{ steps.source.outputs.rollback_artifact_name }}
           rollback_commit_sha=${ROLLBACK_SHA}
           rollback_artifact_sha256=${ROLLBACK_ARTIFACT_SHA256}
           rollback_deployment_url=${ROLLBACK_URL}
           rollback_deploy=${ROLLBACK_OUTCOME}
           rollback_smoke=${ROLLBACK_SMOKE_OUTCOME}
-          restore_source_run=${{ inputs.restore_run_id }}
-          restore_github_artifact=${{ inputs.restore_artifact_name }}
+          restore_source_run=${{ steps.source.outputs.restore_run_id }}
+          restore_github_artifact=${{ steps.source.outputs.restore_artifact_name }}
           restore_commit_sha=${RESTORE_SHA}
           restore_artifact_sha256=${RESTORE_ARTIFACT_SHA256}
           restore_deployment_url=${RESTORE_URL}
@@ -199,7 +364,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: rollback-drill-${{ github.run_id }}
+          name: rollback-drill-${{ steps.source.outputs.restore_sha || github.run_id }}
           path: evidence/rollback-drill.txt
           if-no-files-found: error
           retention-days: 180
