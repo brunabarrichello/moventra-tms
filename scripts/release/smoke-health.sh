@@ -28,17 +28,28 @@ esac
 
 validate_health() {
   local response="$1"
-  RESPONSE="$response" EXPECTED_SHA="$expected_sha" node --input-type=module <<'NODE'
-const payload = JSON.parse(process.env.RESPONSE || '{}');
-if (payload.status !== 'ok') process.exit(1);
-if (payload.product !== 'Moventra TMS') process.exit(1);
-if (payload.service !== 'moventra-api') process.exit(1);
-if (payload.version !== process.env.EXPECTED_SHA) process.exit(1);
-NODE
+  printf '%s' "$response" | EXPECTED_SHA="$expected_sha" node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+
+    let payload;
+    try {
+      payload = JSON.parse(readFileSync(0, "utf8") || "{}");
+    } catch {
+      process.exit(1);
+    }
+
+    if (payload.status !== "ok") process.exit(1);
+    if (payload.product !== "Moventra TMS") process.exit(1);
+    if (payload.service !== "moventra-api") process.exit(1);
+    if (payload.version !== process.env.EXPECTED_SHA) process.exit(1);
+  '
 }
 
 fetch_http() {
-  curl --fail --silent --show-error --location --max-time 20 "${base_url}/health" 2>/dev/null || true
+  # Do not follow authentication redirects. A protected deployment should fail
+  # the anonymous probe cheaply and fall through to the authenticated Vercel
+  # probe instead of downloading a potentially large SSO page.
+  curl --fail --silent --show-error --max-time 20 "${base_url}/health" 2>/dev/null || true
 }
 
 fetch_vercel() {
