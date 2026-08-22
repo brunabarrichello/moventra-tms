@@ -1,0 +1,175 @@
+name: Moventra Rollback Drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      rollback_run_id:
+        description: GitHub Actions run ID that produced the rollback artifact
+        required: true
+        type: string
+      rollback_artifact_name:
+        description: Immutable artifact name to restore temporarily
+        required: true
+        type: string
+      restore_run_id:
+        description: GitHub Actions run ID that produced the current artifact
+        required: true
+        type: string
+      restore_artifact_name:
+        description: Immutable artifact name to restore after the drill
+        required: true
+        type: string
+      staging_url:
+        description: Stable staging URL used for smoke validation
+        required: true
+        default: https://moventra-tms-staging.vercel.app
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: moventra-staging-rollback-drill
+  cancel-in-progress: false
+
+jobs:
+  rollback-drill:
+    name: Provider-neutral rollback drill
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 20
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_STAGING_PROJECT_ID: ${{ vars.VERCEL_STAGING_PROJECT_ID }}
+      STAGING_URL: ${{ inputs.staging_url }}
+    steps:
+      - name: Checkout rollback tooling
+        uses: actions/checkout@v4
+
+      - name: Download rollback artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.rollback_artifact_name }}
+          path: rollback-artifact
+          run-id: ${{ inputs.rollback_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download current artifact for restoration
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.restore_artifact_name }}
+          path: restore-artifact
+          run-id: ${{ inputs.restore_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate deployment credentials and variables
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN secret is required'; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID variable is required'; exit 1; }
+          test -n "$VERCEL_STAGING_PROJECT_ID" || { echo '::error::VERCEL_STAGING_PROJECT_ID variable is required'; exit 1; }
+
+      - name: Redeploy immutable rollback artifact
+        id: rollback
+        run: |
+          set -euo pipefail
+          deployment_url="$(bash scripts/release/vercel-deploy-artifact.sh rollback-artifact)"
+          echo "deployment_url=$deployment_url" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test rolled-back deployment
+        id: rollback_smoke
+        env:
+          DEPLOYMENT_URL: ${{ steps.rollback.outputs.deployment_url }}
+        run: |
+          set -euo pipefail
+          for url in "$DEPLOYMENT_URL" "$STAGING_URL"; do
+            response="$(curl --fail --silent --show-error --location --max-time 20 "${url%/}/health")"
+            RESPONSE="$response" node --input-type=module <<'NODE'
+          const payload = JSON.parse(process.env.RESPONSE);
+          if (payload.status !== 'ok') throw new Error('health status is not ok');
+          if (payload.product !== 'Moventra TMS') throw new Error('unexpected product');
+          if (payload.service !== 'moventra-api') throw new Error('unexpected service');
+          NODE
+          done
+
+      - name: Restore current immutable artifact
+        id: restore
+        if: always() && steps.rollback.outcome == 'success'
+        run: |
+          set -euo pipefail
+          deployment_url="$(bash scripts/release/vercel-deploy-artifact.sh restore-artifact)"
+          echo "deployment_url=$deployment_url" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test restored deployment
+        id: restore_smoke
+        if: always() && steps.restore.outcome == 'success'
+        env:
+          DEPLOYMENT_URL: ${{ steps.restore.outputs.deployment_url }}
+        run: |
+          set -euo pipefail
+          for url in "$DEPLOYMENT_URL" "$STAGING_URL"; do
+            response="$(curl --fail --silent --show-error --location --max-time 20 "${url%/}/health")"
+            RESPONSE="$response" node --input-type=module <<'NODE'
+          const payload = JSON.parse(process.env.RESPONSE);
+          if (payload.status !== 'ok') throw new Error('health status is not ok');
+          if (payload.product !== 'Moventra TMS') throw new Error('unexpected product');
+          if (payload.service !== 'moventra-api') throw new Error('unexpected service');
+          NODE
+          done
+
+      - name: Record rollback evidence
+        if: always()
+        env:
+          ROLLBACK_URL: ${{ steps.rollback.outputs.deployment_url }}
+          RESTORE_URL: ${{ steps.restore.outputs.deployment_url }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          ROLLBACK_SMOKE_OUTCOME: ${{ steps.rollback_smoke.outcome }}
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+          RESTORE_SMOKE_OUTCOME: ${{ steps.restore_smoke.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/rollback-drill.txt <<EOF
+          product=Moventra TMS
+          phase=004-CI-CD
+          gate=rollback-drill
+          actor=${GITHUB_ACTOR}
+          run_id=${GITHUB_RUN_ID}
+          run_attempt=${GITHUB_RUN_ATTEMPT}
+          rollback_source_run=${{ inputs.rollback_run_id }}
+          rollback_artifact=${{ inputs.rollback_artifact_name }}
+          rollback_deployment_url=${ROLLBACK_URL}
+          rollback_deploy=${ROLLBACK_OUTCOME}
+          rollback_smoke=${ROLLBACK_SMOKE_OUTCOME}
+          restore_source_run=${{ inputs.restore_run_id }}
+          restore_artifact=${{ inputs.restore_artifact_name }}
+          restore_deployment_url=${RESTORE_URL}
+          restore_deploy=${RESTORE_OUTCOME}
+          restore_smoke=${RESTORE_SMOKE_OUTCOME}
+          staging_url=${STAGING_URL}
+          EOF
+
+      - name: Upload rollback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-drill-${{ github.run_id }}
+          path: evidence/rollback-drill.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce drill result
+        if: always()
+        env:
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          ROLLBACK_SMOKE_OUTCOME: ${{ steps.rollback_smoke.outcome }}
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+          RESTORE_SMOKE_OUTCOME: ${{ steps.restore_smoke.outcome }}
+        run: |
+          set -euo pipefail
+          test "$ROLLBACK_OUTCOME" = success
+          test "$ROLLBACK_SMOKE_OUTCOME" = success
+          test "$RESTORE_OUTCOME" = success
+          test "$RESTORE_SMOKE_OUTCOME" = success
