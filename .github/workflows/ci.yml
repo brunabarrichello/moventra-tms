@@ -67,7 +67,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: false
       - run: ./scripts/ci/lint.sh
 
   tests:
@@ -80,7 +79,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: false
       - run: ./scripts/ci/test.sh
 
   security-baseline:
@@ -115,7 +113,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: false
       - name: Build once
         run: ./scripts/ci/build.sh
       - name: Upload immutable application artifact
