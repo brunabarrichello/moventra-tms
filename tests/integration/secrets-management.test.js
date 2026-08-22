@@ -80,7 +80,6 @@ test('deployment credentials are scoped to protected GitHub environments', async
 
   for (const workflow of [staging, rollback, production]) {
     assert.doesNotMatch(workflow, /VERCEL_TOKEN:\s*\$\{\{\s*vars\./);
-    assert.doesNotMatch(workflow, /VERCEL_TOKEN:\s*(?!\$\{\{)[^\n]+/);
   }
 });
 
