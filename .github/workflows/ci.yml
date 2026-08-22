@@ -1,0 +1,137 @@
+name: Moventra CI Foundation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  repository-contract:
+    name: Repository contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate mandatory foundation files
+        run: |
+          set -euo pipefail
+          required_files=(
+            "README.md"
+            "LICENSE"
+            "docs/implementation/004-cicd.md"
+          )
+
+          for file in "${required_files[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              echo "::error file=$file::Mandatory foundation file is missing"
+              exit 1
+            fi
+          done
+
+      - name: Reject tracked environment secret files
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -Ev '(^|/)\.env\.example$'; then
+            echo "::error::Tracked .env files are forbidden. Keep only sanitized .env.example files."
+            exit 1
+          fi
+
+      - name: Validate repository-owned CI hooks
+        run: |
+          set -euo pipefail
+          hooks=(
+            "scripts/ci/lint.sh"
+            "scripts/ci/test.sh"
+            "scripts/ci/build.sh"
+          )
+
+          found=0
+          for hook in "${hooks[@]}"; do
+            if [[ -f "$hook" ]]; then
+              found=1
+              if [[ ! -x "$hook" ]]; then
+                echo "::error file=$hook::CI hook exists but is not executable"
+                exit 1
+              fi
+              "$hook"
+            fi
+          done
+
+          if [[ "$found" -eq 0 ]]; then
+            echo "::notice::Application CI hooks are not present yet. Foundation checks run, but build/test evidence is still pending."
+          fi
+
+  security-baseline:
+    name: Security baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject high-risk tracked secret material
+        run: |
+          set -euo pipefail
+          forbidden='(^|/)(id_rsa|id_ed25519|.*\.pem|.*\.p12|.*\.pfx|credentials\.json|service-account.*\.json)$'
+          if git ls-files | grep -E "$forbidden"; then
+            echo "::error::Potential credential/key material is tracked by Git."
+            exit 1
+          fi
+
+  evidence:
+    name: CI evidence
+    runs-on: ubuntu-latest
+    needs: [repository-contract, security-baseline]
+    if: always()
+    permissions:
+      contents: read
+    steps:
+      - name: Produce immutable execution evidence
+        env:
+          CONTRACT_RESULT: ${{ needs.repository-contract.result }}
+          SECURITY_RESULT: ${{ needs.security-baseline.result }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/ci-run.txt <<EOF
+          product=Moventra TMS
+          phase=004-CI-CD
+          repository=${GITHUB_REPOSITORY}
+          commit_sha=${GITHUB_SHA}
+          ref=${GITHUB_REF}
+          run_id=${GITHUB_RUN_ID}
+          run_attempt=${GITHUB_RUN_ATTEMPT}
+          actor=${GITHUB_ACTOR}
+          repository_contract=${CONTRACT_RESULT}
+          security_baseline=${SECURITY_RESULT}
+          EOF
+
+          if [[ "$CONTRACT_RESULT" != "success" || "$SECURITY_RESULT" != "success" ]]; then
+            echo "::error::One or more CI controls failed."
+            exit 1
+          fi
+
+      - name: Upload CI evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-${{ github.sha }}
+          path: evidence/ci-run.txt
+          if-no-files-found: error
+          retention-days: 30
