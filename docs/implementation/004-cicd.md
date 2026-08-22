@@ -2,258 +2,384 @@
 
 ## Status
 
+- Official repository: `brunabarrichello/moventra-tms`
 - Specification: defined
 - Physical implementation: substantially implemented
-- Validation: partial — CI/build/artifact/deploy/staging evidenced
-- Gate: BLOCKED
-- Macro gate: G1 — Foundation Ready: not approved
-- Promotion to 005 — Secrets Management: NOT AUTHORIZED
+- CI validation: evidenced
+- Build-once / prebuilt artifact architecture: implemented and CI-validated
+- Prebuilt staging / rollback / production execution: pending
+- Gate: IN PROGRESS / BLOCKED
+- Promotion to `005 — Secrets Management`: NOT AUTHORIZED
 
 ## Objective
 
-Establish an automated, reproducible and auditable delivery pipeline for Moventra TMS, preserving the official execution order and producing evidence tied to repository, commit, actor, artifact and deployment.
+Establish an automated, reproducible and auditable delivery pipeline for Moventra TMS with evidence tied to repository, commit, actor, immutable artifact and deployment revision.
+
+The official delivery invariant is:
+
+```text
+build once
+-> verify once
+-> immutable prebuilt artifact
+-> deploy the exact artifact to staging
+-> verify exact revision identity
+-> protected production approval
+-> deploy the same artifact to production
+-> verify exact revision identity
+```
+
+No environment is allowed to rebuild application source during promotion.
+
+## Repository rename
+
+The repository was renamed from `brunabarrichello/moventra-github` to:
+
+```text
+brunabarrichello/moventra-tms
+```
+
+The repository identity, issues, PR #4 and commit history were preserved. All new evidence must use the new repository name.
 
 ## Executable foundation
 
-PR #4 (`phase/004-cicd-completion`) contains a real executable foundation instead of documentation-only CI:
+PR #4 (`phase/004-cicd-completion`) contains:
 
-- `moventra-api` executable with Node.js 22.x;
+- executable `moventra-api` foundation on Node.js 22.x;
 - `/health` endpoint;
 - unit tests;
-- architecture dependency test;
+- architecture dependency tests;
 - HTTP integration tests;
-- repository-owned lint/test/build hooks;
-- deterministic build script;
+- repository-owned lint/static-analysis, test and build hooks;
+- security baseline;
+- deterministic artifact packaging;
+- Vercel Build Output API v3 generator;
 - immutable artifact name tied to the GitHub Actions execution SHA;
-- portable SHA-256 checksum that can be validated after artifact extraction;
-- build manifest with product, service, commit SHA and artifact name;
-- GitHub Actions jobs split into repository contract, lint, tests, security baseline, build and evidence;
-- release gate workflow with explicit `staging` and `production` GitHub environments.
+- portable SHA-256 checksum;
+- build manifest with revision and deployment format;
+- artifact contract verifier that executes the extracted prebuilt handler;
+- revision-aware smoke test;
+- release gate for staging -> protected production;
+- provider-neutral rollback drill using prebuilt artifacts.
 
-Stable CI contract:
+Stable contracts:
 
 ```text
 scripts/ci/lint.sh
 scripts/ci/test.sh
 scripts/ci/build.sh
+scripts/ci/build-vercel-output.mjs
+scripts/release/artifact-metadata.sh
+scripts/release/vercel-deploy-artifact.sh
+scripts/release/smoke-health.sh
 ```
 
-## Required flow
+## Build-once artifact architecture
+
+The current build no longer packages repository source as the deployable unit. It generates the Vercel Build Output API directly under:
 
 ```text
-Pull Request
-  -> Repository policy
-  -> Lint / static analysis
-  -> Unit tests
-  -> Architecture tests
-  -> Integration tests
-  -> Security checks
-  -> Build once
-  -> Immutable artifact
-  -> Deploy development/test
-  -> Staging
-  -> Approval
-  -> Production
+.vercel/output/
 ```
 
-## CI execution evidence
+The immutable tarball contains only the deployment output plus `build-manifest.json`.
 
-A real pull-request execution is now evidenced.
+Expected artifact layout:
 
 ```text
-workflow: Moventra CI
-run_id: 32569208155
-run_number: 9
-head_branch: phase/004-cicd-completion
-head_sha: 35654f85a0529a636ddf0f0e2a2e876c2f13f45c
-pull_request_merge_sha: 459241c6a239ff9ae92b5f8817fd99407e44c49d
+build-manifest.json
+.vercel/output/config.json
+.vercel/output/functions/api/health.func/.vc-config.json
+.vercel/output/functions/api/health.func/index.js
+.vercel/output/functions/api/health.func/package.json
+.vercel/output/functions/api/health.func/src/core/health.js
+```
+
+The function handler embeds the build commit SHA. Therefore `/health.version` is part of the deployment identity and can be checked against the manifest during staging, rollback and production smoke tests.
+
+### Manifest contract
+
+```json
+{
+  "schema_version": 1,
+  "product": "Moventra TMS",
+  "service": "moventra-api",
+  "commit_sha": "<40-char-sha>",
+  "artifact": "moventra-tms-<sha>.tar.gz",
+  "artifact_format": "vercel-build-output-v3",
+  "build_output_api_version": 3,
+  "runtime": "nodejs22.x"
+}
+```
+
+Before deployment, `artifact-metadata.sh` verifies:
+
+- exactly one immutable tarball and checksum;
+- SHA-256 integrity;
+- manifest schema and product/service identity;
+- artifact name <-> commit SHA consistency;
+- Build Output API v3 structure;
+- Node.js 22 runtime contract;
+- commit SHA embedded in the generated function;
+- extracted handler execution;
+- `/health` payload identity and cache policy.
+
+## Current CI evidence — prebuilt architecture
+
+The build-once correction was introduced by branch commit:
+
+```text
+head commit: a751429b3fb4074de94f216bb5203eea2e763c25
+message: 004: enforce build-once prebuilt CD architecture
+```
+
+GitHub pull-request workflows executed against synthetic merge SHA:
+
+```text
+e4d4d324b80f77d65f4a69f0e2c5aea644e41039
+```
+
+Successful executions:
+
+```text
+Foundation CI
+run_id: 32574043449
+run_number: 21
+result: success
+
+Moventra CI
+run_id: 32574043439
+run_number: 16
 result: success
 ```
 
-For `pull_request` workflows, GitHub executes against the synthetic merge commit. Therefore `GITHUB_SHA` for this run is `459241c6a239ff9ae92b5f8817fd99407e44c49d`, while the workflow metadata preserves the source branch head SHA `35654f85a0529a636ddf0f0e2a2e876c2f13f45c`. Both identifiers must remain in the audit trail.
-
-Successful jobs in run `32569208155`:
+Successful `Moventra CI #16` jobs:
 
 - Repository contract;
+- Lint, including static architecture analysis;
+- Tests, including unit, architecture and HTTP integration tests;
 - Security baseline;
-- Lint;
-- Tests, including unit, architecture and HTTP integration tests through `scripts/ci/test.sh`;
 - Build immutable artifact;
 - CI evidence.
 
-A previous failed execution was retained as useful audit evidence: the workflow originally passed `cache: false` to `actions/setup-node@v4`, which is not a supported cache value. The workflow was corrected and the subsequent execution passed instead of suppressing the failure.
-
-## Immutable artifact evidence
-
-Application artifact produced by the successful workflow:
+### First verified prebuilt artifact
 
 ```text
-GitHub artifact id: 9474874462
-artifact name: moventra-tms-459241c6a239ff9ae92b5f8817fd99407e44c49d
-artifact archive digest: sha256:d64a12e7ccd7f41cfedeebb2024c2e904f0e8f19226e91a5c9a40746e7762186
-expires: 2026-09-21
+GitHub artifact id: 9476076040
+GitHub artifact name: moventra-tms-e4d4d324b80f77d65f4a69f0e2c5aea644e41039
+GitHub archive digest: sha256:cc74c10e219c4e186299e51ad7db3373a274fb8efaa2369fca3409384089bdd0
+internal tar SHA-256: e3ebe421d14fa4dcad1b2abd86cbe135cc483ee9731a0b75711806796a7d1e9c
 ```
 
 CI evidence artifact:
 
 ```text
-GitHub artifact id: 9474875826
-artifact name: ci-evidence-459241c6a239ff9ae92b5f8817fd99407e44c49d
-artifact archive digest: sha256:14e7d541f22e59dff556ee0827f65aa7016d3ed5f159c5e75c6db829ea9f4eb3
-expires: 2026-09-21
+artifact id: 9476077271
+name: ci-evidence-e4d4d324b80f77d65f4a69f0e2c5aea644e41039
+digest: sha256:7662b6745d952f422c52582b2e9156252b2e0afcc1afb5140a43527722a86821
 ```
 
-The application artifact was downloaded and independently inspected. It contains:
+The application artifact was independently downloaded after the CI run. `sha256sum -c` returned `OK`, the prebuilt directory structure was inspected, the manifest matched the synthetic execution SHA, and the same SHA was physically present in the generated function handler.
+
+This is the first artifact eligible for the new prebuilt rollback mechanism.
+
+## Legacy artifact evidence
+
+Artifacts generated before the build-once correction remain valid historical CI evidence, but they packaged source for a later Vercel build. They are therefore classified as:
 
 ```text
-api/health.js
-build-manifest.json
-package.json
-src/core/health.js
-src/http/request-handler.js
-src/server.js
-vercel.json
+LEGACY_SOURCE_ARTIFACT
 ```
 
-The packaged tarball is:
+They MUST NOT be used as rollback or production artifacts by the new CD pipeline.
+
+The old deployment IDs remain useful historical evidence that the foundation application was physically deployable:
 
 ```text
-moventra-tms-459241c6a239ff9ae92b5f8817fd99407e44c49d.tar.gz
+moventra-tms:
+  dpl_HYdatwycPdDBuyrzwgpwUVgghC4i
+
+moventra-tms-staging:
+  dpl_HJLskyLSEReNokhoMigzK7w1Zhvn
+  previous: dpl_6HWgnpEZtQzSieR4uFfNLTTtX5Yx
 ```
 
-Its internal SHA-256 is:
+Those deployments do not by themselves prove the new prebuilt promotion path.
+
+## Lint / static analysis
+
+The `Lint` check name is intentionally preserved so existing repository protection is not broken while the check becomes stronger.
+
+It now performs:
+
+- JavaScript and MJS syntax validation across `src`, `api`, `tests` and `scripts`;
+- shell syntax validation;
+- trailing whitespace rejection;
+- rejection of dynamic `eval` / `new Function` in application code;
+- architecture tests, including Build Output API contract generation.
+
+Deeper dependency and security analysis remains evolvable without changing the required status-check name.
+
+## Branch protection
+
+The current GitHub branch resource reports:
 
 ```text
-9637aacd41703962679af2ac39ba19ee8ba1dc3bcd6aeff0e692b6965bdf716e
+main.protected = true
 ```
 
-The calculated checksum matched the checksum emitted by the build. The build script was subsequently hardened so the `.sha256` file contains a portable basename and can be validated with `sha256sum -c` after extraction in any workspace.
+Therefore the previous audit statement `protected=false` is obsolete and must not be used as current evidence.
 
-## Evidence matrix
+Branch protection existence is now evidenced. Review-count policy, direct required-check selection, bypass governance and production-environment reviewers remain administrative policy concerns and must be evaluated separately from the boolean protected state.
 
-| Requirement | Status | Evidence |
-|---|---|---|
-| Executable application | EVIDENCED | PR #4 contains `src/server.js`, HTTP handler and `/health` |
-| Lint | EVIDENCED | `Moventra CI` run `32569208155`, job `Lint`: success |
-| Unit tests | EVIDENCED | run `32569208155`, `Tests`: success |
-| Architecture tests | EVIDENCED | run `32569208155`, `Tests`: success |
-| Integration tests | EVIDENCED | run `32569208155`, `Tests`: success |
-| Security baseline | EVIDENCED | run `32569208155`, `Security baseline`: success |
-| Build | EVIDENCED | run `32569208155`, `Build immutable artifact`: success |
-| Immutable artifact | EVIDENCED | artifact `9474874462` + archive digest + internal SHA-256 independently verified |
-| CI execution evidence | EVIDENCED | evidence artifact `9474875826` |
-| Development/test deployment | EVIDENCED | Vercel project `moventra-tms`, deployment `dpl_HYdatwycPdDBuyrzwgpwUVgghC4i`, READY, `/health` HTTP 200 |
-| Staging | EVIDENCED | Vercel project `moventra-tms-staging`, deployment `dpl_HJLskyLSEReNokhoMigzK7w1Zhvn`, READY, `/health` HTTP 200 |
-| Staging verification workflow | IMPLEMENTED | `.github/workflows/release-gate.yml` validates `/health` under GitHub environment `staging` |
-| Production approval mechanism | IMPLEMENTED / NOT PROTECTED | release gate uses GitHub environment `production`; required reviewer protection is not configured/evidenced yet |
-| Rollback target identification | EVIDENCED | staging deployment `dpl_6HWgnpEZtQzSieR4uFfNLTTtX5Yx` retained as rollback candidate |
-| Rollback candidate health | EVIDENCED | prior staging deployment `/health` returned HTTP 200 during validation |
-| Rollback execution | BLOCKED | controlled traffic restoration to prior deployment has not been executed |
-| Branch protection | BLOCKED | GitHub `main` reports `protected=false` and required status checks disabled |
+## Release gate
 
-## Deployment evidence
-
-### Development/test
-
-```text
-project: moventra-tms
-deployment: dpl_HYdatwycPdDBuyrzwgpwUVgghC4i
-state: READY
-health: HTTP 200
-```
-
-### Staging
-
-```text
-project: moventra-tms-staging
-validated deployment: dpl_HJLskyLSEReNokhoMigzK7w1Zhvn
-previous deployment: dpl_6HWgnpEZtQzSieR4uFfNLTTtX5Yx
-previous deployment rollback candidate: true
-state: READY
-health: HTTP 200
-```
-
-Deployment IDs are immutable revision identifiers and must be recorded in release evidence. Commit-to-artifact traceability remains a responsibility of the CI build manifest and must not be inferred only from a deployment URL.
-
-## Release approval workflow
-
-`.github/workflows/release-gate.yml` introduces the governed release boundary:
+`.github/workflows/release-gate.yml` now implements an actual promotion pipeline rather than a digest-recording-only workflow.
 
 ```text
 workflow_dispatch
-  -> staging environment
-  -> staging /health verification
-  -> rollback candidate /health verification
-  -> production environment
-  -> production approval evidence artifact
+-> download immutable artifact from a specific GitHub Actions run
+-> verify checksum + manifest + prebuilt contract
+-> deploy exact artifact to staging with `vercel deploy --prebuilt --prod`
+-> smoke deployment URL and stable staging URL
+-> require `/health.version == manifest.commit_sha`
+-> persist staging evidence
+-> enter GitHub environment `production`
+-> protected approval must occur before production job executes
+-> download and re-verify the SAME artifact
+-> require staging commit and artifact digest equality
+-> deploy exact prebuilt artifact to production
+-> smoke deployment URL and stable production URL
+-> persist production evidence
 ```
 
-The workflow intentionally separates the *mechanism* from the *repository protection setting*. Merely declaring `environment: production` does not constitute approval protection. The GitHub `production` environment must still be configured with required reviewer protection before the phase gate can be approved.
+The evidence file records `workflow_actor` only as the workflow initiator. It does not mislabel `GITHUB_ACTOR` as the environment reviewer. The canonical reviewer identity must come from GitHub's protected-environment deployment review evidence.
+
+### Required deployment configuration
+
+GitHub `staging` environment:
+
+```text
+secret: VERCEL_TOKEN
+variable: VERCEL_ORG_ID
+variable: VERCEL_STAGING_PROJECT_ID
+```
+
+GitHub `production` environment:
+
+```text
+secret: VERCEL_TOKEN
+variable: VERCEL_ORG_ID
+variable: VERCEL_PRODUCTION_PROJECT_ID
+required reviewer(s): REQUIRED
+```
+
+Observed project identifiers:
+
+```text
+VERCEL_ORG_ID=team_3JTmWy5Z7vLfh2OqOwuFZp1G
+VERCEL_STAGING_PROJECT_ID=prj_4USELVoAr0FsHg2vBNGXws7hU22Q
+VERCEL_PRODUCTION_PROJECT_ID=prj_5qFenjyeGE1joaGomaNrUIRGSBQs
+```
+
+`VERCEL_TOKEN` must never be committed.
+
+## Rollback gate
+
+The rollback drill is now prebuilt-only.
+
+```text
+previous verified prebuilt artifact
+-> verify checksum / manifest / revision
+-> deploy exact prebuilt to staging
+-> verify deployment + stable alias return rollback SHA
+-> deploy current verified prebuilt artifact
+-> verify deployment + stable alias return restoration SHA
+-> persist evidence
+```
+
+The workflow requires rollback and restoration revisions to differ. If rollback deployment is attempted and a later rollback step fails, restoration is still attempted whenever deployment credentials and restoration metadata are valid.
+
+The first rollback candidate under the new format is the artifact from `Moventra CI #16`. A second distinct prebuilt artifact is required before the physical drill can be meaningful.
+
+## Workflow-dispatch sequencing
+
+`release-gate.yml` and `rollback-drill.yml` use `workflow_dispatch`. Their governed manual execution is expected after the workflows exist on the default branch.
+
+This removes the earlier circular rule that incorrectly required the manual release/rollback workflows to execute before the PR containing them could be merged.
+
+The correct separation is:
+
+```text
+PR CI green
+-> merge under protected main policy
+-> CI on final main commit
+-> select final main prebuilt artifact
+-> staging prebuilt deployment
+-> controlled rollback drill
+-> protected production approval
+-> production prebuilt deployment
+-> final 004 evidence
+```
+
+Merging PR #4 does NOT by itself conclude phase 004.
+
+## Evidence matrix
+
+| Requirement | Status | Current evidence |
+|---|---|---|
+| Executable application | EVIDENCED | `moventra-api`, `/health` |
+| Lint / static analysis | EVIDENCED | `Moventra CI #16` |
+| Unit tests | EVIDENCED | `Moventra CI #16` |
+| Architecture tests | EVIDENCED | dependency + Build Output API tests |
+| Integration tests | EVIDENCED | HTTP integration tests |
+| Security baseline | EVIDENCED | `Moventra CI #16` |
+| Deterministic packaging | EVIDENCED | deterministic tar/gzip + checksum |
+| Build-once prebuilt artifact | EVIDENCED | artifact `9476076040` |
+| Artifact contract / embedded revision | EVIDENCED | independent artifact inspection |
+| CI evidence | EVIDENCED | artifact `9476077271` |
+| `main` protected | EVIDENCED | GitHub reports `protected=true` |
+| Historical dev/test deploy | EVIDENCED | existing Vercel READY deployment |
+| Historical staging deploy | EVIDENCED | existing Vercel READY deployments |
+| Automated prebuilt staging deploy | PENDING PHYSICAL EXECUTION | release gate implemented |
+| Revision-aware staging smoke | PENDING PHYSICAL EXECUTION | smoke script implemented |
+| Controlled prebuilt rollback drill | PENDING PHYSICAL EXECUTION | workflow implemented; second revision required |
+| Protected production reviewer policy | NOT YET EVIDENCED | administrative configuration required |
+| Protected production deploy | PENDING PHYSICAL EXECUTION | release gate implemented |
 
 ## Remaining blockers
 
-### B004-03 — Branch protection disabled
-
-Observed repository state on `main`:
-
-```text
-protected=false
-required_status_checks.enforcement_level=off
-```
-
-Required before gate approval:
-
-- protect `main`;
-- require pull request before merge;
-- require the agreed status checks;
-- require the defined review policy;
-- prevent force push and branch deletion;
-- govern any emergency bypass explicitly.
-
-At minimum the ruleset must require the CI checks that protect repository contract, lint, tests, security, build and evidence.
-
-### B004-04 — RESOLVED — GitHub Actions run evidenced
-
-Resolved by successful `Moventra CI` run `32569208155`, plus application artifact `9474874462` and CI evidence artifact `9474875826`.
-
 ### B004-05 — Protected production approval not evidenced
 
-The release workflow now uses GitHub environment `production`, but the environment protection rule itself is not configured/evidenced. A plain environment declaration is not sufficient.
+Required:
 
-Required before gate approval:
+- configure GitHub `production` environment with required reviewer(s);
+- preserve GitHub environment/deployment review evidence;
+- execute the protected production job using the exact artifact validated in staging.
 
-- configure required reviewer(s) on `production`;
-- execute the release gate after staging validation;
-- retain the resulting approval/run evidence.
+### B004-06 — Prebuilt rollback drill pending
 
-### B004-06 — Rollback drill pending
+Required:
 
-A concrete prior staging deployment exists and is healthy, but traffic has not been deliberately restored to it and smoke-tested as a rollback exercise.
+- retain two distinct verified prebuilt artifacts;
+- execute rollback on staging;
+- verify rollback SHA at deployment URL and stable staging URL;
+- restore current artifact;
+- verify restoration SHA at both URLs;
+- retain rollback evidence artifact.
 
-The currently connected Vercel team is on the Hobby plan. Vercel documents rollback to a specific previous deployment as a Pro/Enterprise feature. Therefore the official gate must not claim native Vercel rollback evidence under the current plan.
+### B004-07 — Prebuilt CD execution pending
 
-Acceptable production-grade resolution paths are:
+Required:
 
-1. move the deployment project to a Vercel plan that supports specific-deployment rollback and execute the drill; or
-2. implement a provider-neutral rollback pipeline that redeploys the previously verified immutable Moventra artifact and then smoke-tests it.
-
-Whichever path is adopted, the evidence must contain target artifact/deployment, actor, timestamp, reason, result and post-rollback smoke test.
+- merge the validated workflow to protected `main` when repository policy permits;
+- use the CI artifact produced from the final `main` commit as the release artifact;
+- execute staging and production deployment from that immutable prebuilt artifact without rebuilding.
 
 ## Current gate decision
 
 **004 — CI/CD remains IN PROGRESS / BLOCKED.**
 
-Major technical evidence is now complete: application, lint, tests, security baseline, deterministic build, immutable artifact, CI evidence, deploy/test and staging have all been materially exercised.
-
-The phase remains blocked only by the controls that must be physically enforced rather than documented:
-
-```text
-branch protection on main
-+
-protected production approval execution
-+
-controlled rollback drill
-```
+The architecture defects identified in the review have been corrected in code and validated by CI. The remaining work is now primarily governed execution and administrative protection rather than artifact design.
 
 Therefore:
 
@@ -263,4 +389,4 @@ G1 != APPROVED
 005 != ACTIVE
 ```
 
-Promotion to 005 is prohibited until those three remaining controls have concrete evidence.
+The next permissible sequence is to validate this documentation commit, merge PR #4 under the active `main` protection, obtain the final `main` prebuilt artifact, and only then execute staging, rollback, protected approval and production gates.
