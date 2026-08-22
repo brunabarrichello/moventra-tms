@@ -41,6 +41,9 @@ jobs:
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
             "scripts/ci/build.sh"
+            ".github/workflows/release-gate.yml"
+            ".github/workflows/rollback-drill.yml"
+            ".github/workflows/production-promotion.yml"
             "docs/implementation/004-cicd.md"
           )
 
