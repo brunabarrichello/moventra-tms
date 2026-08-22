@@ -138,6 +138,12 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: moventra_ci
+      PGUSER: postgres
+      PGPASSWORD: moventra-ci-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -152,20 +158,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y postgresql-client
       - name: Apply migrations to a clean PostgreSQL database
-        env:
-          DATABASE_URL: postgresql://postgres:moventra-ci-only@127.0.0.1:5432/moventra_ci
         run: node scripts/db/migrate.mjs
       - name: Re-run migrations to prove idempotent history behavior
-        env:
-          DATABASE_URL: postgresql://postgres:moventra-ci-only@127.0.0.1:5432/moventra_ci
         run: node scripts/db/migrate.mjs
       - name: Validate database foundation contract
-        env:
-          PGHOST: 127.0.0.1
-          PGPORT: 5432
-          PGDATABASE: moventra_ci
-          PGUSER: postgres
-          PGPASSWORD: moventra-ci-only
         run: psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0001_foundation_validation.sql
 
   build:
