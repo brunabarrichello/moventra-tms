@@ -41,18 +41,28 @@ jobs:
           main_sha="$(jq -r '.object.sha' <<< "$main_json")"
           [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
 
-          runs_json="$(api "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/production-promotion.yml/runs?branch=main&per_page=100")"
+          runs_json="$(api "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/production-promotion.yml/runs?per_page=100")"
+          jq -r '.workflow_runs[]
+            | [.id, .run_number, .event, .status, (.conclusion // ""), (.head_branch // ""), (.head_sha // ""), .created_at, .updated_at, (.actor.login // "")]
+            | @tsv' <<< "$runs_json" > audit/evidence/production-run-inventory.tsv
+
+          {
+            echo "main_sha=${main_sha}"
+            echo "production_run_count=$(jq '.workflow_runs | length' <<< "$runs_json")"
+            cat audit/evidence/production-run-inventory.tsv
+          } > audit/evidence/discovery.txt
+          cat audit/evidence/discovery.txt
+
           mapfile -t candidate_run_ids < <(
             jq -r '.workflow_runs[]
               | select(.name == "Moventra Production Promotion")
-              | select(.head_branch == "main")
               | select(.status == "completed")
               | select(.conclusion == "success")
               | .id' <<< "$runs_json"
           )
 
           test "${#candidate_run_ids[@]}" -gt 0 || {
-            echo '::error::No successful Moventra Production Promotion run was found on main.'
+            echo '::error::No successful Moventra Production Promotion run was found.'
             exit 1
           }
 
@@ -157,7 +167,7 @@ jobs:
           production_run_json="$(api "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${selected_run_id}")"
           test "$(jq -r '.name' <<< "$production_run_json")" = 'Moventra Production Promotion'
           test "$(jq -r '.conclusion' <<< "$production_run_json")" = success
-          test "$(jq -r '.head_branch' <<< "$production_run_json")" = main
+          test "$(jq -r '.head_sha' <<< "$production_run_json")" = "$main_sha"
 
           rollback_run_json="$(api "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${rollback_run_id}")"
           test "$(jq -r '.name' <<< "$rollback_run_json")" = 'Moventra Rollback Drill'
@@ -241,6 +251,7 @@ jobs:
           cat audit/evidence/audit-summary.txt
 
       - name: Upload authoritative audit evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: production-evidence-audit
