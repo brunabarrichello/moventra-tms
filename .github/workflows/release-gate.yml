@@ -68,12 +68,15 @@ jobs:
           printf 'github_artifact_name=%s\n' "$SELECTED_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Download immutable prebuilt artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: ${{ steps.source.outputs.github_artifact_name }}
-          path: release-artifact
-          run-id: ${{ steps.source.outputs.source_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/github-download-artifact.sh \
+            "${{ steps.source.outputs.source_run_id }}" \
+            exact \
+            "${{ steps.source.outputs.github_artifact_name }}" \
+            release-artifact
 
       - name: Validate staging deployment configuration
         run: |
