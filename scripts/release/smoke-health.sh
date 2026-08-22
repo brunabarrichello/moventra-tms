@@ -15,26 +15,36 @@ fi
 
 attempts="${SMOKE_ATTEMPTS:-12}"
 delay_seconds="${SMOKE_DELAY_SECONDS:-5}"
-auth_mode="${SMOKE_AUTH_MODE:-http}"
+auth_mode="${SMOKE_AUTH_MODE:-auto}"
 vercel_cli_version="${VERCEL_CLI_VERSION:-59.3.0}"
 
 case "$auth_mode" in
-  http|vercel) ;;
+  auto|http|vercel) ;;
   *)
     echo "invalid SMOKE_AUTH_MODE: $auth_mode" >&2
     exit 66
     ;;
 esac
 
-fetch_health() {
-  if [[ "$auth_mode" == http ]]; then
-    curl --fail --silent --show-error --location --max-time 20 "${base_url}/health" 2>/dev/null || true
-    return
-  fi
+validate_health() {
+  local response="$1"
+  RESPONSE="$response" EXPECTED_SHA="$expected_sha" node --input-type=module <<'NODE'
+const payload = JSON.parse(process.env.RESPONSE || '{}');
+if (payload.status !== 'ok') process.exit(1);
+if (payload.product !== 'Moventra TMS') process.exit(1);
+if (payload.service !== 'moventra-api') process.exit(1);
+if (payload.version !== process.env.EXPECTED_SHA) process.exit(1);
+NODE
+}
 
-  : "${VERCEL_TOKEN:?VERCEL_TOKEN is required for SMOKE_AUTH_MODE=vercel}"
-  : "${VERCEL_ORG_ID:?VERCEL_ORG_ID is required for SMOKE_AUTH_MODE=vercel}"
-  : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID is required for SMOKE_AUTH_MODE=vercel}"
+fetch_http() {
+  curl --fail --silent --show-error --location --max-time 20 "${base_url}/health" 2>/dev/null || true
+}
+
+fetch_vercel() {
+  : "${VERCEL_TOKEN:?VERCEL_TOKEN is required for authenticated Vercel smoke}"
+  : "${VERCEL_ORG_ID:?VERCEL_ORG_ID is required for authenticated Vercel smoke}"
+  : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID is required for authenticated Vercel smoke}"
 
   local workdir
   workdir="$(mktemp -d)"
@@ -55,17 +65,20 @@ EOF
 }
 
 for ((attempt=1; attempt<=attempts; attempt++)); do
-  response="$(fetch_health)"
-  if RESPONSE="$response" EXPECTED_SHA="$expected_sha" node --input-type=module <<'NODE'
-const payload = JSON.parse(process.env.RESPONSE || '{}');
-if (payload.status !== 'ok') process.exit(1);
-if (payload.product !== 'Moventra TMS') process.exit(1);
-if (payload.service !== 'moventra-api') process.exit(1);
-if (payload.version !== process.env.EXPECTED_SHA) process.exit(1);
-NODE
-  then
-    echo "health smoke passed (${auth_mode}): ${base_url} @ ${expected_sha}"
-    exit 0
+  if [[ "$auth_mode" != vercel ]]; then
+    response="$(fetch_http)"
+    if validate_health "$response"; then
+      echo "health smoke passed (http): ${base_url} @ ${expected_sha}"
+      exit 0
+    fi
+  fi
+
+  if [[ "$auth_mode" != http && -n "${VERCEL_TOKEN:-}" && -n "${VERCEL_ORG_ID:-}" && -n "${VERCEL_PROJECT_ID:-}" ]]; then
+    response="$(fetch_vercel)"
+    if validate_health "$response"; then
+      echo "health smoke passed (vercel): ${base_url} @ ${expected_sha}"
+      exit 0
+    fi
   fi
 
   if [[ "$attempt" -lt "$attempts" ]]; then
