@@ -38,6 +38,7 @@ jobs:
             "package.json"
             "eslint.config.js"
             "src/server.js"
+            "src/infrastructure/database/postgres.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
             "scripts/ci/build.sh"
@@ -119,6 +120,27 @@ jobs:
             exit 1
           fi
 
+  runtime-dependencies:
+    name: PostgreSQL runtime dependencies
+    needs: repository-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Install exact runtime dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Verify dependency tree and adapter import
+        run: |
+          set -euo pipefail
+          npm ls --all
+          node --input-type=module -e "await import('./src/infrastructure/database/postgres.js')"
+
   database-contract:
     name: PostgreSQL migration contract
     needs: repository-contract
@@ -166,7 +188,7 @@ jobs:
 
   build:
     name: Build immutable artifact
-    needs: [lint, tests, security-baseline, database-contract]
+    needs: [lint, tests, security-baseline, runtime-dependencies, database-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -190,7 +212,7 @@ jobs:
 
   evidence:
     name: CI evidence
-    needs: [repository-contract, lint, tests, security-baseline, database-contract, build]
+    needs: [repository-contract, lint, tests, security-baseline, runtime-dependencies, database-contract, build]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -201,6 +223,7 @@ jobs:
           LINT_RESULT: ${{ needs.lint.result }}
           TEST_RESULT: ${{ needs.tests.result }}
           SECURITY_RESULT: ${{ needs.security-baseline.result }}
+          RUNTIME_DEPS_RESULT: ${{ needs.runtime-dependencies.result }}
           DATABASE_RESULT: ${{ needs.database-contract.result }}
           BUILD_RESULT: ${{ needs.build.result }}
         run: |
@@ -219,11 +242,12 @@ jobs:
           lint=${LINT_RESULT}
           tests=${TEST_RESULT}
           security_baseline=${SECURITY_RESULT}
+          runtime_dependencies=${RUNTIME_DEPS_RESULT}
           database_contract=${DATABASE_RESULT}
           build=${BUILD_RESULT}
           EOF
 
-          for result in "$CONTRACT_RESULT" "$LINT_RESULT" "$TEST_RESULT" "$SECURITY_RESULT" "$DATABASE_RESULT" "$BUILD_RESULT"; do
+          for result in "$CONTRACT_RESULT" "$LINT_RESULT" "$TEST_RESULT" "$SECURITY_RESULT" "$RUNTIME_DEPS_RESULT" "$DATABASE_RESULT" "$BUILD_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "::error::One or more CI controls failed."
               exit 1

@@ -10,6 +10,12 @@
     "start": "node src/server.js",
     "lint": "./scripts/ci/lint.sh",
     "test": "./scripts/ci/test.sh",
-    "build": "./scripts/ci/build.sh"
+    "build": "./scripts/ci/build.sh",
+    "db:migrate": "node scripts/db/migrate.mjs",
+    "db:status": "node scripts/db/migrate.mjs --status"
+  },
+  "dependencies": {
+    "@vercel/functions": "3.9.3",
+    "pg": "8.23.0"
   }
 }
