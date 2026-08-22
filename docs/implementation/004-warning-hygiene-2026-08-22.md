@@ -30,23 +30,36 @@ Pins aprovados:
 
 - `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` — v7.0.1;
 - `actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38` — v6.5.0;
-- `actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` — v8.0.1;
+- `actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131` — v7.0.0;
 - `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` — v7.0.1.
 
-Todos os pins acima utilizam runtime `node24` no próprio metadata da Action.
+Todos os pins aprovados utilizam runtime `node24` no metadata da Action.
 
 O `setup-node` permanece em v6.5.0 deliberadamente para evitar adotar uma linha mais nova enquanto houver advisory upstream relevante em avaliação. O cache automático do package manager é explicitamente desabilitado com `package-manager-cache: false`, evitando mudança implícita de comportamento.
 
-### npm/npx — deprecation noise do Vercel CLI
+### download-artifact v8 — `DEP0005 Buffer()`
 
-Os scripts de release agora executam o Vercel CLI com:
+A primeira execução canônica após a migração para runtimes Node 24 mostrou que `actions/download-artifact` v8.0.1, embora execute em Node 24, emite no GitHub-hosted runner:
+
+```text
+[DEP0005] DeprecationWarning: Buffer() is deprecated
+```
+
+Para a cadeia Moventra, o pin aprovado foi recuado deliberadamente para `actions/download-artifact` v7.0.0 (`37930b1c2abaa49bbe596cd826c3c89aef350131`). Essa release já usa Node.js 24 e suporta os inputs necessários ao Release Gate, Rollback Drill e Production Promotion.
+
+O pin v8.0.1 `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` é tratado como warning-producing e rejeitado pelos testes de higiene até nova validação canônica.
+
+### npm/npx e Vercel CLI
+
+Os scripts de release agora fixam Vercel CLI `59.4.0` e executam o CLI com:
 
 ```text
 NPM_CONFIG_LOGLEVEL=error
+NO_UPDATE_NOTIFIER=1
 VERCEL_TELEMETRY_DISABLED=1
 ```
 
-Isso remove apenas mensagens de warning/deprecation do instalador npm/npx e telemetry. Erros do próprio Vercel continuam sendo capturados, exibidos e propagados por exit code.
+Isso remove mensagens de warning/deprecation do instalador npm/npx, banners de atualização e telemetry. Erros do próprio Vercel continuam sendo capturados, exibidos e propagados por exit code.
 
 Não foi adicionado `2>/dev/null` ao Vercel CLI e nenhum `|| true` foi introduzido no deploy.
 
@@ -55,11 +68,14 @@ Não foi adicionado `2>/dev/null` ao Vercel CLI e nenhum `|| true` foi introduzi
 `tests/integration/workflow-runtime-hygiene.test.js` garante:
 
 1. ausência dos pins antigos Node.js 20;
-2. pins de Actions por SHA completo;
-3. uso exato das revisões aprovadas;
-4. `package-manager-cache: false` em cada setup-node;
-5. presença de `NPM_CONFIG_LOGLEVEL=error` e `VERCEL_TELEMETRY_DISABLED=1` nos scripts Vercel;
-6. proibição de descarte do stderr do Vercel por redirecionamento para `/dev/null`.
+2. ausência do pin `download-artifact` v8.0.1 que produziu `DEP0005` na cadeia canônica;
+3. pins de Actions por SHA completo;
+4. uso exato das revisões aprovadas;
+5. `package-manager-cache: false` em cada setup-node;
+6. presença de `NPM_CONFIG_LOGLEVEL=error`, `NO_UPDATE_NOTIFIER=1` e `VERCEL_TELEMETRY_DISABLED=1` nos scripts Vercel;
+7. proibição de descarte do stderr do Vercel por redirecionamento para `/dev/null`.
+
+`tests/integration/release-scripts.test.js` também exige Vercel CLI 59.4.0 e comprova que as variáveis de higiene chegam ao `npx` sem transportar o token em argumentos.
 
 ## Critério de aceite
 
@@ -78,7 +94,7 @@ A remediação somente pode ser considerada validada após:
 ## Estado
 
 ```text
-004 = IN PROGRESS / WARNING HYGIENE REMEDIATION
+004 = IN PROGRESS / WARNING HYGIENE REMEDIATION ROUND 2
 005 = NOT ACTIVE
 006 = NOT ACTIVE
 G1  = NOT APPROVED
