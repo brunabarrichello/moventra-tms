@@ -129,15 +129,14 @@ test('release smoke handles a large invalid body without using argv or environme
   });
 });
 
-test('protected Vercel smoke uses native full deployment URL', async () => {
+test('protected Vercel smoke uses native full deployment URL and VERCEL_TOKEN from environment', async () => {
   const temp = await mkdtemp(path.join(tmpdir(), 'moventra-vercel-curl-'));
   const bin = path.join(temp, 'bin');
   const log = path.join(temp, 'args.txt');
-  await writeFile(path.join(temp, 'placeholder'), '');
   await runProcess('mkdir', ['-p', bin]);
 
   const mockNpx = path.join(bin, 'npx');
-  await writeFile(mockNpx, `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${log}"\nprintf '%s\\n' '{"status":"ok","product":"Moventra TMS","service":"moventra-api","version":"${expectedSha}"}'\n`);
+  await writeFile(mockNpx, `#!/usr/bin/env bash\nset -euo pipefail\ntest "\${VERCEL_TOKEN:-}" = 'test-token'\nprintf '%s\\n' "$@" > "${log}"\nprintf '%s\\n' '{"status":"ok","product":"Moventra TMS","service":"moventra-api","version":"${expectedSha}"}'\n`);
   await chmod(mockNpx, 0o755);
 
   try {
@@ -161,6 +160,8 @@ test('protected Vercel smoke uses native full deployment URL', async () => {
     assert.match(args, /curl/);
     assert.match(args, /https:\/\/moventra-example-immutable\.vercel\.app\/health/);
     assert.doesNotMatch(args, /--deployment/);
+    assert.doesNotMatch(args, /--token/);
+    assert.doesNotMatch(args, /test-token/);
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
