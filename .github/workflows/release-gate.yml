@@ -1,0 +1,126 @@
+name: Moventra Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_digest:
+        description: SHA-256 digest of the immutable CI artifact
+        required: true
+        type: string
+      staging_url:
+        description: Staging base URL to validate before production approval
+        required: true
+        default: https://moventra-tms-staging.vercel.app
+        type: string
+      rollback_candidate_url:
+        description: Previous deployment URL reserved for rollback drill
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moventra-production-promotion
+  cancel-in-progress: false
+
+jobs:
+  staging-verification:
+    name: Staging verification
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 10
+    steps:
+      - name: Validate staging health
+        env:
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error --location --max-time 20 "${STAGING_URL%/}/health")"
+          RESPONSE="$response" node --input-type=module <<'NODE'
+          const payload = JSON.parse(process.env.RESPONSE);
+          if (payload.status !== 'ok') throw new Error('staging health status is not ok');
+          if (payload.product !== 'Moventra TMS') throw new Error('unexpected product');
+          if (payload.service !== 'moventra-api') throw new Error('unexpected service');
+          NODE
+
+      - name: Record staging evidence
+        env:
+          ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/staging-verification.txt <<EOF
+          product=Moventra TMS
+          phase=004-CI-CD
+          gate=staging-verification
+          artifact_digest=${ARTIFACT_DIGEST}
+          staging_url=${STAGING_URL}
+          actor=${GITHUB_ACTOR}
+          run_id=${GITHUB_RUN_ID}
+          run_attempt=${GITHUB_RUN_ATTEMPT}
+          result=success
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staging-verification-${{ github.run_id }}
+          path: evidence/staging-verification.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  rollback-readiness:
+    name: Rollback candidate verification
+    runs-on: ubuntu-latest
+    environment: staging
+    needs: staging-verification
+    timeout-minutes: 10
+    steps:
+      - name: Validate rollback candidate is reachable
+        env:
+          ROLLBACK_URL: ${{ inputs.rollback_candidate_url }}
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error --location --max-time 20 "${ROLLBACK_URL%/}/health")"
+          RESPONSE="$response" node --input-type=module <<'NODE'
+          const payload = JSON.parse(process.env.RESPONSE);
+          if (payload.status !== 'ok') throw new Error('rollback candidate is unhealthy');
+          if (payload.product !== 'Moventra TMS') throw new Error('unexpected rollback product');
+          if (payload.service !== 'moventra-api') throw new Error('unexpected rollback service');
+          NODE
+
+  production-approval:
+    name: Production approval gate
+    runs-on: ubuntu-latest
+    environment: production
+    needs: [staging-verification, rollback-readiness]
+    timeout-minutes: 10
+    steps:
+      - name: Record protected-environment approval evidence
+        env:
+          ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
+          STAGING_URL: ${{ inputs.staging_url }}
+          ROLLBACK_URL: ${{ inputs.rollback_candidate_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/production-approval.txt <<EOF
+          product=Moventra TMS
+          phase=004-CI-CD
+          gate=production-approval
+          artifact_digest=${ARTIFACT_DIGEST}
+          staging_url=${STAGING_URL}
+          rollback_candidate_url=${ROLLBACK_URL}
+          actor=${GITHUB_ACTOR}
+          run_id=${GITHUB_RUN_ID}
+          run_attempt=${GITHUB_RUN_ATTEMPT}
+          result=approved
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-approval-${{ github.run_id }}
+          path: evidence/production-approval.txt
+          if-no-files-found: error
+          retention-days: 90
