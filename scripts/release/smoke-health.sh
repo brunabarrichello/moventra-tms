@@ -64,15 +64,14 @@ fetch_vercel() {
 {"orgId":"${VERCEL_ORG_ID}","projectId":"${VERCEL_PROJECT_ID}"}
 EOF
 
-  # Vercel CLI >= 48.8 supports protected requests and current releases accept
-  # a full deployment URL directly. Using the native full-URL form avoids the
-  # beta --deployment resolution path that failed against protected immutable
-  # production URLs in the previous canonical execution. Keep stderr visible
-  # so a future protection-bypass failure is auditably diagnosable.
+  # VERCEL_TOKEN is already exported by the GitHub environment and is an
+  # officially supported authentication mechanism for Vercel CLI commands.
+  # Do not pass --token on `vercel curl`: Vercel CLI 59.3.0 forwards that
+  # option to the underlying curl invocation, which rejects it. Use the native
+  # full deployment URL and preserve stderr for auditability.
   (
     cd "$workdir"
     npx --yes "vercel@${vercel_cli_version}" \
-      --token "$VERCEL_TOKEN" \
       curl "${base_url}/health" || true
   )
   rm -rf "$workdir"
