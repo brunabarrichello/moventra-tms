@@ -14,6 +14,7 @@ jobs:
     timeout-minutes: 5
     env:
       TARGET_SHA: 079d798368e47b44cbc28f9ed027446d8af0d2a8
+      PRODUCTION_WORKFLOW_ID: '340095009'
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Enumerate canonical main runs
@@ -43,4 +44,33 @@ jobs:
             | @tsv
           ' /tmp/runs.json
 
-# audit refresh: 2026-08-22T16:14-03:00
+      - name: Enumerate recent production promotion runs
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/${PRODUCTION_WORKFLOW_ID}/runs?per_page=20" \
+            > /tmp/production-runs.json
+
+          echo '--- production promotion runs ---'
+          jq -r '
+            .workflow_runs
+            | sort_by(.created_at)
+            | reverse
+            | .[]
+            | [
+                (.id|tostring),
+                .status,
+                (.conclusion // "null"),
+                .event,
+                .head_branch,
+                .head_sha,
+                .created_at,
+                .updated_at
+              ]
+            | @tsv
+          ' /tmp/production-runs.json
+
+# audit refresh: 2026-08-22T16:15-03:00
