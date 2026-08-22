@@ -1,7 +1,7 @@
 # ADR-0002 — Estratégia de isolamento multi-tenant
 
 ## Status
-Proposto para a fundação do Moventra TMS.
+Aceito em 2026-08-22 para a fundação do Moventra TMS.
 
 ## Contexto
 O Moventra TMS é SaaS multi-tenant, multiempresa e multifilial. A aplicação não pode depender apenas de filtros de interface ou de convenções informais para impedir acesso cruzado entre tenants.
@@ -21,6 +21,8 @@ A defesa será implementada em camadas:
 ## Migration 0001
 A primeira migration estabelece as fronteiras estruturais e FKs compostas. Ela **não ativa RLS ainda**, porque a política RLS depende da definição formal do contexto de execução da aplicação, roles de banco e estratégia de autenticação.
 
+A aceitação desta ADR formaliza a estratégia; ela **não equivale à implementação de RLS, Auth, RBAC ou dos testes cross-tenant**.
+
 ## Critério para ativar RLS
 RLS só poderá ser ativado depois de:
 
@@ -37,4 +39,4 @@ RLS só poderá ser ativado depois de:
 - evita acoplamento prematuro de RLS a um provider de autenticação ainda não escolhido.
 
 ## Gate relacionado
-Esta ADR é requisito para **G2 — Security Ready**, mas G2 permanece pendente até implementação e testes reais de RLS/autorização/auditoria.
+Esta ADR é requisito para **G2 — Security Ready**, mas G2 permanece pendente até implementação e testes reais de autenticação, autorização, isolamento em profundidade e auditoria transversal.
