@@ -131,13 +131,15 @@ jobs:
             exit 1
           }
 
-          printf 'rollback_run_id=%s\n' "$rollback_run_id" >> "$GITHUB_OUTPUT"
-          printf 'rollback_artifact_name=%s\n' "$rollback_artifact_name" >> "$GITHUB_OUTPUT"
-          printf 'rollback_sha=%s\n' "$rollback_sha" >> "$GITHUB_OUTPUT"
-          printf 'restore_run_id=%s\n' "$restore_run_id" >> "$GITHUB_OUTPUT"
-          printf 'restore_artifact_name=%s\n' "$restore_artifact_name" >> "$GITHUB_OUTPUT"
-          printf 'restore_sha=%s\n' "$restore_sha" >> "$GITHUB_OUTPUT"
-          printf 'staging_artifact_sha256=%s\n' "$staging_digest" >> "$GITHUB_OUTPUT"
+          {
+            printf 'rollback_run_id=%s\n' "$rollback_run_id"
+            printf 'rollback_artifact_name=%s\n' "$rollback_artifact_name"
+            printf 'rollback_sha=%s\n' "$rollback_sha"
+            printf 'restore_run_id=%s\n' "$restore_run_id"
+            printf 'restore_artifact_name=%s\n' "$restore_artifact_name"
+            printf 'restore_sha=%s\n' "$restore_sha"
+            printf 'staging_artifact_sha256=%s\n' "$staging_digest"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact restoration revision
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -183,8 +185,10 @@ jobs:
           test "$artifact_name" = "$EXPECTED_NAME"
           test "$commit_sha" = "$EXPECTED_SHA"
           [[ "$artifact_sha256" =~ ^[0-9a-f]{64}$ ]]
-          printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
-          printf 'artifact_sha256=%s\n' "$artifact_sha256" >> "$GITHUB_OUTPUT"
+          {
+            printf 'commit_sha=%s\n' "$commit_sha"
+            printf 'artifact_sha256=%s\n' "$artifact_sha256"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify restoration artifact contract
         id: restore_metadata
@@ -202,8 +206,10 @@ jobs:
           test "$commit_sha" = "$EXPECTED_SHA"
           test "$artifact_sha256" = "$EXPECTED_DIGEST"
           test "$commit_sha" != "${{ steps.rollback_metadata.outputs.commit_sha }}"
-          printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
-          printf 'artifact_sha256=%s\n' "$artifact_sha256" >> "$GITHUB_OUTPUT"
+          {
+            printf 'commit_sha=%s\n' "$commit_sha"
+            printf 'artifact_sha256=%s\n' "$artifact_sha256"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Deploy rollback prebuilt artifact
         id: rollback
