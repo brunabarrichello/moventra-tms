@@ -39,10 +39,13 @@ jobs:
             "package-lock.json"
             "eslint.config.js"
             "src/server.js"
+            "src/core/database-health.js"
             "src/infrastructure/database/postgres.js"
+            "api/database-health.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
             "scripts/ci/build.sh"
+            "scripts/ci/build-vercel-output.mjs"
             "scripts/db/migrate.mjs"
             "db/migrations/0001_foundation.sql"
             "db/validation/0001_foundation_validation.sql"
@@ -201,6 +204,8 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
+      - name: Install locked build dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build once
         run: ./scripts/ci/build.sh
       - name: Upload immutable application artifact
