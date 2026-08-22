@@ -1,0 +1,360 @@
+name: Moventra Production Promotion
+
+on:
+  workflow_run:
+    workflows: ["Moventra Rollback Drill"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      rollback_run_id:
+        description: Successful Moventra Rollback Drill run ID to promote
+        required: true
+        type: string
+      production_url:
+        description: Stable production URL
+        required: true
+        default: https://moventra-tms-alebru.vercel.app
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  deployments: read
+
+concurrency:
+  group: moventra-production-promotion
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Production fail-closed preflight
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      rollback_run_id: ${{ steps.source.outputs.rollback_run_id }}
+      source_run_id: ${{ steps.evidence.outputs.source_run_id }}
+      artifact_name: ${{ steps.evidence.outputs.artifact_name }}
+      commit_sha: ${{ steps.evidence.outputs.commit_sha }}
+      artifact_sha256: ${{ steps.evidence.outputs.artifact_sha256 }}
+      source_actor: ${{ steps.source.outputs.source_actor }}
+      environment_id: ${{ steps.environment.outputs.environment_id }}
+      reviewer_count: ${{ steps.environment.outputs.reviewer_count }}
+      reviewers: ${{ steps.environment.outputs.reviewers }}
+      prevent_self_review: ${{ steps.environment.outputs.prevent_self_review }}
+      production_url: ${{ steps.source.outputs.production_url }}
+    steps:
+      - name: Resolve and validate rollback run
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTED_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.rollback_run_id }}
+          SELECTED_PRODUCTION_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-alebru.vercel.app' || inputs.production_url }}
+        run: |
+          set -euo pipefail
+          [[ "$SELECTED_RUN_ID" =~ ^[0-9]+$ ]] || { echo '::error::Invalid Rollback Drill run ID'; exit 1; }
+          run_json="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${SELECTED_RUN_ID}")"
+          test "$(jq -r '.name' <<< "$run_json")" = 'Moventra Rollback Drill' || {
+            echo '::error::Selected run is not Moventra Rollback Drill'
+            exit 1
+          }
+          test "$(jq -r '.conclusion' <<< "$run_json")" = success || {
+            echo '::error::Rollback Drill must be successful before production promotion'
+            exit 1
+          }
+          test "$(jq -r '.head_branch' <<< "$run_json")" = main || {
+            echo '::error::Rollback Drill must originate from main'
+            exit 1
+          }
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
+            test "${{ github.event.workflow_run.event }}" = workflow_run || {
+              echo '::error::Automatic production only accepts rollback runs triggered by workflow_run.'
+              exit 1
+            }
+          fi
+          source_actor="$(jq -r '.actor.login // empty' <<< "$run_json")"
+          test -n "$source_actor" || { echo '::error::Could not resolve rollback workflow actor'; exit 1; }
+          {
+            printf 'rollback_run_id=%s\n' "$SELECTED_RUN_ID"
+            printf 'source_actor=%s\n' "$source_actor"
+            printf 'production_url=%s\n' "$SELECTED_PRODUCTION_URL"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download trusted rollback evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: rollback-drill-*
+          path: rollback-evidence
+          merge-multiple: true
+          run-id: ${{ steps.source.outputs.rollback_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate rollback evidence and exact main artifact
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t evidence_files < <(find rollback-evidence -type f -name 'rollback-drill.txt' -print)
+          test "${#evidence_files[@]}" -eq 1 || {
+            echo "::error::Expected exactly one rollback evidence file, found ${#evidence_files[@]}"
+            exit 1
+          }
+          evidence="${evidence_files[0]}"
+
+          rollback_deploy="$(awk -F= '$1=="rollback_deploy" {print $2}' "$evidence")"
+          rollback_smoke="$(awk -F= '$1=="rollback_smoke" {print $2}' "$evidence")"
+          restore_deploy="$(awk -F= '$1=="restore_deploy" {print $2}' "$evidence")"
+          restore_smoke="$(awk -F= '$1=="restore_smoke" {print $2}' "$evidence")"
+          source_run_id="$(awk -F= '$1=="restore_source_run" {print $2}' "$evidence")"
+          artifact_name="$(awk -F= '$1=="restore_github_artifact" {print $2}' "$evidence")"
+          commit_sha="$(awk -F= '$1=="restore_commit_sha" {print $2}' "$evidence")"
+          artifact_sha256="$(awk -F= '$1=="restore_artifact_sha256" {print $2}' "$evidence")"
+
+          test "$rollback_deploy" = success
+          test "$rollback_smoke" = success
+          test "$restore_deploy" = success
+          test "$restore_smoke" = success
+          [[ "$source_run_id" =~ ^[0-9]+$ ]]
+          [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$artifact_sha256" =~ ^[0-9a-f]{64}$ ]]
+          test "$artifact_name" = "moventra-tms-${commit_sha}"
+
+          main_json="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/main")"
+          current_main_sha="$(jq -r '.object.sha' <<< "$main_json")"
+          test "$current_main_sha" = "$commit_sha" || {
+            echo "::error::Rollback evidence revision ${commit_sha} is stale; current main is ${current_main_sha}"
+            exit 1
+          }
+
+          artifact_json="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${artifact_name}&per_page=100")"
+          matching_count="$(jq \
+            --arg name "$artifact_name" \
+            --arg sha "$commit_sha" \
+            --argjson run_id "$source_run_id" \
+            '[.artifacts[]
+              | select(.name == $name)
+              | select(.expired == false)
+              | select(.workflow_run.id == $run_id)
+              | select(.workflow_run.head_branch == "main")
+              | select(.workflow_run.head_sha == $sha)] | length' <<< "$artifact_json")"
+          test "$matching_count" -eq 1 || {
+            echo "::error::Expected one non-expired authoritative main artifact, found ${matching_count}"
+            exit 1
+          }
+
+          {
+            printf 'source_run_id=%s\n' "$source_run_id"
+            printf 'artifact_name=%s\n' "$artifact_name"
+            printf 'commit_sha=%s\n' "$commit_sha"
+            printf 'artifact_sha256=%s\n' "$artifact_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify protected production environment
+        id: environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          environment_json="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/environments/production")" || {
+              echo '::error::Production environment does not exist or cannot be read.'
+              exit 1
+            }
+
+          required_rule_count="$(jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' <<< "$environment_json")"
+          test "$required_rule_count" -eq 1 || {
+            echo "::error::Production must have exactly one required_reviewers protection rule; found ${required_rule_count}"
+            exit 1
+          }
+
+          reviewer_count="$(jq '[.protection_rules[] | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "$environment_json")"
+          test "$reviewer_count" -ge 1 || {
+            echo '::error::Production must have at least one required reviewer.'
+            exit 1
+          }
+
+          prevent_self_review="$(jq -r '[.protection_rules[] | select(.type == "required_reviewers")][0].prevent_self_review // false' <<< "$environment_json")"
+          test "$prevent_self_review" = true || {
+            echo '::error::Production must enable prevent self-review.'
+            exit 1
+          }
+
+          environment_id="$(jq -r '.id' <<< "$environment_json")"
+          reviewers="$(jq -r '[.protection_rules[] | select(.type == "required_reviewers") | .reviewers[]? | if .type == "User" then .reviewer.login else .reviewer.slug end] | join(",")' <<< "$environment_json")"
+          [[ "$environment_id" =~ ^[0-9]+$ ]]
+          test -n "$reviewers"
+
+          {
+            printf 'environment_id=%s\n' "$environment_id"
+            printf 'reviewer_count=%s\n' "$reviewer_count"
+            printf 'reviewers=%s\n' "$reviewers"
+            printf 'prevent_self_review=%s\n' "$prevent_self_review"
+          } >> "$GITHUB_OUTPUT"
+
+  production:
+    name: Protected production deployment
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ needs.preflight.outputs.production_url }}
+    timeout-minutes: 25
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PRODUCTION_PROJECT_ID }}
+      PRODUCTION_URL: ${{ needs.preflight.outputs.production_url }}
+    steps:
+      - name: Capture authoritative environment approval
+        id: approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_ACTOR: ${{ needs.preflight.outputs.source_actor }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          approval=''
+          for _ in 1 2 3 4 5; do
+            curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" \
+              > evidence/approval-history.json
+            approval="$(jq -c '[.[] | select(.state == "approved") | select(any(.environments[]?; .name == "production"))] | last // empty' evidence/approval-history.json)"
+            [[ -n "$approval" && "$approval" != null ]] && break
+            sleep 2
+          done
+          [[ -n "$approval" && "$approval" != null ]] || {
+            echo '::error::No authoritative approved production environment review was found.'
+            exit 1
+          }
+          approver="$(jq -r '.user.login // empty' <<< "$approval")"
+          state="$(jq -r '.state // empty' <<< "$approval")"
+          test "$state" = approved
+          test -n "$approver"
+          test "$approver" != "$SOURCE_ACTOR" || {
+            echo '::error::Production approver must differ from the workflow source actor.'
+            exit 1
+          }
+          {
+            printf 'approver=%s\n' "$approver"
+            printf 'state=%s\n' "$state"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact approved revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.preflight.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Download exact artifact proven by rollback
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.preflight.outputs.artifact_name }}
+          path: release-artifact
+          run-id: ${{ needs.preflight.outputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate production deployment configuration
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" || { echo '::error::production VERCEL_TOKEN is required'; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo '::error::production VERCEL_ORG_ID is required'; exit 1; }
+          test -n "$VERCEL_PROJECT_ID" || { echo '::error::VERCEL_PRODUCTION_PROJECT_ID is required'; exit 1; }
+
+      - name: Re-verify exact immutable artifact
+        id: metadata
+        env:
+          EXPECTED_NAME: ${{ needs.preflight.outputs.artifact_name }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.commit_sha }}
+          EXPECTED_DIGEST: ${{ needs.preflight.outputs.artifact_sha256 }}
+        run: |
+          set -euo pipefail
+          metadata="$(bash scripts/release/artifact-metadata.sh release-artifact)"
+          commit_sha="$(printf '%s\n' "$metadata" | awk -F= '$1=="commit_sha" {print $2}')"
+          artifact_name="$(printf '%s\n' "$metadata" | awk -F= '$1=="github_artifact_name" {print $2}')"
+          artifact_sha256="$(printf '%s\n' "$metadata" | awk -F= '$1=="artifact_sha256" {print $2}')"
+          test "$artifact_name" = "$EXPECTED_NAME"
+          test "$commit_sha" = "$EXPECTED_SHA"
+          test "$artifact_sha256" = "$EXPECTED_DIGEST"
+          {
+            printf 'commit_sha=%s\n' "$commit_sha"
+            printf 'artifact_sha256=%s\n' "$artifact_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Deploy exact approved prebuilt artifact to production
+        id: deploy
+        run: |
+          set -euo pipefail
+          result="$(bash scripts/release/vercel-deploy-artifact.sh release-artifact)"
+          printf '%s\n' "$result"
+          while IFS='=' read -r key value; do
+            case "$key" in
+              deployment_url|commit_sha|artifact_sha256) printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT" ;;
+            esac
+          done <<< "$result"
+
+      - name: Verify production revision identity
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          EXPECTED_SHA: ${{ steps.metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/smoke-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-health.sh "$PRODUCTION_URL" "$EXPECTED_SHA"
+
+      - name: Record production evidence
+        env:
+          APPROVER: ${{ steps.approval.outputs.approver }}
+          APPROVAL_STATE: ${{ steps.approval.outputs.state }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+        run: |
+          set -euo pipefail
+          cat > evidence/production-deployment.txt <<EOF
+          product=Moventra TMS
+          phase=004-CI-CD
+          gate=production-protected-promotion
+          rollback_run_id=${{ needs.preflight.outputs.rollback_run_id }}
+          source_ci_run_id=${{ needs.preflight.outputs.source_run_id }}
+          github_artifact_name=${{ needs.preflight.outputs.artifact_name }}
+          commit_sha=${{ needs.preflight.outputs.commit_sha }}
+          artifact_sha256=${{ needs.preflight.outputs.artifact_sha256 }}
+          production_environment_id=${{ needs.preflight.outputs.environment_id }}
+          required_reviewer_count=${{ needs.preflight.outputs.reviewer_count }}
+          required_reviewers=${{ needs.preflight.outputs.reviewers }}
+          prevent_self_review=${{ needs.preflight.outputs.prevent_self_review }}
+          workflow_source_actor=${{ needs.preflight.outputs.source_actor }}
+          approval_state=${APPROVAL_STATE}
+          approver=${APPROVER}
+          deployment_url=${DEPLOYMENT_URL}
+          stable_url=${PRODUCTION_URL}
+          workflow_run_id=${GITHUB_RUN_ID}
+          workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
+          result=success
+          EOF
+
+      - name: Upload protected production evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: production-deployment-${{ needs.preflight.outputs.commit_sha }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 90
