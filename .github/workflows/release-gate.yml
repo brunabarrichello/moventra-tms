@@ -55,7 +55,9 @@ jobs:
       source_run_id: ${{ steps.source.outputs.source_run_id }}
       github_artifact_name: ${{ steps.source.outputs.github_artifact_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Resolve immutable artifact source
         id: source
@@ -77,7 +79,7 @@ jobs:
           printf 'github_artifact_name=%s\n' "$SELECTED_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Download immutable prebuilt artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ steps.source.outputs.github_artifact_name }}
           path: release-artifact
@@ -169,7 +171,7 @@ jobs:
           result=success
           EOF
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: staging-deployment-${{ steps.metadata.outputs.commit_sha }}
           path: evidence/staging-deployment.txt
@@ -191,10 +193,12 @@ jobs:
       SELECTED_ARTIFACT_NAME: ${{ inputs.artifact_name }}
       PRODUCTION_URL: ${{ inputs.production_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Download the same immutable prebuilt artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.staging.outputs.github_artifact_name }}
           path: release-artifact
@@ -272,7 +276,7 @@ jobs:
           result=success
           EOF
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: production-deployment-${{ steps.metadata.outputs.commit_sha }}
           path: evidence/production-deployment.txt
