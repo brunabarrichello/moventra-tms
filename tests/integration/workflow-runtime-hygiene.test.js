@@ -13,10 +13,15 @@ const workflowFiles = [
   '.github/workflows/production-promotion.yml',
 ];
 
+const releaseWorkflowFiles = [
+  '.github/workflows/release-gate.yml',
+  '.github/workflows/rollback-drill.yml',
+  '.github/workflows/production-promotion.yml',
+];
+
 const approvedActions = new Map([
   ['actions/checkout', '3d3c42e5aac5ba805825da76410c181273ba90b1'], // v7.0.1
   ['actions/setup-node', '249970729cb0ef3589644e2896645e5dc5ba9c38'], // v6.5.0
-  ['actions/download-artifact', '37930b1c2abaa49bbe596cd826c3c89aef350131'], // v7.0.0
   ['actions/upload-artifact', '043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'], // v7.0.1
 ]);
 
@@ -28,7 +33,8 @@ const retiredNode20Pins = [
 ];
 
 const retiredWarningPins = [
-  '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c', // download-artifact v8.0.1: DEP0005 Buffer() on canonical runner
+  '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c', // download-artifact v8.0.1: DEP0005 on canonical runner
+  '37930b1c2abaa49bbe596cd826c3c89aef350131', // download-artifact v7.0.0: DEP0005 on canonical runner
 ];
 
 test('foundation workflows pin only approved Node 24 compatible GitHub Actions', async () => {
@@ -44,6 +50,12 @@ test('foundation workflows pin only approved Node 24 compatible GitHub Actions',
     for (const retiredPin of retiredWarningPins) {
       assert.doesNotMatch(workflow, new RegExp(retiredPin), `${relativePath} still references warning-producing action ${retiredPin}`);
     }
+
+    assert.doesNotMatch(
+      workflow,
+      /uses:\s+actions\/download-artifact@/,
+      `${relativePath} must not use actions/download-artifact because its canonical Linux runtime emits DEP0005`,
+    );
 
     for (const match of workflow.matchAll(/^\s*uses:\s+(actions\/[^@\s]+)@([^\s]+)(?:\s+#.*)?$/gm)) {
       const [, action, ref] = match;
@@ -65,6 +77,33 @@ test('foundation workflows pin only approved Node 24 compatible GitHub Actions',
     setupNodeCount,
     'every setup-node use must explicitly disable automatic package-manager caching',
   );
+});
+
+test('release chain uses the fail-closed REST artifact downloader instead of Node artifact actions', async () => {
+  for (const relativePath of releaseWorkflowFiles) {
+    const workflow = await readFile(path.join(root, relativePath), 'utf8');
+    assert.match(
+      workflow,
+      /scripts\/release\/github-download-artifact\.sh/,
+      `${relativePath} must use the repository REST artifact downloader`,
+    );
+    assert.doesNotMatch(workflow, /NODE_OPTIONS\s*:/, `${relativePath} must not hide Node deprecation warnings`);
+    assert.doesNotMatch(workflow, /--no-deprecation/, `${relativePath} must not suppress deprecations`);
+  }
+
+  const downloader = await readFile(path.join(root, 'scripts/release/github-download-artifact.sh'), 'utf8');
+  assert.match(downloader, /actions\/runs\/\$\{run_id\}\/artifacts\?per_page=100/);
+  assert.match(downloader, /Expected exactly one non-expired artifact/);
+  assert.match(downloader, /archive_download_url/);
+  assert.match(downloader, /sha256sum/);
+  assert.match(downloader, /Artifact archive digest mismatch/);
+  assert.match(downloader, /PurePosixPath/);
+  assert.match(downloader, /path\.is_absolute\(\) or '\.\.' in path\.parts/);
+  assert.match(downloader, /stat\.S_IFLNK/);
+  assert.match(downloader, /curl --fail --location --silent --show-error/);
+  assert.doesNotMatch(downloader, /NODE_OPTIONS/);
+  assert.doesNotMatch(downloader, /--no-deprecation/);
+  assert.doesNotMatch(downloader, /2>\/dev\/null/);
 });
 
 test('Vercel npx invocations suppress npm deprecation noise without suppressing Vercel failures', async () => {
