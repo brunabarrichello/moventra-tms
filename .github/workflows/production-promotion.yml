@@ -79,9 +79,11 @@ jobs:
           fi
           source_actor="$(jq -r '.actor.login // empty' <<< "$run_json")"
           test -n "$source_actor" || { echo '::error::Could not resolve rollback workflow actor'; exit 1; }
-          printf 'rollback_run_id=%s\n' "$SELECTED_RUN_ID" >> "$GITHUB_OUTPUT"
-          printf 'source_actor=%s\n' "$source_actor" >> "$GITHUB_OUTPUT"
-          printf 'production_url=%s\n' "$SELECTED_PRODUCTION_URL" >> "$GITHUB_OUTPUT"
+          {
+            printf 'rollback_run_id=%s\n' "$SELECTED_RUN_ID"
+            printf 'source_actor=%s\n' "$source_actor"
+            printf 'production_url=%s\n' "$SELECTED_PRODUCTION_URL"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Download trusted rollback evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -154,10 +156,12 @@ jobs:
             exit 1
           }
 
-          printf 'source_run_id=%s\n' "$source_run_id" >> "$GITHUB_OUTPUT"
-          printf 'artifact_name=%s\n' "$artifact_name" >> "$GITHUB_OUTPUT"
-          printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
-          printf 'artifact_sha256=%s\n' "$artifact_sha256" >> "$GITHUB_OUTPUT"
+          {
+            printf 'source_run_id=%s\n' "$source_run_id"
+            printf 'artifact_name=%s\n' "$artifact_name"
+            printf 'commit_sha=%s\n' "$commit_sha"
+            printf 'artifact_sha256=%s\n' "$artifact_sha256"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify protected production environment
         id: environment
@@ -197,10 +201,12 @@ jobs:
           [[ "$environment_id" =~ ^[0-9]+$ ]]
           test -n "$reviewers"
 
-          printf 'environment_id=%s\n' "$environment_id" >> "$GITHUB_OUTPUT"
-          printf 'reviewer_count=%s\n' "$reviewer_count" >> "$GITHUB_OUTPUT"
-          printf 'reviewers=%s\n' "$reviewers" >> "$GITHUB_OUTPUT"
-          printf 'prevent_self_review=%s\n' "$prevent_self_review" >> "$GITHUB_OUTPUT"
+          {
+            printf 'environment_id=%s\n' "$environment_id"
+            printf 'reviewer_count=%s\n' "$reviewer_count"
+            printf 'reviewers=%s\n' "$reviewers"
+            printf 'prevent_self_review=%s\n' "$prevent_self_review"
+          } >> "$GITHUB_OUTPUT"
 
   production:
     name: Protected production deployment
@@ -225,7 +231,7 @@ jobs:
           set -euo pipefail
           mkdir -p evidence
           approval=''
-          for attempt in 1 2 3 4 5; do
+          for _ in 1 2 3 4 5; do
             curl --fail --silent --show-error \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H 'Accept: application/vnd.github+json' \
@@ -248,8 +254,10 @@ jobs:
             echo '::error::Production approver must differ from the workflow source actor.'
             exit 1
           }
-          printf 'approver=%s\n' "$approver" >> "$GITHUB_OUTPUT"
-          printf 'state=%s\n' "$state" >> "$GITHUB_OUTPUT"
+          {
+            printf 'approver=%s\n' "$approver"
+            printf 'state=%s\n' "$state"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact approved revision
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -287,8 +295,10 @@ jobs:
           test "$artifact_name" = "$EXPECTED_NAME"
           test "$commit_sha" = "$EXPECTED_SHA"
           test "$artifact_sha256" = "$EXPECTED_DIGEST"
-          printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
-          printf 'artifact_sha256=%s\n' "$artifact_sha256" >> "$GITHUB_OUTPUT"
+          {
+            printf 'commit_sha=%s\n' "$commit_sha"
+            printf 'artifact_sha256=%s\n' "$artifact_sha256"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Deploy exact approved prebuilt artifact to production
         id: deploy
