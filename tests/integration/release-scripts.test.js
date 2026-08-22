@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -125,6 +127,43 @@ test('release smoke handles a large invalid body without using argv or environme
     assert.match(result.stderr, /health smoke failed after 1 attempts/);
     assert.doesNotMatch(result.stderr, /Argument list too long/);
   });
+});
+
+test('protected Vercel smoke uses native full deployment URL', async () => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'moventra-vercel-curl-'));
+  const bin = path.join(temp, 'bin');
+  const log = path.join(temp, 'args.txt');
+  await writeFile(path.join(temp, 'placeholder'), '');
+  await runProcess('mkdir', ['-p', bin]);
+
+  const mockNpx = path.join(bin, 'npx');
+  await writeFile(mockNpx, `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${log}"\nprintf '%s\\n' '{"status":"ok","product":"Moventra TMS","service":"moventra-api","version":"${expectedSha}"}'\n`);
+  await chmod(mockNpx, 0o755);
+
+  try {
+    const baseUrl = 'https://moventra-example-immutable.vercel.app';
+    const result = await runProcess('bash', [smokeScript, baseUrl, expectedSha], {
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        SMOKE_AUTH_MODE: 'vercel',
+        SMOKE_ATTEMPTS: '1',
+        SMOKE_DELAY_SECONDS: '0',
+        VERCEL_TOKEN: 'test-token',
+        VERCEL_ORG_ID: 'team_test',
+        VERCEL_PROJECT_ID: 'prj_test',
+      },
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /health smoke passed \(vercel\)/);
+    const args = await readFile(log, 'utf8');
+    assert.match(args, /vercel@59\.3\.0/);
+    assert.match(args, /curl/);
+    assert.match(args, /https:\/\/moventra-example-immutable\.vercel\.app\/health/);
+    assert.doesNotMatch(args, /--deployment/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
 });
 
 test('Vercel output parser preserves the immutable deployment URL before mutable aliases', async () => {
