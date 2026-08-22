@@ -15,8 +15,8 @@ jobs:
     env:
       TARGET_SHA: 079d798368e47b44cbc28f9ed027446d8af0d2a8
       PRODUCTION_WORKFLOW_ID: '340095009'
-      STALE_PRODUCTION_RUN_ID: '32591200330'
-      STALE_SHA: a6ea6292696627fe02701a71213a402ee26950a8
+      STALE_PRODUCTION_RUN_ID: '32592022197'
+      STALE_SHA: 079d798368e47b44cbc28f9ed027446d8af0d2a8
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Cancel stale production promotion blocking canonical run
@@ -84,4 +84,4 @@ jobs:
             | @tsv
           ' /tmp/production-runs.json
 
-# audit refresh: 2026-08-22T16:16-03:00
+# audit refresh: 2026-08-22T16:23-03:00
