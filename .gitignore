@@ -1,0 +1,33 @@
+# Moventra TMS — arquivos locais, secrets e credenciais
+
+# Dotenv: somente o template versionado é permitido.
+.env
+.env.*
+!.env.example
+
+# Chaves privadas, certificados com chave e credenciais exportadas.
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+credentials.json
+service-account*.json
+
+# Diretórios/arquivos locais de secrets.
+secrets/
+.secret
+*.secret
+
+# Dependências e artefatos locais.
+node_modules/
+dist/
+coverage/
+
+# Vercel local state.
+.vercel/
+
+# Sistema/editor.
+.DS_Store
+*.swp
