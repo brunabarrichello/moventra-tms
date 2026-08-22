@@ -4,39 +4,38 @@
 
 - Specification: defined
 - Physical implementation: partial
-- Validation: pending
-- Gate: blocked
-- Macro gate: G1 — Foundation Ready
+- Validation: partial
+- Gate: BLOCKED
+- Macro gate: G1 — Foundation Ready: not approved
+- Promotion to 005 — Secrets Management: NOT AUTHORIZED
 
 ## Objective
 
-Establish an automated, reproducible and auditable delivery pipeline for Moventra TMS, preserving the official execution order and producing evidence tied to repository, commit, actor and pipeline run.
+Establish an automated, reproducible and auditable delivery pipeline for Moventra TMS, preserving the official execution order and producing evidence tied to repository, commit, actor, artifact and deployment.
 
-## Implemented in this phase
+## Executable foundation
 
-The repository now contains a GitHub Actions foundation workflow with:
+PR #4 (`phase/004-cicd-completion`) introduces a real executable foundation instead of documentation-only CI:
 
-- pull request, `main` push and manual triggers;
-- read-only default token permissions;
-- concurrency control with cancellation of superseded runs;
-- mandatory repository-contract checks;
-- rejection of tracked `.env` files, except sanitized `.env.example`;
-- rejection of high-risk tracked credential/key file types;
-- repository-owned hooks for future lint, tests and build;
-- immutable execution evidence containing repository, commit SHA, ref, run ID, run attempt, actor and control results;
-- uploaded CI evidence artifact with finite retention.
+- `moventra-api` executable with Node.js 22.x;
+- `/health` endpoint;
+- unit tests;
+- architecture dependency test;
+- HTTP integration tests;
+- repository-owned lint/test/build hooks;
+- deterministic build script;
+- immutable artifact name tied to `GITHUB_SHA`;
+- SHA-256 checksum;
+- build manifest with product, service, commit SHA and artifact name;
+- GitHub Actions jobs split into repository contract, lint, tests, security baseline, build and evidence.
 
-## Expected application hooks
-
-When the application skeleton exists, the following executable hooks become the stable CI contract independent of the concrete implementation technology:
+Stable CI contract:
 
 ```text
 scripts/ci/lint.sh
 scripts/ci/test.sh
 scripts/ci/build.sh
 ```
-
-These hooks must encapsulate framework-specific commands without coupling the workflow to a temporary stack decision.
 
 ## Required flow
 
@@ -56,45 +55,100 @@ Pull Request
   -> Production
 ```
 
-## Evidence required to approve the phase gate
+## Evidence matrix
 
-The phase MUST NOT be marked concluded until all items below have concrete evidence:
+| Requirement | Status | Evidence |
+|---|---|---|
+| Executable application | IMPLEMENTED | PR #4 contains `src/server.js`, HTTP handler and `/health` |
+| Lint hook | IMPLEMENTED / EXECUTION PENDING | `scripts/ci/lint.sh` exists and is required by workflow |
+| Unit tests | IMPLEMENTED / EXECUTION PENDING | `tests/unit/*.test.js` |
+| Architecture tests | IMPLEMENTED / EXECUTION PENDING | `tests/architecture/*.test.js` |
+| Integration tests | IMPLEMENTED / EXECUTION PENDING | `tests/integration/*.test.js` |
+| Build hook | IMPLEMENTED / EXECUTION PENDING | `scripts/ci/build.sh` |
+| Immutable artifact | IMPLEMENTED / ARTIFACT EVIDENCE PENDING | build outputs `moventra-tms-<commit>.tar.gz` and `.sha256` |
+| Development/test deployment | EVIDENCED | Vercel project `moventra-tms`, deployment `dpl_HYdatwycPdDBuyrzwgpwUVgghC4i`, READY, `/health` HTTP 200 |
+| Staging | EVIDENCED | Vercel project `moventra-tms-staging`, latest deployment `dpl_HJLskyLSEReNokhoMigzK7w1Zhvn`, READY, `/health` HTTP 200 |
+| Rollback target identification | EVIDENCED | previous staging deployment `dpl_6HWgnpEZtQzSieR4uFfNLTTtX5Yx` is retained and reported by Vercel as `isRollbackCandidate=true` |
+| Rollback execution | PENDING | no rollback may be declared validated until a controlled rollback exercise is executed and smoke-tested |
+| Production approval | BLOCKED | protected production approval policy not evidenced |
+| Branch protection | BLOCKED | GitHub `main` currently reports `protected=false` and required status checks disabled |
+| PR CI execution evidence | BLOCKED/PENDING | no GitHub Actions workflow run is currently observable for PR #4 through the connected GitHub Actions evidence endpoint |
 
-1. GitHub Actions workflow executes successfully on a pull request.
-2. Application lint/static-analysis hook exists and passes.
-3. Unit/architecture/integration test hooks exist and pass.
-4. Application build hook exists and produces an immutable artifact tied to a commit SHA.
-5. Deployment target for development/test is physically configured.
-6. Staging promotion is reproducible.
-7. Production promotion requires an explicit protected-environment approval policy.
-8. Rollback procedure identifies the exact previously deployed artifact.
-9. Branch protection on `main` requires the agreed status checks and review policy.
-10. CI execution logs/artifacts can be traced to commit and actor.
+## Deployment evidence
 
-## Current blockers
+### Development/test
 
-### B004-01 — Application skeleton absent
+```text
+project: moventra-tms
+deployment: dpl_HYdatwycPdDBuyrzwgpwUVgghC4i
+state: READY
+health: HTTP 200
+```
 
-The official repository currently contains project documentation only; therefore there is no executable application to lint, test or build.
+### Staging
 
-Impact: the build-once and artifact requirements cannot yet be evidenced.
+```text
+project: moventra-tms-staging
+current deployment: dpl_HJLskyLSEReNokhoMigzK7w1Zhvn
+previous deployment: dpl_6HWgnpEZtQzSieR4uFfNLTTtX5Yx
+previous deployment rollback candidate: true
+current state: READY
+health: HTTP 200
+```
 
-### B004-02 — Moventra Vercel project absent
+Deployment IDs are immutable revision identifiers and must be recorded in release evidence. Commit-to-artifact traceability remains a responsibility of the CI build manifest and must not be inferred only from a deployment URL.
 
-The connected Vercel team currently has projects for previous repositories, but no project linked to `brunabarrichello/moventra-github`.
+## Remaining blockers
 
-Impact: development/test/staging deployment cannot yet be evidenced for Moventra.
+### B004-03 — Branch protection disabled
 
-### B004-03 — Branch protection not evidenced
+Observed repository state on `main`:
 
-The current connector allows repository and CI operations but does not expose a branch-protection write action in this execution context.
+```text
+protected=false
+required_status_checks.enforcement_level=off
+```
 
-Impact: required checks/review enforcement on `main` remains an external repository setting to be evidenced before gate approval.
+Required before gate approval:
+
+- protect `main`;
+- require PR before merge;
+- require agreed CI checks;
+- require review policy;
+- prevent bypass except explicitly governed emergency path.
+
+### B004-04 — GitHub Actions run not evidenced
+
+The workflow definition is present in PR #4, but no pull-request workflow run is currently observable through the connected Actions evidence endpoint.
+
+Required before gate approval:
+
+- one successful PR execution;
+- successful lint, tests, security and build jobs;
+- uploaded immutable application artifact;
+- uploaded CI evidence artifact;
+- artifact/run traceability to commit and actor.
+
+### B004-05 — Protected production approval not evidenced
+
+The production promotion path must require explicit approval through a protected environment or equivalent governed control. A plain deploy command is not approval evidence.
+
+### B004-06 — Rollback drill pending
+
+A concrete prior staging deployment is already identified as a rollback candidate, but the rollback exercise itself has not been executed. Gate approval requires restoration to the previous deployment followed by smoke validation and evidence of the result.
 
 ## Gate decision
 
 **004 — CI/CD remains IN PROGRESS / BLOCKED.**
 
-The foundation workflow is implemented, but the official gate is not approved because an executable application artifact and a Moventra deployment target do not yet exist.
+The original blockers for executable application and deployment targets were materially reduced: the application exists and both deploy/test and staging targets are operational. However, the official gate cannot be approved while PR CI execution, branch protection, protected production approval and the rollback drill remain without complete evidence.
 
-No dependent phase is promoted as concluded while this gate remains blocked.
+Therefore:
+
+```text
+004 != CONCLUDED
+G1 != APPROVED
+005 != ACTIVE
+```
+
+No dependent phase is promoted solely because code or deployment resources now exist.
