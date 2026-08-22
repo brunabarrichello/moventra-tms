@@ -23,61 +23,37 @@ function runProcess(command, args, { env = {}, input = '' } = {}) {
     let stderr = '';
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', reject);
-    child.on('close', (code, signal) => {
-      resolve({ code, signal, stdout, stderr });
-    });
-
+    child.on('close', (code, signal) => { resolve({ code, signal, stdout, stderr }); });
     child.stdin.end(input);
   });
 }
 
 async function withServer(handler, run) {
   const server = createServer(handler);
-  await new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', resolve);
-  });
-
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   try {
     const address = server.address();
     assert.equal(typeof address, 'object');
     await run(`http://127.0.0.1:${address.port}`);
   } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await new Promise((resolve, reject) => { server.close((error) => (error ? reject(error) : resolve())); });
   }
 }
 
 function smokeEnv() {
-  return {
-    SMOKE_AUTH_MODE: 'http',
-    SMOKE_ATTEMPTS: '1',
-    SMOKE_DELAY_SECONDS: '0',
-  };
+  return { SMOKE_AUTH_MODE: 'http', SMOKE_ATTEMPTS: '1', SMOKE_DELAY_SECONDS: '0' };
 }
 
 test('release smoke accepts the exact healthy revision', async () => {
   await withServer((request, response) => {
     assert.equal(request.url, '/health');
     response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify({
-      status: 'ok',
-      product: 'Moventra TMS',
-      service: 'moventra-api',
-      version: expectedSha,
-    }));
+    response.end(JSON.stringify({ status: 'ok', product: 'Moventra TMS', service: 'moventra-api', version: expectedSha }));
   }, async (baseUrl) => {
-    const result = await runProcess('bash', [smokeScript, baseUrl, expectedSha], {
-      env: smokeEnv(),
-    });
-
+    const result = await runProcess('bash', [smokeScript, baseUrl, expectedSha], { env: smokeEnv() });
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /health smoke passed \(http\)/);
   });
@@ -85,7 +61,6 @@ test('release smoke accepts the exact healthy revision', async () => {
 
 test('release smoke does not follow an authentication redirect anonymously', async () => {
   let redirectedPageHits = 0;
-
   await withServer((request, response) => {
     if (request.url === '/health') {
       response.statusCode = 302;
@@ -93,21 +68,16 @@ test('release smoke does not follow an authentication redirect anonymously', asy
       response.end('Redirecting...');
       return;
     }
-
     if (request.url === '/sso') {
       redirectedPageHits += 1;
       response.setHeader('content-type', 'text/html');
       response.end('x'.repeat(512 * 1024));
       return;
     }
-
     response.statusCode = 404;
     response.end();
   }, async (baseUrl) => {
-    const result = await runProcess('bash', [smokeScript, baseUrl, expectedSha], {
-      env: smokeEnv(),
-    });
-
+    const result = await runProcess('bash', [smokeScript, baseUrl, expectedSha], { env: smokeEnv() });
     assert.equal(result.code, 69);
     assert.equal(redirectedPageHits, 0);
     assert.doesNotMatch(result.stderr, /Argument list too long/);
@@ -119,25 +89,21 @@ test('release smoke handles a large invalid body without using argv or environme
     response.setHeader('content-type', 'text/html');
     response.end('x'.repeat(512 * 1024));
   }, async (baseUrl) => {
-    const result = await runProcess('bash', [smokeScript, baseUrl, expectedSha], {
-      env: smokeEnv(),
-    });
-
+    const result = await runProcess('bash', [smokeScript, baseUrl, expectedSha], { env: smokeEnv() });
     assert.equal(result.code, 69);
     assert.match(result.stderr, /health smoke failed after 1 attempts/);
     assert.doesNotMatch(result.stderr, /Argument list too long/);
   });
 });
 
-test('protected Vercel smoke uses native full deployment URL', async () => {
+test('protected Vercel smoke uses native full deployment URL and VERCEL_TOKEN from environment', async () => {
   const temp = await mkdtemp(path.join(tmpdir(), 'moventra-vercel-curl-'));
   const bin = path.join(temp, 'bin');
   const log = path.join(temp, 'args.txt');
-  await writeFile(path.join(temp, 'placeholder'), '');
   await runProcess('mkdir', ['-p', bin]);
 
   const mockNpx = path.join(bin, 'npx');
-  await writeFile(mockNpx, `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${log}"\nprintf '%s\\n' '{"status":"ok","product":"Moventra TMS","service":"moventra-api","version":"${expectedSha}"}'\n`);
+  await writeFile(mockNpx, `#!/usr/bin/env bash\nset -euo pipefail\ntest "\${VERCEL_TOKEN:-}" = 'test-token'\nprintf '%s\\n' "$@" > "${log}"\nprintf '%s\\n' '{"status":"ok","product":"Moventra TMS","service":"moventra-api","version":"${expectedSha}"}'\n`);
   await chmod(mockNpx, 0o755);
 
   try {
@@ -161,6 +127,8 @@ test('protected Vercel smoke uses native full deployment URL', async () => {
     assert.match(args, /curl/);
     assert.match(args, /https:\/\/moventra-example-immutable\.vercel\.app\/health/);
     assert.doesNotMatch(args, /--deployment/);
+    assert.doesNotMatch(args, /--token/);
+    assert.doesNotMatch(args, /test-token/);
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
@@ -178,7 +146,6 @@ test('Vercel output parser preserves the immutable deployment URL before mutable
   ].join('\n');
 
   const result = await runProcess('bash', [deploymentUrlParser], { input: output });
-
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stdout.trim(), immutableUrl);
 });
