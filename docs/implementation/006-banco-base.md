@@ -2,15 +2,15 @@
 
 ## Estado
 
-`ACTIVE`
+`ACTIVE / DATABASE FOUNDATION IMPLEMENTATION`
 
 Dependência satisfeita: `005 — Secrets Management`.
 
 ## Objetivo
 
-Estabelecer a fundação PostgreSQL oficial do Moventra TMS, reproduzível por migrations, segregada por ambiente e preparada para as fases seguintes de convenções de dados, tenant, empresa, filial, usuários, RBAC, RLS e auditoria.
+Estabelecer a fundação PostgreSQL oficial do Moventra TMS, reproduzível por migrations, segregada por ambiente e preparada para as fases seguintes sem antecipar entidades de negócio.
 
-## Infraestrutura oficial identificada
+## Infraestrutura oficial
 
 Provider: Neon Postgres.
 
@@ -44,8 +44,42 @@ Não criar projeto Neon duplicado enquanto este permanecer como source of truth.
 - zero views de aplicação;
 - extensão instalada: apenas `plpgsql`;
 - existe função utilitária `public.show_db_tree`, criada pela infraestrutura/ferramenta;
-- nenhum domínio TMS foi materializado ainda;
-- `DATABASE_URL` já existe apenas como nome de contrato em `.env.example`, sem valor versionado.
+- nenhum domínio TMS foi materializado;
+- `DATABASE_URL` existe apenas como nome de contrato em `.env.example`, sem valor versionado.
+
+## Delta audit da migration preexistente
+
+Ao ativar a 006 foi identificado que a antiga `db/migrations/0001_foundation.sql` antecipava tenants, companies, branches, users, memberships, RBAC e auditoria. Essa migration não havia sido aplicada no Neon oficial, pois a branch `main` permanece sem tabelas de aplicação.
+
+A migration foi corrigida antes da primeira aplicação para um baseline estritamente não-domínio. O CI passa a impedir regressão dessa antecipação.
+
+## Framework de migrations proposto nesta implementação
+
+Runner: `node scripts/db/migrate.mjs`.
+
+Características:
+
+- migrations SQL versionadas e ordenadas;
+- SHA-256 por migration;
+- histórico em `moventra_meta.schema_migrations`;
+- falha se uma migration aplicada for alterada;
+- transação por migration;
+- advisory lock transacional;
+- reaplicação segura de migrations já registradas;
+- `DATABASE_URL` convertida para variáveis `PG*` do processo `psql`, sem passagem da connection string como argumento;
+- validation SQL correspondente a cada migration.
+
+A migration `0001_foundation.sql` cria somente `moventra_meta.database_contract`. Nenhuma entidade de tenant, empresa, filial, usuário, RBAC ou auditoria é criada nesta fase.
+
+## CI proposto
+
+O job `PostgreSQL migration contract` deverá:
+
+1. subir PostgreSQL 18 limpo;
+2. aplicar todas as migrations;
+3. executar novamente o runner para provar comportamento idempotente do histórico;
+4. executar a validation da migration 0001;
+5. bloquear o build imutável se o contrato do banco falhar.
 
 ## Decisões da fase
 
@@ -53,10 +87,11 @@ Não criar projeto Neon duplicado enquanto este permanecer como source of truth.
 2. O banco deve ser criado/evoluído exclusivamente por migrations versionadas e reproduzíveis.
 3. Nenhuma credencial ou connection string real será versionada.
 4. `DATABASE_URL` será resolvida por secret store por ambiente.
-5. Migrations devem ser idempotentes quando aplicável, auditáveis e validadas antes da promoção.
-6. Alterações de schema serão testadas em branch temporária/ambiente não produtivo antes de aplicação em `main`.
-7. Esta fase não cria ainda entidades de tenant, empresa, filial ou usuário; elas pertencem às fases oficiais posteriores.
-8. Convenções detalhadas de nomenclatura e tipos de domínio pertencem à fase `007 — Convenções de Dados`, mas a 006 deve preparar o mecanismo de migration para aplicá-las.
+5. Migrations aplicadas são imutáveis; correções posteriores usam nova migration.
+6. A política padrão de recuperação de schema é forward-fix; restore/PITR é reservado a incidentes que justifiquem recuperação de estado.
+7. Alterações serão testadas em branch temporária/ambiente não produtivo antes de aplicação em `main`.
+8. Esta fase não cria entidades de fases posteriores.
+9. Convenções detalhadas de dados permanecem reservadas à fase `007 — Convenções de Dados`.
 
 ## Trabalho ativo
 
@@ -64,26 +99,29 @@ Não criar projeto Neon duplicado enquanto este permanecer como source of truth.
 - [x] identificar versão PostgreSQL, região e database inicial;
 - [x] inventariar branches `main`, `staging` e `development`;
 - [x] confirmar baseline vazio de tabelas/views de aplicação;
-- [ ] selecionar e integrar driver PostgreSQL e mecanismo de migrations ao repositório;
-- [ ] criar estrutura versionada de migrations;
-- [ ] criar migration baseline não-domínio e controle de versão do schema;
-- [ ] validar migration em branch temporária/ambiente de desenvolvimento;
-- [ ] garantir execução repetível em banco limpo;
-- [ ] adicionar testes/CI do contrato de banco;
-- [ ] definir configuração segura de `DATABASE_URL` por ambiente sem expor valores;
-- [ ] documentar rollback/forward-fix da fundação do banco;
-- [ ] validar evidências e concluir 006.
+- [x] corrigir migration preexistente que antecipava fases posteriores;
+- [x] selecionar e implementar mecanismo de migrations baseado em SQL + `psql`;
+- [x] criar controle de versão/checksum de migrations;
+- [x] criar migration baseline não-domínio;
+- [x] criar validation do baseline;
+- [x] adicionar teste arquitetural impedindo entidades antecipadas na migration 0001;
+- [x] documentar política de migration, forward-fix e recuperação;
+- [ ] validar o novo job PostgreSQL no GitHub Actions;
+- [ ] validar migration em branch temporária Neon;
+- [ ] definir/integrar acesso PostgreSQL de runtime ao código;
+- [ ] definir `DATABASE_URL` nos environments necessários sem expor valores;
+- [ ] validar evidências finais e concluir 006.
 
 ## Gate de conclusão
 
-A fase 006 somente será `CONCLUDED` quando houver, no mínimo:
+A fase 006 somente será `CONCLUDED` quando houver:
 
-- conexão PostgreSQL integrada ao código sem secret versionado;
+- acesso PostgreSQL de runtime integrado sem secret versionado;
 - migration framework versionado no repositório;
 - baseline reproduzível a partir de banco limpo;
-- execução e validação em ambiente não produtivo;
+- execução e validação em Neon não produtivo;
 - CI cobrindo migrations/contrato básico do banco;
-- documentação de aplicação, rollback/forward-fix e evidências;
+- documentação de aplicação e recuperação;
 - nenhuma entidade de fase posterior antecipada indevidamente.
 
 Até lá:
