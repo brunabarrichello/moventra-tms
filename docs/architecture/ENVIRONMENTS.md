@@ -10,9 +10,9 @@ Padronizar a separação de ambientes de aplicação, banco, secrets e integraç
 | Development | desenvolvimento diário | branch `development` | ambiente de aplicação dedicado ainda não formalmente evidenciado | proibidos por padrão | banco provisionado; aplicação dedicada pendente |
 | Test | testes automatizados/efêmeros | branch efêmera ou banco isolado | GitHub Actions / execução efêmera | proibidos | CI automatizado operacional |
 | Staging | homologação técnica, gates de release e futura UAT | branch `staging` | Vercel `moventra-tms-staging` (`prj_4USELVoAr0FsHg2vBNGXws7hU22Q`) | mascarados/sintéticos por padrão | provisionado e fisicamente validado |
-| Production | operação real | branch `main` | Vercel `moventra-tms` (`prj_5qFenjyeGE1joaGomaNrUIRGSBQs`) | permitidos sob controles LGPD | provisionado; deployment físico da revisão atual validado |
+| Production | operação real | branch `main` | Vercel `moventra-tms` (`prj_5qFenjyeGE1joaGomaNrUIRGSBQs`) | permitidos sob controles LGPD | provisionado; deployment físico da revisão auditada validado; nova execução da 004 requerida após correção do smoke |
 
-> Observação: no Vercel, staging e production são projetos separados. Por isso deployments do projeto de staging podem aparecer com `target=production` dentro daquele projeto sem significar promoção para o projeto produtivo do Moventra.
+> No Vercel, staging e production são projetos separados. Deployments do projeto de staging podem aparecer com `target=production` dentro daquele projeto sem significar promoção para o projeto produtivo do Moventra.
 
 ## Regras obrigatórias
 
@@ -25,33 +25,27 @@ Padronizar a separação de ambientes de aplicação, banco, secrets e integraç
 - artefatos promovidos entre staging e production devem preservar identidade de revisão e integridade;
 - alterações de ambiente produtivo devem ser auditáveis e sujeitas aos gates definidos em `004 — CI/CD`.
 
-## Evidência física atual
+## Evidência física da revisão auditada
 
-Revisão canônica da aplicação em `main` na auditoria:
+Revisão canônica investigada:
 
 ```text
 4575ffefce63b2bc2b75e6e9985a2b30c40b383b
 ```
 
-O alias estável de staging respondeu `HTTP 200` com:
+O alias de staging serviu `HTTP 200` com a revisão exata. O projeto produtivo também recebeu fisicamente o mesmo artifact por `Moventra Production Promotion` run `32581944193`, correlacionado ao deployment:
 
 ```text
-status=ok
-product=Moventra TMS
-service=moventra-api
-version=4575ffefce63b2bc2b75e6e9985a2b30c40b383b
+dpl_HCh9jAeUNvD3FeSkeLB8TP48wkVv
 ```
 
-O alias estável de production também respondeu `HTTP 200` com a mesma revisão:
+O run produtivo, contudo, terminou em `failure` depois do deploy porque o smoke do alias protegido por Vercel Authentication excedeu `ARG_MAX` ao transportar uma página SSO grande por variável de ambiente. O defeito foi corrigido e coberto por testes, mas a 004 exige nova execução integralmente bem-sucedida antes de ser concluída.
+
+Detalhes:
 
 ```text
-status=ok
-product=Moventra TMS
-service=moventra-api
-version=4575ffefce63b2bc2b75e6e9985a2b30c40b383b
+docs/implementation/004-production-promotion-remediation-2026-08-22.md
 ```
-
-A presença física da revisão em produção não substitui a evidência formal de approval e correlação do workflow exigida para concluir a fase 004.
 
 ## Estado do banco
 
@@ -66,8 +60,15 @@ audit schema        = absent
 foundation tables   = 0
 ```
 
-Portanto, `db/migrations/0001_foundation.sql` permanece **preparada no repositório, mas não aplicada ao Neon main**. A etapa 006 — Banco Base continua pendente e não deve ser antecipada enquanto a etapa 004 não estiver formalmente encerrada e a 005 não tiver sido promovida conforme a sequência oficial.
+Portanto, `db/migrations/0001_foundation.sql` permanece preparada no repositório, mas não aplicada ao Neon `main`.
 
-## Gate relacionado
+## Gates relacionados
 
-`G1 — Foundation Ready` permanece **NOT APPROVED** até que, além dos ambientes e CI/CD, o banco base esteja versionado e aplicado/validado conforme a etapa 006 e os secrets estejam formalmente governados pela etapa 005.
+```text
+004 = IN PROGRESS / REMEDIATED / REEXECUTION REQUIRED
+005 = NOT ACTIVE
+006 = NOT ACTIVE
+G1  = NOT APPROVED
+```
+
+A sequência oficial não deve ser antecipada.
