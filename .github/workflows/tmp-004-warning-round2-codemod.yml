@@ -43,7 +43,6 @@ jobs:
               'scripts/release/smoke-health.sh',
               'scripts/release/vercel-deploy-artifact.sh',
               'tests/integration/release-scripts.test.js',
-              'docs/implementation/004-warning-hygiene-2026-08-22.md',
           ]:
               path = Path(name)
               text = path.read_text()
