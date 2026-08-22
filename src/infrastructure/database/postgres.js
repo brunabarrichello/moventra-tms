@@ -1,0 +1,153 @@
+import { attachDatabasePool } from '@vercel/functions';
+import pg from 'pg';
+
+const { Pool } = pg;
+
+const DEFAULT_POOL_MAX = 5;
+const DEFAULT_IDLE_TIMEOUT_MS = 10_000;
+const DEFAULT_CONNECTION_TIMEOUT_MS = 5_000;
+
+let pool;
+let attachedToVercel = false;
+
+export function getDatabasePool() {
+  if (pool) {
+    return pool;
+  }
+
+  const connectionString = requireDatabaseUrl();
+
+  pool = new Pool({
+    connectionString,
+    max: integerSetting('DB_POOL_MAX', DEFAULT_POOL_MAX, 1, 50),
+    idleTimeoutMillis: integerSetting(
+      'DB_POOL_IDLE_TIMEOUT_MS',
+      DEFAULT_IDLE_TIMEOUT_MS,
+      1_000,
+      300_000,
+    ),
+    connectionTimeoutMillis: integerSetting(
+      'DB_CONNECTION_TIMEOUT_MS',
+      DEFAULT_CONNECTION_TIMEOUT_MS,
+      1_000,
+      60_000,
+    ),
+    application_name: 'moventra-api',
+  });
+
+  if (process.env.VERCEL === '1' && !attachedToVercel) {
+    attachDatabasePool(pool);
+    attachedToVercel = true;
+  }
+
+  pool.on('error', (error) => {
+    console.error('Unexpected idle PostgreSQL client error', {
+      name: error.name,
+      code: error.code,
+    });
+  });
+
+  return pool;
+}
+
+export async function queryDatabase(text, values = []) {
+  validateQuery(text, values);
+  return getDatabasePool().query(text, values);
+}
+
+export async function withDatabaseTransaction(callback) {
+  if (typeof callback !== 'function') {
+    throw new TypeError('Transaction callback must be a function');
+  }
+
+  const client = await getDatabasePool().connect();
+
+  try {
+    await client.query('BEGIN');
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('PostgreSQL rollback failed', {
+        name: rollbackError.name,
+        code: rollbackError.code,
+      });
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function checkDatabaseReadiness() {
+  const result = await queryDatabase(
+    'SELECT current_database() AS database_name, current_setting(\'server_version_num\')::int AS server_version_num',
+  );
+  const row = result.rows[0];
+
+  return {
+    ok: Number(row?.server_version_num) >= 180000,
+    databaseName: row?.database_name ?? null,
+    serverVersionNum: Number(row?.server_version_num ?? 0),
+  };
+}
+
+export async function closeDatabasePool() {
+  if (!pool) {
+    return;
+  }
+
+  const activePool = pool;
+  pool = undefined;
+  attachedToVercel = false;
+  await activePool.end();
+}
+
+function requireDatabaseUrl() {
+  const value = process.env.DATABASE_URL?.trim();
+
+  if (!value) {
+    throw new Error('DATABASE_URL is required for PostgreSQL runtime access');
+  }
+
+  const parsed = new URL(value);
+
+  if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
+    throw new Error('DATABASE_URL must use postgres or postgresql protocol');
+  }
+
+  if (!parsed.hostname || !parsed.pathname || parsed.pathname === '/') {
+    throw new Error('DATABASE_URL must include host and database name');
+  }
+
+  return value;
+}
+
+function integerSetting(name, fallback, minimum, maximum) {
+  const raw = process.env[name];
+
+  if (raw === undefined || raw === '') {
+    return fallback;
+  }
+
+  const value = Number.parseInt(raw, 10);
+
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+  }
+
+  return value;
+}
+
+function validateQuery(text, values) {
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new TypeError('SQL query text must be a non-empty string');
+  }
+
+  if (!Array.isArray(values)) {
+    throw new TypeError('SQL query values must be an array');
+  }
+}
