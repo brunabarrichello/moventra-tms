@@ -1,6 +1,10 @@
 name: Moventra Release Gate
 
 on:
+  workflow_run:
+    workflows: ["Moventra CI"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       artifact_run_id:
@@ -27,12 +31,13 @@ permissions:
   actions: read
 
 concurrency:
-  group: moventra-production-promotion
+  group: moventra-release-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.artifact_name }}
   cancel-in-progress: false
 
 jobs:
   staging:
     name: Staging prebuilt deployment
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: staging
     timeout-minutes: 20
@@ -40,23 +45,46 @@ jobs:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_STAGING_PROJECT_ID }}
+      SOURCE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.artifact_run_id }}
+      SELECTED_ARTIFACT_NAME: ${{ github.event_name == 'workflow_run' && format('moventra-tms-{0}', github.event.workflow_run.head_sha) || inputs.artifact_name }}
+      STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging.vercel.app' || inputs.staging_url }}
     outputs:
       commit_sha: ${{ steps.metadata.outputs.commit_sha }}
       artifact_sha256: ${{ steps.metadata.outputs.artifact_sha256 }}
       deployment_url: ${{ steps.deploy.outputs.deployment_url }}
+      source_run_id: ${{ steps.source.outputs.source_run_id }}
+      github_artifact_name: ${{ steps.source.outputs.github_artifact_name }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve immutable artifact source
+        id: source
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_RUN_ID" || { echo '::error::Source workflow run ID is required'; exit 1; }
+          test -n "$SELECTED_ARTIFACT_NAME" || { echo '::error::Artifact name is required'; exit 1; }
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+            test "${{ github.event.workflow_run.event }}" = "push" || {
+              echo '::error::Automatic staging only accepts artifacts from push events.'
+              exit 1
+            }
+            test "${{ github.event.workflow_run.head_branch }}" = "main" || {
+              echo '::error::Automatic staging only accepts the main branch.'
+              exit 1
+            }
+          fi
+          printf 'source_run_id=%s\n' "$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+          printf 'github_artifact_name=%s\n' "$SELECTED_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Download immutable prebuilt artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.artifact_name }}
+          name: ${{ steps.source.outputs.github_artifact_name }}
           path: release-artifact
-          run-id: ${{ inputs.artifact_run_id }}
+          run-id: ${{ steps.source.outputs.source_run_id }}
           github-token: ${{ github.token }}
 
       - name: Validate deployment configuration
-        id: credentials
         run: |
           set -euo pipefail
           test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN is required'; exit 1; }
@@ -66,7 +94,7 @@ jobs:
       - name: Verify immutable artifact contract
         id: metadata
         env:
-          SELECTED_ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          EXPECTED_ARTIFACT_NAME: ${{ steps.source.outputs.github_artifact_name }}
         run: |
           set -euo pipefail
           metadata="$(bash scripts/release/artifact-metadata.sh release-artifact)"
@@ -79,7 +107,19 @@ jobs:
             esac
           done <<< "$metadata"
           discovered="$(printf '%s\n' "$metadata" | awk -F= '$1=="github_artifact_name" {print $2}')"
-          test "$SELECTED_ARTIFACT_NAME" = "$discovered"
+          test "$EXPECTED_ARTIFACT_NAME" = "$discovered"
+
+      - name: Enforce automatic main revision identity
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          ARTIFACT_SHA: ${{ steps.metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          test "$ARTIFACT_SHA" = "$EXPECTED_SHA" || {
+            echo "::error::Artifact revision $ARTIFACT_SHA does not match triggering main SHA $EXPECTED_SHA"
+            exit 1
+          }
 
       - name: Deploy exact prebuilt artifact to staging
         id: deploy
@@ -98,7 +138,6 @@ jobs:
       - name: Verify staging revision identity
         env:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
-          STAGING_URL: ${{ inputs.staging_url }}
           EXPECTED_SHA: ${{ steps.metadata.outputs.commit_sha }}
         run: |
           set -euo pipefail
@@ -107,12 +146,9 @@ jobs:
 
       - name: Record staging evidence
         env:
-          SOURCE_RUN_ID: ${{ inputs.artifact_run_id }}
-          GITHUB_ARTIFACT_NAME: ${{ inputs.artifact_name }}
           COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
           ARTIFACT_SHA256: ${{ steps.metadata.outputs.artifact_sha256 }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
-          STAGING_URL: ${{ inputs.staging_url }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -120,8 +156,9 @@ jobs:
           product=Moventra TMS
           phase=004-CI-CD
           gate=staging-prebuilt-deployment
+          trigger=${GITHUB_EVENT_NAME}
           source_run_id=${SOURCE_RUN_ID}
-          github_artifact_name=${GITHUB_ARTIFACT_NAME}
+          github_artifact_name=${SELECTED_ARTIFACT_NAME}
           commit_sha=${COMMIT_SHA}
           artifact_sha256=${ARTIFACT_SHA256}
           deployment_url=${DEPLOYMENT_URL}
@@ -134,13 +171,14 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: staging-deployment-${{ github.run_id }}
+          name: staging-deployment-${{ steps.metadata.outputs.commit_sha }}
           path: evidence/staging-deployment.txt
           if-no-files-found: error
           retention-days: 90
 
   production:
     name: Production approval and prebuilt deployment
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: staging
     runs-on: ubuntu-latest
     environment: production
@@ -149,15 +187,18 @@ jobs:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PRODUCTION_PROJECT_ID }}
+      SOURCE_RUN_ID: ${{ inputs.artifact_run_id }}
+      SELECTED_ARTIFACT_NAME: ${{ inputs.artifact_name }}
+      PRODUCTION_URL: ${{ inputs.production_url }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Download the same immutable prebuilt artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.artifact_name }}
+          name: ${{ needs.staging.outputs.github_artifact_name }}
           path: release-artifact
-          run-id: ${{ inputs.artifact_run_id }}
+          run-id: ${{ needs.staging.outputs.source_run_id }}
           github-token: ${{ github.token }}
 
       - name: Validate production deployment configuration
@@ -200,7 +241,6 @@ jobs:
       - name: Verify production revision identity
         env:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
-          PRODUCTION_URL: ${{ inputs.production_url }}
           EXPECTED_SHA: ${{ steps.metadata.outputs.commit_sha }}
         run: |
           set -euo pipefail
@@ -209,12 +249,9 @@ jobs:
 
       - name: Record protected production evidence
         env:
-          SOURCE_RUN_ID: ${{ inputs.artifact_run_id }}
-          GITHUB_ARTIFACT_NAME: ${{ inputs.artifact_name }}
           COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
           ARTIFACT_SHA256: ${{ steps.metadata.outputs.artifact_sha256 }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
-          PRODUCTION_URL: ${{ inputs.production_url }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -224,7 +261,7 @@ jobs:
           gate=production-protected-deployment
           approval_control=github-environment:production
           source_run_id=${SOURCE_RUN_ID}
-          github_artifact_name=${GITHUB_ARTIFACT_NAME}
+          github_artifact_name=${SELECTED_ARTIFACT_NAME}
           commit_sha=${COMMIT_SHA}
           artifact_sha256=${ARTIFACT_SHA256}
           deployment_url=${DEPLOYMENT_URL}
@@ -237,7 +274,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: production-deployment-${{ github.run_id }}
+          name: production-deployment-${{ steps.metadata.outputs.commit_sha }}
           path: evidence/production-deployment.txt
           if-no-files-found: error
           retention-days: 180
