@@ -31,9 +31,12 @@ cd "$workdir"
 deployment_output="$(npx --yes "vercel@${vercel_cli_version}" deploy --prebuilt --prod --yes --token "$VERCEL_TOKEN" 2>&1)"
 printf '%s\n' "$deployment_output" >&2
 
-deployment_url="$(printf '%s\n' "$deployment_output" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -1)"
+# Vercel prints the immutable production deployment before any stable alias.
+# Selecting the first *.vercel.app URL preserves the exact deployment identity;
+# selecting the last URL would incorrectly return the mutable alias.
+deployment_url="$(printf '%s\n' "$deployment_output" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | head -1)"
 if [[ -z "$deployment_url" ]]; then
-  echo "could not determine deployment URL from Vercel output" >&2
+  echo "could not determine immutable deployment URL from Vercel output" >&2
   exit 68
 fi
 
