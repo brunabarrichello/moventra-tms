@@ -33,6 +33,8 @@ cat > "$PACKAGE_ROOT/build-manifest.json" <<EOF
 EOF
 
 node --check "$OUTPUT_ROOT/functions/api/health.func/index.js"
+node --check "$OUTPUT_ROOT/functions/api/database-health.func/index.js"
+node --input-type=module -e "await import('./dist/package/.vercel/output/functions/api/database-health.func/index.js')"
 
 tar \
   --sort=name \

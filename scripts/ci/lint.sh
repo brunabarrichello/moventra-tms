@@ -55,6 +55,12 @@ printf '%s  %s\n' "$ACTIONLINT_LINUX_AMD64_SHA256" "$actionlint_archive" | sha25
 tar -xzf "$actionlint_archive" -C "$actionlint_tmp" actionlint
 "$actionlint_tmp/actionlint" -color
 
+# Architecture tests exercise the immutable Vercel bundle, which intentionally
+# contains the locked PostgreSQL runtime dependencies. Install from the lockfile
+# when lint is executed in an otherwise clean checkout.
+if [[ ! -d node_modules ]]; then
+  npm ci --ignore-scripts --no-audit --no-fund
+fi
 node --test tests/architecture/*.test.js
 
 echo "Lint/static analysis passed with ESLint ${ESLINT_VERSION} and actionlint ${ACTIONLINT_VERSION} for ${#js_files[@]} JavaScript files, ${#sh_files[@]} shell scripts and GitHub Actions workflows."
