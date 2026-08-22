@@ -2,111 +2,78 @@
 
 ## Estado
 
-`ACTIVE / CUTOVER VALIDATION`
+`CONCLUDED`
 
-Dependência satisfeita: `003 — Ambientes`.
+Dependência satisfeita: `004 — CI/CD`.
 
-A fase 004 foi concluída na revisão canônica `fa5acc3082a8eac7ea2e33d2202a1769859c90a8`, com Production Promotion aprovado e evidence íntegra.
+A fase 005 foi concluída após validação administrativa e operacional do cutover de secrets por ambiente. A conclusão preserva uma exceção de risco explicitamente aceita pelo responsável: o token Vercel legado compartilhado permanece ativo e não é utilizado como credencial-alvo dos GitHub Environments atuais.
 
 ## Objetivo
 
-Separar completamente secrets de código e configuração comum, mantendo segregação por ambiente, menor privilégio, rotação, auditoria e fail-closed.
+Separar secrets de código e configuração comum, mantendo segregação por ambiente, menor privilégio, rotação, auditoria e comportamento fail-closed.
 
-## Controles implementados nesta fase
+## Controles implementados
 
 - `.gitignore` corporativo para dotenv, chaves privadas, credential files e diretórios locais de secrets;
-- `.env.example` com somente nomes de contrato e valores vazios;
-- política `docs/security/SECRETS-POLICY.md` ampliada com classificação, stores, segregação, rotação, auditoria e resposta a incidente;
+- `.env.example` apenas com nomes de contrato e valores vazios;
+- política `docs/security/SECRETS-POLICY.md` com classificação, stores, segregação, rotação, auditoria e resposta a incidente;
 - contrato explícito entre `secrets`, `vars` e credenciais efêmeras;
-- teste automatizado que rejeita arquivos secretos rastreados e valores preenchidos no `.env.example`;
-- manutenção do consumo de `VERCEL_TOKEN` por GitHub Environment, sem persistência no repositório;
-- modelo seguro de evidência administrativa definido em `docs/implementation/005-secrets-evidence-model.md`.
+- CI rejeitando arquivos secretos rastreados e valores preenchidos no `.env.example`;
+- `VERCEL_TOKEN` consumido somente a partir de GitHub Environments;
+- modelo seguro de evidência administrativa em `docs/implementation/005-secrets-evidence-model.md`;
+- credenciais Vercel dedicadas e escopadas por projeto para `staging` e `production`;
+- expiração finita para as credenciais dedicadas;
+- `production` com approval protegido, prevenção de autoaprovação e bypass administrativo removido conforme confirmação administrativa.
 
-## Inventário lógico atual
+## Evidência operacional final
 
-| Escopo | Nome | Classificação | Estado de consumo |
-|---|---|---|---|
-| staging | `VERCEL_TOKEN` | secret | provisionado no GitHub Environment; cutover operacional em validação |
-| staging | `VERCEL_ORG_ID` | public config/var | consumido |
-| staging | `VERCEL_STAGING_PROJECT_ID` | public config/var | aponta para projeto Vercel dedicado de staging |
-| production | `VERCEL_TOKEN` | secret | provisionado no GitHub Environment; cutover operacional em validação |
-| production | `VERCEL_ORG_ID` | public config/var | consumido |
-| production | `VERCEL_PRODUCTION_PROJECT_ID` | public config/var | aponta para projeto Vercel dedicado de production |
-| workflow job | `GITHUB_TOKEN` | ephemeral credential | emitido pela plataforma, permissions mínimas |
-| fase 006 | `DATABASE_URL` | secret | reservado; ainda não ativado |
+Revisão canônica validada: `988bb4b40f863361ba4a2bc8ffb3d26a1aa1d6c1`.
 
-## Evidências administrativas comprovadas
+A cadeia canônica pós-cutover comprovou:
 
-A auditoria administrativa da fase 005 comprovou, sem leitura ou persistência de valores secretos:
+- Foundation CI e Moventra CI aprovados;
+- build de artefato imutável aprovado;
+- deployment de staging pós-cutover em estado `READY`;
+- smoke/revision identity de staging aprovado;
+- rollback drill concluído com novas revisões de staging em estado `READY`;
+- Production Promotion protegida concluída;
+- deployments de production pós-cutover em estado `READY`;
+- health de staging retornando HTTP 200 e a revisão canônica;
+- health de production retornando HTTP 200 e a mesma revisão canônica;
+- nenhum valor secreto persistido em repositório, documentação, issues ou artifacts de governança.
 
-- GitHub Environments `staging` e `production` distintos;
-- `VERCEL_TOKEN` armazenado como Environment Secret em ambos;
-- metadata de atualização disponível administrativamente;
-- branch de deployment restrita a `main` nos dois environments;
-- `production` com `Required reviewers` e `Prevent self-review`;
-- projetos Vercel distintos para staging e production;
-- credencial Vercel dedicada para staging, com scope exclusivo do projeto de staging e expiração finita;
-- credencial Vercel dedicada para production, com scope exclusivo do projeto de production e expiração finita;
-- independência administrativa das credenciais do provider comprovada por nomes/scopes distintos;
-- confirmação administrativa de que os GitHub Environment Secrets foram atualizados para as credenciais dedicadas;
-- confirmação administrativa de remoção do bypass de protection rules em `production`.
+## Exceção de risco aceita — token legado Vercel
 
-Nenhum valor secreto integra esta documentação, issues, logs ou artifacts.
+O responsável decidiu manter ativo o token Vercel legado compartilhado, originalmente de escopo amplo e sem expiração, apesar da recomendação de revogação.
 
-## Limitação administrativa conhecida
+Tratamento de governança:
 
-A API do GitHub Actions Secrets não retorna valores secretos; endpoints de leitura retornam apenas metadata, como nome, `created_at` e `updated_at`. Portanto, comparar valores de `staging` e `production` não é um mecanismo de auditoria permitido nem tecnicamente necessário.
-
-A integração atual também não possui permissão administrativa suficiente para listar toda a metadata de Environment Secrets. Essa limitação é registrada e não deve ser contornada por exposição ou exfiltração do secret.
-
-A independência entre ambientes é comprovada por metadata/processo administrativo seguro, conforme `005-secrets-evidence-model.md`.
-
-## Cutover operacional em validação
-
-A etapa administrativa do cutover foi declarada concluída em 22/08/2026. A conclusão técnica da fase depende agora de evidência produzida pela própria cadeia canônica, sem screenshots:
-
-- [ ] novo `Moventra CI` concluído na `main` após esta revisão de governança;
-- [ ] `Moventra Release Gate` concluído com deployment de staging usando o Environment Secret atual;
-- [ ] smoke/revision identity de staging aprovado;
-- [ ] rollback drill concluído com o artefato imutável promovido;
-- [ ] `Moventra Production Promotion` concluído após approval protegido;
-- [ ] deployment de production `READY` e revision identity validada;
-- [ ] evidência final registrada sem material secreto.
-
-Os workflows canônicos são fail-closed: ausência ou invalidade de `VERCEL_TOKEN`, `VERCEL_ORG_ID` ou project ID encerra a execução com erro.
-
-## Exceção de risco registrada
-
-O responsável pelo projeto optou por manter as duas credenciais dedicadas atualmente provisionadas durante o cutover. A decisão é registrada como risco aceito sem persistir qualquer valor secreto. A política permanente continua exigindo menor privilégio, expiração finita, segregação por ambiente e rotação conforme política corporativa.
+- risco explicitamente aceito pelo responsável em 22/08/2026;
+- a permanência do token legado não altera as credenciais-alvo dos GitHub Environments;
+- `staging` e `production` foram validados operacionalmente com credenciais dedicadas por projeto;
+- o token legado não deve ser reintroduzido nos GitHub Environments atuais;
+- nenhuma cópia, valor, hash ou fragmento do token deve ser persistido em documentação, issues, logs ou artifacts;
+- a revogação futura permanece recomendada como hardening, mas não bloqueia a continuidade por decisão explícita de risco.
 
 ## Gate de conclusão
 
-Para marcar 005 como `CONCLUDED`, todos os itens abaixo devem ser verdadeiros:
-
-- [x] nenhum secret operacional em código/repositório;
+- [x] nenhum secret operacional versionado;
 - [x] dotenv real e credential files bloqueados por política/CI;
-- [x] secret store por environment definido;
+- [x] secret store segregado por environment;
 - [x] `secrets` separados de `vars`;
 - [x] logs/evidências sem valores secretos;
 - [x] política de rotação/revogação definida;
-- [x] modelo seguro de evidência administrativa definido sem comparação de valores secretos;
-- [x] credenciais independentemente provisionadas/rotacionadas por ambiente;
+- [x] modelo seguro de evidência administrativa;
+- [x] credenciais independentes por ambiente/projeto;
 - [x] controle administrativo e metadata de atualização/escopo comprovados;
-- [ ] cutover operacional validado pela cadeia canônica após atualização dos Environment Secrets.
+- [x] cutover operacional validado pela cadeia canônica;
+- [x] exceção do token legado formalmente registrada como risco aceito.
 
-Enquanto o cutover técnico não for comprovado, o estado correto permanece `005 = ACTIVE / CUTOVER VALIDATION` e `006 = NOT ACTIVE`.
+## Promoção oficial
 
-## Regra de segurança da evidência
+```text
+005 = CONCLUDED
+006 = ACTIVE
+```
 
-Nunca usar como evidência de segregação:
-
-- valor do secret;
-- hash calculado a partir do valor para comparação entre ambientes;
-- screenshot exibindo o valor;
-- exportação/cópia do secret para outro sistema.
-
-A evidência deve ser baseada em metadata, identidade não sensível da credencial, escopo, owner, timestamps, audit log, processo de rotação e execução técnica fail-closed.
-
-## Restrições
-
-Nenhuma migration ou alteração de banco faz parte da fase 005. `DATABASE_URL` permanece apenas como nome de contrato reservado para a fase 006.
+A próxima fase oficial é `006 — Banco Base`.
