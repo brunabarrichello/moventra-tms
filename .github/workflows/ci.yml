@@ -34,6 +34,7 @@ jobs:
             "README.md"
             "LICENSE"
             "package.json"
+            "eslint.config.js"
             "src/server.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
@@ -61,7 +62,7 @@ jobs:
     name: Lint
     needs: repository-contract
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -121,7 +122,7 @@ jobs:
           name: moventra-tms-${{ github.sha }}
           path: dist/artifacts/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
   evidence:
     name: CI evidence
@@ -169,4 +170,4 @@ jobs:
           name: ci-evidence-${{ github.sha }}
           path: evidence/ci-run.txt
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
