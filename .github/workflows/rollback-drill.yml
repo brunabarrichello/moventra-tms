@@ -39,6 +39,12 @@ jobs:
       RELEASE_GATE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.release_gate_run_id }}
       STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging.vercel.app' || inputs.staging_url }}
     steps:
+      - name: Checkout release revision utilities
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
+          persist-credentials: false
+
       - name: Validate trusted release gate run
         id: gate
         env:
@@ -63,13 +69,15 @@ jobs:
           printf 'release_gate_run_id=%s\n' "$RELEASE_GATE_RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Download trusted staging evidence
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          pattern: staging-deployment-*
-          path: staging-evidence
-          merge-multiple: true
-          run-id: ${{ steps.gate.outputs.release_gate_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/github-download-artifact.sh \
+            "${{ steps.gate.outputs.release_gate_run_id }}" \
+            prefix \
+            staging-deployment- \
+            staging-evidence
 
       - name: Resolve current and rollback artifacts
         id: source
@@ -148,20 +156,26 @@ jobs:
           persist-credentials: false
 
       - name: Download rollback prebuilt artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: ${{ steps.source.outputs.rollback_artifact_name }}
-          path: rollback-artifact
-          run-id: ${{ steps.source.outputs.rollback_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/github-download-artifact.sh \
+            "${{ steps.source.outputs.rollback_run_id }}" \
+            exact \
+            "${{ steps.source.outputs.rollback_artifact_name }}" \
+            rollback-artifact
 
       - name: Download current prebuilt artifact for restoration
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: ${{ steps.source.outputs.restore_artifact_name }}
-          path: restore-artifact
-          run-id: ${{ steps.source.outputs.restore_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/github-download-artifact.sh \
+            "${{ steps.source.outputs.restore_run_id }}" \
+            exact \
+            "${{ steps.source.outputs.restore_artifact_name }}" \
+            restore-artifact
 
       - name: Validate staging deployment configuration
         id: credentials
