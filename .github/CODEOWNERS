@@ -1,0 +1,7 @@
+# Initial ownership for the Moventra TMS foundation.
+# Replace/add teams as the engineering organization grows.
+* @brunabarrichello
+
+# Critical delivery and governance paths.
+/.github/ @brunabarrichello
+/docs/implementation/ @brunabarrichello
