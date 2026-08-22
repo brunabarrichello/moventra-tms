@@ -65,11 +65,14 @@ EOF
   # officially supported authentication mechanism for Vercel CLI commands.
   # Do not pass --token on `vercel curl`: Vercel CLI 59.3.0 forwards that
   # option to the underlying curl invocation, which rejects it. Use the native
-  # full deployment URL and preserve stderr for auditability.
+  # full deployment URL and preserve Vercel stderr for auditability. Suppress
+  # only npm install/deprecation noise emitted by npx and disable CLI telemetry.
   (
     cd "$workdir"
-    npx --yes "vercel@${vercel_cli_version}" \
-      curl "${base_url}/health" || true
+    NPM_CONFIG_LOGLEVEL=error \
+    VERCEL_TELEMETRY_DISABLED=1 \
+      npx --yes "vercel@${vercel_cli_version}" \
+        curl "${base_url}/health" || true
   )
   rm -rf "$workdir"
 }
