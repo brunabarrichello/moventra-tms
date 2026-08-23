@@ -2,6 +2,7 @@ import { queryDatabase } from '../../../infrastructure/database/postgres.js';
 import {
   assertTenantTransition,
   normalizeExpectedVersion,
+  normalizeTenantCode,
   normalizeTenantCreation,
   normalizeTenantProfileUpdate,
 } from './tenant-domain.js';
@@ -76,12 +77,7 @@ export class PostgresTenantRepository {
   }
 
   async findByCode(code) {
-    const normalizedCode = normalizeTenantCreation({
-      code,
-      displayName: 'xx',
-      defaultTimezone: 'UTC',
-      defaultCurrency: 'USD',
-    }).code;
+    const normalizedCode = normalizeTenantCode(code);
     const result = await this.query(
       `SELECT ${tenantColumns}
          FROM organization.tenants
