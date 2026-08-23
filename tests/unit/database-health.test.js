@@ -44,12 +44,12 @@ test('database health snapshot fails closed when readiness is not explicitly tru
 
 test('database health exposes only an allow-listed failure reason', () => {
   assert.deepEqual(
-    getDatabaseHealthSnapshot({ ok: false }, 'rev-3', 'configuration_invalid'),
+    getDatabaseHealthSnapshot({ ok: false }, 'rev-3', 'credentials_missing'),
     {
       status: 'unavailable',
       service: 'database',
       version: 'rev-3',
-      reason: 'configuration_invalid',
+      reason: 'credentials_missing',
     },
   );
 
@@ -62,7 +62,18 @@ test('database health exposes only an allow-listed failure reason', () => {
 test('database error classifier maps operational failures without leaking details', () => {
   assert.equal(classifyDatabaseHealthError({ code: 'MVT_DB_CONFIG_MISSING' }), 'configuration_missing');
   assert.equal(classifyDatabaseHealthError({ code: 'MVT_DB_CONFIG_INVALID' }), 'configuration_invalid');
+  assert.equal(classifyDatabaseHealthError({ code: 'MVT_DB_CREDENTIAL_MISSING' }), 'credentials_missing');
   assert.equal(classifyDatabaseHealthError({ code: '28P01' }), 'authentication_failed');
   assert.equal(classifyDatabaseHealthError({ code: 'ETIMEDOUT' }), 'connection_failed');
+  assert.equal(classifyDatabaseHealthError({ cause: { code: 'ENOTFOUND' } }), 'connection_failed');
+  assert.equal(classifyDatabaseHealthError({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' }), 'tls_failed');
+  assert.equal(
+    classifyDatabaseHealthError({ message: 'SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string' }),
+    'credentials_missing',
+  );
+  assert.equal(
+    classifyDatabaseHealthError({ message: 'SASL: Mechanism SCRAM-SHA-256-PLUS requires a certificate' }),
+    'tls_failed',
+  );
   assert.equal(classifyDatabaseHealthError({ code: 'unexpected-secret-code' }), 'unavailable');
 });
