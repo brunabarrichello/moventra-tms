@@ -1,4 +1,7 @@
-import { getDatabaseHealthSnapshot } from '../src/core/database-health.js';
+import {
+  classifyDatabaseHealthError,
+  getDatabaseHealthSnapshot,
+} from '../src/core/database-health.js';
 import { checkDatabaseReadiness } from '../src/infrastructure/database/postgres.js';
 
 export default async function handler(request, response) {
@@ -20,11 +23,14 @@ export default async function handler(request, response) {
     const snapshot = getDatabaseHealthSnapshot(readiness, version);
     response.status(snapshot.status === 'ready' ? 200 : 503).json(snapshot);
   } catch (error) {
+    const reason = classifyDatabaseHealthError(error);
+
     console.error('Database readiness probe failed', {
       name: error?.name,
       code: error?.code,
+      reason,
     });
 
-    response.status(503).json(getDatabaseHealthSnapshot({ ok: false }, version));
+    response.status(503).json(getDatabaseHealthSnapshot({ ok: false }, version, reason));
   }
 }

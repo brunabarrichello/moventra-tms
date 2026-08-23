@@ -110,20 +110,40 @@ function requireDatabaseUrl() {
   const value = process.env.DATABASE_URL?.trim();
 
   if (!value) {
-    throw new Error('DATABASE_URL is required for PostgreSQL runtime access');
+    throw databaseConfigurationError(
+      'MVT_DB_CONFIG_MISSING',
+      'DATABASE_URL is required for PostgreSQL runtime access',
+    );
   }
 
-  const parsed = new URL(value);
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw databaseConfigurationError('MVT_DB_CONFIG_INVALID', 'DATABASE_URL is not a valid URL');
+  }
 
   if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
-    throw new Error('DATABASE_URL must use postgres or postgresql protocol');
+    throw databaseConfigurationError(
+      'MVT_DB_CONFIG_INVALID',
+      'DATABASE_URL must use postgres or postgresql protocol',
+    );
   }
 
   if (!parsed.hostname || !parsed.pathname || parsed.pathname === '/') {
-    throw new Error('DATABASE_URL must include host and database name');
+    throw databaseConfigurationError(
+      'MVT_DB_CONFIG_INVALID',
+      'DATABASE_URL must include host and database name',
+    );
   }
 
   return value;
+}
+
+function databaseConfigurationError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
 }
 
 function integerSetting(name, fallback, minimum, maximum) {
