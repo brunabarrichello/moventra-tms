@@ -28,10 +28,46 @@ cat > "$workdir/.vercel/project.json" <<EOF
 EOF
 
 vercel_cli_version="${VERCEL_CLI_VERSION:-59.4.0}"
+export VERCEL_TOKEN
+
+cat > "$workdir/deploy-prebuilt.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${DATABASE_URL:?DATABASE_URL is required in the Vercel production environment}"
+: "${VERCEL_TOKEN:?VERCEL_TOKEN is required}"
+
+# DATABASE_URL is intentionally obtained at execution time from the linked
+# Vercel project and never written into the immutable application artifact.
+# Mask it in GitHub Actions before the CLI receives it as a runtime variable.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  printf '::add-mask::%s\n' "$DATABASE_URL"
+fi
+
+exec vercel deploy \
+  --prebuilt \
+  --prod \
+  --yes \
+  --token "$VERCEL_TOKEN" \
+  --env "DATABASE_URL=${DATABASE_URL}"
+EOF
+chmod 700 "$workdir/deploy-prebuilt.sh"
+
 cd "$workdir"
-# Keep Vercel command output authoritative while suppressing only npm/npx
-# installation deprecation noise, update-notifier output and CLI telemetry.
-deployment_output="$(NPM_CONFIG_LOGLEVEL=error NO_UPDATE_NOTIFIER=1 VERCEL_TELEMETRY_DISABLED=1 npx --yes "vercel@${vercel_cli_version}" deploy --prebuilt --prod --yes --token "$VERCEL_TOKEN" 2>&1)"
+# `vercel env run` reads the current Production environment from the linked
+# project without persisting it to a dotenv file. The child deployment then
+# explicitly receives DATABASE_URL as a runtime variable, which is required
+# for fresh prebuilt deployments after Project Settings/Environment changes.
+deployment_output="$(
+  NPM_CONFIG_LOGLEVEL=error \
+  NO_UPDATE_NOTIFIER=1 \
+  VERCEL_TELEMETRY_DISABLED=1 \
+  npx --yes "vercel@${vercel_cli_version}" env run \
+    --environment=production \
+    --token "$VERCEL_TOKEN" \
+    -- ./deploy-prebuilt.sh \
+    2>&1
+)"
 printf '%s\n' "$deployment_output" >&2
 
 # Vercel prints the immutable production deployment before any stable alias.
