@@ -1,94 +1,105 @@
 # Continuidade da Fundação — Linha Oficial de Implantação
 
-A fundação do Moventra TMS deve seguir esta sequência sem antecipar módulos de negócio:
+A fundação do Moventra TMS segue esta sequência sem antecipar módulos de negócio:
 
-**Governança → Arquitetura → Ambientes → CI/CD → Secrets → Banco base → Convenções → Tenant → Empresa → Filial → Usuários → Auth → RBAC → Isolamento → Auditoria**
+**Governança → Arquitetura → Ambientes → CI/CD → Secrets → Banco base → Convenções → Tenant → Empresa → Filial → Usuários → Memberships → Auth → RBAC → Escopo Organizacional → RLS/Defesa adicional → Auditoria**
 
 ## Semântica de estado
 
 - **DEFINED** — arquitetura, responsabilidade e critérios documentados;
-- **PREPARED** — artefato técnico existe, porém ainda não foi promovido/ativado;
+- **ACTIVE** — etapa oficialmente autorizada para execução;
+- **PREPARED** — artefato técnico existe, mas a etapa ainda não está concluída;
 - **IMPLEMENTED** — código ou infraestrutura existem fisicamente;
 - **EVIDENCED** — execução real foi observada e validada;
-- **CONCLUDED** — implementação, validação e evidência do gate foram formalmente aprovadas.
+- **CONCLUDED** — implementação, validação, evidência e governança do gate foram aprovadas.
 
 A existência de schema, migration, workflow ou documento não promove automaticamente uma etapa para `CONCLUDED`.
 
-## Estado auditado em 2026-08-22
+## Estado canônico em 23/08/2026
 
-| Etapa | Estado | Evidência / decisão atual |
+| Etapa | Estado oficial | Evidência / decisão vigente |
 |---|---|---|
-| 001 — Governança | IMPLEMENTED / EVIDENCED | identidade oficial, governança, CODEOWNERS, PRs e histórico versionados em `main` |
-| 002 — Arquitetura Base | IMPLEMENTED / EVIDENCED | ADR-0001 aceito; monólito modular é a arquitetura inicial oficial |
-| 003 — Ambientes | IMPLEMENTED PARCIAL / EVIDENCED | Neon possui `main`, `development` e `staging`; Vercel possui projetos físicos de staging e production; ambiente dedicado de aplicação para development ainda não está formalmente evidenciado |
-| 004 — CI/CD | IMPLEMENTED / EVIDENCED / REMEDIATED / REEXECUTION REQUIRED | CI, build-once, artifact imutável, staging, rollback/restore e deployment produtivo foram comprovados. O Production Promotion automático executou preflight + approval + exact artifact + deploy, mas falhou no smoke do alias protegido por defeito técnico posteriormente corrigido. Uma nova cadeia completa deve terminar `success` e produzir production evidence antes de `CONCLUDED`. |
-| 005 — Secrets Management | DEFINED / NOT ACTIVE | política versionada; a etapa só pode ser promovida após 004 = CONCLUDED |
-| 006 — Banco Base | PREPARED / NOT ACTIVE | Neon PostgreSQL 18.6 provisionado; `0001_foundation.sql` está no Git, porém a branch Neon `main` não contém os schemas/tabelas da fundação |
-| 007 — Convenções de Dados | DEFINED / PREPARED | baseline versionada; aplicação definitiva ao schema depende da 006 |
-| 008 — Tenant | PREPARED ONLY | estrutura existe apenas na migration 0001 ainda não aplicada; lifecycle requer revisão antes da 006 |
-| 009 — Empresa | PREPARED ONLY | estrutura existe apenas na migration 0001 ainda não aplicada |
-| 010 — Filial | PREPARED ONLY | estrutura existe apenas na migration 0001 ainda não aplicada |
-| 011 — Usuários | PREPARED ONLY | modelo de usuário/identidade existe apenas na migration 0001 ainda não aplicada; lifecycle requer revisão |
-| 012 — Memberships | PREPARED ONLY | schema preparado, não implementado no banco produtivo |
-| 013 — Auth | DEFINED / PENDING | provider não escolhido; identidade de negócio permanece desacoplada do fornecedor |
-| 014 — RBAC | PREPARED ONLY | tabelas preparadas na migration; autorização backend ainda não implementada |
-| 015 — Escopo Organizacional | DEFINED / PREPARED | FKs tenant-aware preparadas; enforcement no backend ainda pendente |
-| 016 — RLS / Defesa adicional | DEFINED / PENDING | ADR-0002 aceita; RLS não deve ser ativada antes do contrato de contexto e dos testes cross-tenant |
-| 017 — Auditoria Central | PREPARED ONLY | tabela append-only preparada; interceptação transversal, política de redaction e trilhas de aplicação ainda pendentes |
+| 001 — Governança | **CONCLUDED** | identidade oficial, governança, CODEOWNERS, histórico e processo de mudança versionados |
+| 002 — Arquitetura Base | **CONCLUDED** | ADR-0001 aceito; monólito modular permanece arquitetura inicial oficial |
+| 003 — Ambientes | **CONCLUDED** | Development segregado por branch/configuração e execução local/efêmera; Test no CI; staging e production em projetos Vercel separados; Neon segregado por branches |
+| 004 — CI/CD | **CONCLUDED** | build-once, artefato imutável, staging, rollback/restore, production protegida, revision identity e production evidence validados; run `32662438316` attempt 3 = success |
+| 005 — Secrets Management | **CONCLUDED** | stores segregados, credenciais por ambiente, política/CI e cutover operacional validados; risco do token legado permanece explicitamente aceito e não bloqueante |
+| 006 — Banco Base | **CONCLUDED** | PostgreSQL/Neon 18.6, baseline técnico 0001, migration framework, least privilege, runtime pool e readiness 200 em staging e production; `B006-02 = RESOLVED` |
+| 007 — Convenções de Dados | **ACTIVE / DEFINED** | `docs/data/DATA-CONVENTIONS.md` existe; fase autorizada a transformar convenções em contrato verificável antes de iniciar Tenant |
+| 008 — Tenant | **NOT ACTIVE / DEFINED** | nenhuma entidade criada no banco; execução depende da conclusão da 007 |
+| 009 — Empresa | **NOT ACTIVE / DEFINED** | nenhuma entidade criada; depende de Tenant |
+| 010 — Filial | **NOT ACTIVE / DEFINED** | nenhuma entidade criada; depende de Empresa |
+| 011 — Usuários | **NOT ACTIVE / DEFINED** | identidade de negócio ainda não implementada no banco |
+| 012 — Memberships | **NOT ACTIVE / DEFINED** | vínculo usuário ↔ tenant/empresa/filial ainda não implementado |
+| 013 — Auth | **NOT ACTIVE / DEFINED** | provider não deve contaminar a identidade de negócio; implementação posterior |
+| 014 — RBAC | **NOT ACTIVE / DEFINED** | autorização backend e modelo físico ainda não implementados |
+| 015 — Escopo Organizacional | **NOT ACTIVE / DEFINED** | enforcement tenant/company/branch será posterior a RBAC/memberships |
+| 016 — RLS / Defesa adicional | **NOT ACTIVE / DEFINED** | ADR-0002 vigente; RLS somente após contrato de contexto e testes cross-tenant |
+| 017 — Auditoria Central | **NOT ACTIVE / DEFINED** | trilha transversal ainda não implementada; não há tabela de auditoria antecipada no baseline 0001 |
 
-## Evidência do banco
+## Banco base — estado confirmado
 
-A verificação somente leitura da branch Neon `main` em 2026-08-22 confirmou:
+Verificação somente leitura de 23/08/2026 em Neon `main`:
 
 ```text
 PostgreSQL = 18.6
-organization schema = absent
-identity schema     = absent
-audit schema        = absent
-foundation tables   = 0
+TimeZone = GMT
+moventra_meta.schema_migrations = present
+moventra_meta.database_contract = present
+public base tables = 0
+migration 0001 records = 1
 ```
 
-Portanto, as etapas 008–017 não podem ser classificadas como implementadas apenas porque a migration 0001 contém suas estruturas.
+A branch `staging` apresenta o mesmo baseline técnico e zero tabelas de negócio em `public`.
 
-## Revisões obrigatórias antes da etapa 006
-
-Antes da promoção da migration 0001 devem ser resolvidos formalmente:
-
-1. lifecycle de tenant;
-2. lifecycle de usuário;
-3. identidade polimórfica de ator em auditoria;
-4. eventos de auditoria platform-scoped/pré-tenant;
-5. redaction/minimização de JSONB de auditoria;
-6. migration runner/processo de promoção e evidência.
+Portanto, as fases 008–017 permanecem não implementadas e não podem ser inferidas a partir da fase 006.
 
 ## Gate G1 — Foundation Ready
 
-`G1` permanece **NOT APPROVED**.
+`G1 = APPROVED` em 23/08/2026.
 
-Para aprovação ainda são necessários, no mínimo:
+### Evidências do gate
 
-- concluir formalmente 004 com nova Production Promotion `success`, approval history e production evidence artifact;
-- executar a etapa 005 — Secrets Management conforme governança oficial;
-- executar e validar a etapa 006 — Banco Base por processo de migration governado;
-- confirmar os demais requisitos da fundação antes da promoção do gate.
+- arquitetura base formalizada e vigente;
+- matriz de ambientes segregada e atualizada;
+- CI/CD com build-once, artifact imutável, staging, rollback/restore e promoção protegida;
+- Production Promotion run `32662438316`, attempt `3`, conclusion `success`;
+- production `/health = 200` na revisão `517f44e788d0f74488ba54a09b44f18284d2b117`;
+- production `/api/database-health = 200 / ready` na mesma revisão;
+- Secrets Management concluído e governado;
+- Banco Base concluído e reproduzível por migrations;
+- staging dedicado validado com `/health = 200` e `/api/database-health = 200 / ready`;
+- `B006-02 = RESOLVED`;
+- nenhuma entidade de fase posterior foi antecipada.
+
+G1 aprova a **fundação técnica**, não os controles de segurança de negócio das fases 008–017.
 
 ## Gate G2 — Security Ready
 
-`G2` permanece **NOT APPROVED** até autenticação, memberships, RBAC, isolamento tenant-aware, RLS/segunda camada onde aplicável, testes cross-tenant e auditoria transversal estarem implementados e testados.
+`G2 = NOT APPROVED`.
 
-## Próxima transição permitida
+G2 continua dependente, no mínimo, de:
+
+- Tenant/organização;
+- usuários e memberships;
+- autenticação;
+- RBAC;
+- enforcement de escopo organizacional;
+- defesa adicional/RLS quando aplicável;
+- testes cross-tenant;
+- auditoria transversal.
+
+## Próxima transição oficial
 
 ```text
-004 corrected main execution
-→ Moventra CI success
-→ staging success
-→ rollback/restore success
-→ protected production approval
-→ exact immutable artifact production deploy
-→ immutable + stable production smoke success
-→ production evidence artifact + approval-history.json
-→ 004 = CONCLUDED
-→ 005 = ACTIVE
+006 = CONCLUDED
+B006-02 = RESOLVED
+G1 = APPROVED
+007 = ACTIVE
 ```
 
-Nenhuma etapa posterior deve ser antecipada.
+A única etapa autorizada imediatamente após esta promoção é:
+
+**007 — Convenções de Dados**.
+
+Tenant (008) não deve ser ativado antes da conclusão e evidência da 007.

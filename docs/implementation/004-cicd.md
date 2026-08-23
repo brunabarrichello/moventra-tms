@@ -2,99 +2,127 @@
 
 ## Status
 
-- Official repository: `brunabarrichello/moventra-tms`
-- Specification: defined
-- Physical implementation: substantially implemented
-- CI validation: evidenced
-- Build-once / prebuilt artifact architecture: implemented and CI-validated
-- Prebuilt staging / rollback execution: evidenced
-- Production deploy of revision `4575ffefce63b2bc2b75e6e9985a2b30c40b383b`: physically evidenced
-- Protected production promotion: remediation validated; successful full re-execution still required
-- Gate: IN PROGRESS / REMEDIATED / REEXECUTION REQUIRED
-- Promotion to `005 — Secrets Management`: NOT AUTHORIZED
+`CONCLUDED`
 
-> Authoritative current-state records:
-> - `docs/implementation/004-current-state-audit-2026-08-22.md`
-> - `docs/implementation/004-production-promotion-remediation-2026-08-22.md`
->
-> Historical evidence and design detail remain available in Git history and the phase issues/PRs. The current decision is conservative: the original protected production run physically deployed the exact artifact but finished with `failure` during the protected-alias smoke and therefore did not upload the final production evidence artifact.
+A fase 004 está formalmente concluída. A cadeia canônica de entrega build-once, artefato imutável, staging, rollback/restore, promoção protegida e produção foi executada com sucesso e possui evidência associada à revisão promovida.
 
-## Objective
+## Objetivo
 
-Establish an automated, reproducible and auditable delivery pipeline for Moventra TMS with evidence tied to repository, commit, actor, immutable artifact and deployment revision.
+Estabelecer um pipeline automatizado, reproduzível, auditável e fail-closed para o Moventra TMS, preservando a identidade do mesmo artefato entre validação e produção.
 
-The official delivery invariant is:
+## Invariante oficial de entrega
 
 ```text
-build once
--> verify once
--> immutable prebuilt artifact
--> deploy the exact artifact to staging
--> verify exact revision identity
--> rollback/restore drill
--> protected production approval
--> deploy the same artifact to production
--> verify immutable deployment and stable production revision identity
--> persist approval history + production evidence
+source revision
+→ lint / tests / security / build
+→ immutable prebuilt artifact
+→ staging
+→ revision-aware smoke
+→ rollback / restore drill
+→ protected production preflight
+→ human environment approval
+→ same immutable artifact
+→ production
+→ revision identity
+→ database readiness
+→ production evidence
 ```
 
-No environment is allowed to rebuild application source during promotion.
+Nenhuma promoção oficial deve reconstruir o source entre staging e production.
 
-## Current production-remediation finding
+## Evidência final canônica
 
-The automatic Production Promotion run `32581944193` proved all of the following before failing:
+Revisão promovida:
 
 ```text
-Production fail-closed preflight      success
-Protected environment approval       success
-Exact main revision checkout         success
-Exact rollback-proven artifact       success
-Artifact re-verification             success
-Prebuilt production deploy           success
-Immutable source SHA                 4575ffefce63b2bc2b75e6e9985a2b30c40b383b
-Internal artifact SHA-256            65d2edc3c73bcd49d4bff7a4833bdf85958eaaea8e94f4fa481bc943a7e2d3a8
-Vercel deployment                    dpl_HCh9jAeUNvD3FeSkeLB8TP48wkVv
-Public production smoke              success
-Protected secondary-alias smoke      failure
-Production evidence upload           skipped
-Run conclusion                       failure
+517f44e788d0f74488ba54a09b44f18284d2b117
 ```
 
-The smoke failure was not an application revision failure. The protected alias redirected anonymous traffic to Vercel SSO; the old smoke followed that redirect and passed the large response through an environment variable to Node, causing `Argument list too long`.
+GitHub Actions:
 
-The remediation now:
+- workflow: `Moventra Production Promotion`;
+- run: `32662438316`;
+- attempt final: `3`;
+- conclusão: `success`;
+- `Production fail-closed preflight`: `success`;
+- `Protected production deployment`: `success`;
+- checkout da revisão aprovada: `success`;
+- captura da aprovação do environment: `success`;
+- download e reverificação do artefato imutável: `success`;
+- convergência do projeto Vercel production: `success`;
+- deploy do mesmo artefato prebuilt: `success`;
+- verificação de revision identity: `success`;
+- `Verify production database readiness`: `success`;
+- registro e upload da evidência de produção: `success`.
 
-- validates response JSON via stdin;
-- does not follow anonymous authentication redirects;
-- falls through to authenticated Vercel smoke in `auto` mode;
-- preserves exact product/service/SHA checks;
-- preserves the immutable Vercel deployment URL rather than replacing it with a mutable alias;
-- includes regression tests for SSO redirects, large bodies and URL parsing.
-
-## Gate rule
-
-The earlier production deploy is valid physical evidence but is **not sufficient to conclude 004**, because the workflow itself ended in `failure` and the final `production-deployment-<sha>` evidence artifact was not emitted.
-
-A new canonical `main` execution must complete:
+Artifact de evidência emitido:
 
 ```text
-Moventra CI
--> staging promotion
--> rollback/restore
--> protected production preflight
--> human environment approval
--> exact same artifact deploy
--> immutable deployment smoke
--> stable production smoke
--> production evidence artifact
--> approval-history.json
+production-deployment-517f44e788d0f74488ba54a09b44f18284d2b117
+sha256:a089d95d035830c997a0357139ce928ad4430db3f895f4770b00711b21bc6110
 ```
 
-Only then:
+## Evidência de runtime production
+
+Projeto Vercel canônico:
+
+```text
+moventra-tms
+prj_5qFenjyeGE1joaGomaNrUIRGSBQs
+```
+
+Deployment posterior à promoção protegida:
+
+```text
+dpl_BYNAb5FiqBeJkWeHATKZXCmfa7m4
+state=READY
+target=production
+```
+
+Alias estável validado:
+
+```text
+/health
+HTTP 200
+status=ok
+version=517f44e788d0f74488ba54a09b44f18284d2b117
+
+/api/database-health
+HTTP 200
+status=ready
+version=517f44e788d0f74488ba54a09b44f18284d2b117
+```
+
+## Histórico de remediação
+
+Execuções anteriores que falharam durante smoke, autorização Vercel ou readiness foram tratadas como evidência negativa válida e permaneceram fail-closed. As correções não relaxaram os gates: preservaram aprovação protegida, artefato imutável, identidade de revisão, Node 22.x e readiness PostgreSQL antes do encerramento da promoção.
+
+Os registros históricos permanecem em:
+
+- `docs/implementation/004-current-state-audit-2026-08-22.md`;
+- `docs/implementation/004-production-promotion-remediation-2026-08-22.md`;
+- `docs/implementation/004-rollback-drill.md`.
+
+## Gate de conclusão
+
+- [x] lint e testes automatizados;
+- [x] análise de segurança básica;
+- [x] build reproduzível;
+- [x] artefato prebuilt imutável;
+- [x] staging revision-aware;
+- [x] rollback/restore comprovado;
+- [x] production fail-closed preflight;
+- [x] approval do environment protegido;
+- [x] deploy do exato artefato validado;
+- [x] smoke e revision identity em production;
+- [x] database readiness em production;
+- [x] production evidence artifact emitido.
+
+## Estado oficial
 
 ```text
 004 = CONCLUDED
-005 = ACTIVE
+005 = CONCLUDED
 ```
 
-`G1 — Foundation Ready` remains dependent on later foundation phases, including Secrets Management and Banco Base.
+A 004 não possui blocker aberto.
