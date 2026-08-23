@@ -28,50 +28,11 @@ cat > "$workdir/.vercel/project.json" <<EOF
 EOF
 
 vercel_cli_version="${VERCEL_CLI_VERSION:-59.4.0}"
-export VERCEL_TOKEN
-export MOVENTRA_VERCEL_CLI_VERSION="$vercel_cli_version"
-
-cat > "$workdir/deploy-prebuilt.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-: "${DATABASE_URL:?DATABASE_URL is required in the Vercel production environment}"
-: "${VERCEL_TOKEN:?VERCEL_TOKEN is required}"
-: "${MOVENTRA_VERCEL_CLI_VERSION:?MOVENTRA_VERCEL_CLI_VERSION is required}"
-
-# DATABASE_URL is intentionally obtained at execution time from the linked
-# Vercel project and never written into the immutable application artifact.
-# Mask it in GitHub Actions before the CLI receives it as a runtime variable.
-if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-  printf '::add-mask::%s\n' "$DATABASE_URL"
-fi
-
-# Invoke the same pinned CLI explicitly. Do not rely on the transient PATH
-# created by the outer `npx vercel env run` process being preserved for the
-# nested command.
-exec npx --yes "vercel@${MOVENTRA_VERCEL_CLI_VERSION}" deploy \
-  --prebuilt \
-  --prod \
-  --yes \
-  --token "$VERCEL_TOKEN" \
-  --env "DATABASE_URL=${DATABASE_URL}"
-EOF
-chmod 700 "$workdir/deploy-prebuilt.sh"
-
 cd "$workdir"
-# `vercel env run` reads the current Production environment from the linked
-# project without persisting it to a dotenv file. Authentication uses the
-# exported VERCEL_TOKEN supported by the Vercel CLI. The child deployment then
-# explicitly receives DATABASE_URL as a runtime variable.
-deployment_output="$(
-  NPM_CONFIG_LOGLEVEL=error \
-  NO_UPDATE_NOTIFIER=1 \
-  VERCEL_TELEMETRY_DISABLED=1 \
-  npx --yes "vercel@${vercel_cli_version}" env run \
-    --environment=production \
-    -- ./deploy-prebuilt.sh \
-    2>&1
-)"
+# A fresh prebuilt deployment is created from the immutable artifact. Runtime
+# secrets remain owned by Vercel Project Settings and are never copied through
+# GitHub Actions, command arguments or generated dotenv files.
+deployment_output="$(NPM_CONFIG_LOGLEVEL=error NO_UPDATE_NOTIFIER=1 VERCEL_TELEMETRY_DISABLED=1 npx --yes "vercel@${vercel_cli_version}" deploy --prebuilt --prod --yes --token "$VERCEL_TOKEN" 2>&1)"
 printf '%s\n' "$deployment_output" >&2
 
 # Vercel prints the immutable production deployment before any stable alias.
