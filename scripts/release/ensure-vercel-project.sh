@@ -11,10 +11,47 @@ auth="Authorization: Bearer ${VERCEL_TOKEN}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-project_url="${api}/v9/projects/${VERCEL_PROJECT_NAME}?teamId=${VERCEL_ORG_ID}"
-status="$(curl --silent --show-error --output "$workdir/project.json" --write-out '%{http_code}' \
-  --header "$auth" \
-  "$project_url")"
+request_project() {
+  local url="$1"
+  local output="$2"
+  curl --silent --show-error \
+    --output "$output" \
+    --write-out '%{http_code}' \
+    --header "$auth" \
+    "$url"
+}
+
+explicit_project_url="${api}/v9/projects/${VERCEL_PROJECT_NAME}?teamId=${VERCEL_ORG_ID}"
+inferred_project_url="${api}/v9/projects/${VERCEL_PROJECT_NAME}"
+
+status="$(request_project "$explicit_project_url" "$workdir/project.json")"
+scope_mode="explicit"
+
+# Vercel scoped tokens can infer team/project context and may reject an explicit
+# teamId. On authorization/not-found responses, retry once without teamId. This
+# does not weaken authorization; it only lets Vercel evaluate the token's own
+# scope. Never print the response body because provider responses may contain
+# account metadata that is unnecessary for CI logs.
+if [[ "$status" == "403" || "$status" == "404" ]]; then
+  inferred_status="$(request_project "$inferred_project_url" "$workdir/project-inferred.json")"
+  if [[ "$inferred_status" == "200" ]]; then
+    mv "$workdir/project-inferred.json" "$workdir/project.json"
+    status="200"
+    scope_mode="inferred"
+  elif [[ "$status" == "403" ]]; then
+    if [[ "$inferred_status" == "401" ]]; then
+      echo "::error::Vercel token is invalid or expired (HTTP 401 while resolving ${VERCEL_PROJECT_NAME})" >&2
+    else
+      echo "::error::Vercel token does not grant access to project ${VERCEL_PROJECT_NAME}; explicit team scope returned HTTP 403 and token-inferred scope returned HTTP ${inferred_status}" >&2
+    fi
+    exit 1
+  fi
+fi
+
+if [[ "$status" == "401" ]]; then
+  echo "::error::Vercel token is invalid or expired (HTTP 401 while resolving ${VERCEL_PROJECT_NAME})" >&2
+  exit 1
+fi
 
 if [[ "$status" == "404" ]]; then
   node --input-type=module - "$VERCEL_PROJECT_NAME" > "$workdir/create-project.json" <<'NODE'
@@ -22,13 +59,20 @@ const [name] = process.argv.slice(2);
 process.stdout.write(`${JSON.stringify({ name })}\n`);
 NODE
 
-  curl --fail --silent --show-error \
+  create_status="$(curl --silent --show-error \
+    --output "$workdir/project.json" \
+    --write-out '%{http_code}' \
     --request POST \
     --url "${api}/v11/projects?teamId=${VERCEL_ORG_ID}" \
     --header "$auth" \
     --header 'Content-Type: application/json' \
-    --data-binary @"$workdir/create-project.json" \
-    > "$workdir/project.json"
+    --data-binary @"$workdir/create-project.json")"
+
+  if [[ "$create_status" != "200" && "$create_status" != "201" ]]; then
+    echo "::error::Unable to create Vercel project ${VERCEL_PROJECT_NAME} in configured team (HTTP ${create_status})" >&2
+    exit 1
+  fi
+  scope_mode="explicit"
 elif [[ "$status" != "200" ]]; then
   echo "::error::Unable to resolve Vercel project ${VERCEL_PROJECT_NAME} (HTTP ${status})" >&2
   exit 1
@@ -54,13 +98,25 @@ process.stdout.write(`${JSON.stringify({
 })}\n`);
 NODE
 
-curl --fail --silent --show-error \
+if [[ "$scope_mode" == "inferred" ]]; then
+  patch_url="${api}/v9/projects/${project_id}"
+else
+  patch_url="${api}/v9/projects/${project_id}?teamId=${VERCEL_ORG_ID}"
+fi
+
+patch_status="$(curl --silent --show-error \
+  --output "$workdir/project-updated.json" \
+  --write-out '%{http_code}' \
   --request PATCH \
-  --url "${api}/v9/projects/${project_id}?teamId=${VERCEL_ORG_ID}" \
+  --url "$patch_url" \
   --header "$auth" \
   --header 'Content-Type: application/json' \
-  --data-binary @"$workdir/project-policy.json" \
-  > "$workdir/project-updated.json"
+  --data-binary @"$workdir/project-policy.json")"
+
+if [[ "$patch_status" != "200" ]]; then
+  echo "::error::Unable to converge Vercel project policy for ${VERCEL_PROJECT_NAME} (HTTP ${patch_status}, auth_context=${scope_mode})" >&2
+  exit 1
+fi
 
 node --input-type=module - "$workdir/project-updated.json" "$VERCEL_PROJECT_NAME" "$VERCEL_NODE_VERSION" <<'NODE'
 import fs from 'node:fs';
@@ -81,3 +137,4 @@ NODE
 printf 'project_id=%s\n' "$project_id"
 printf 'project_name=%s\n' "$VERCEL_PROJECT_NAME"
 printf 'node_version=%s\n' "$VERCEL_NODE_VERSION"
+printf 'auth_context=%s\n' "$scope_mode"
