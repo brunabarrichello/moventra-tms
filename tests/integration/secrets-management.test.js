@@ -110,11 +110,17 @@ test('Vercel staging provisioning converges policy and synchronizes database cre
   assert.match(ensureProject, /nodeVersion/);
   assert.match(ensureProject, /previewDeploymentsDisabled/);
   assert.match(ensureProject, /resourceConfig:\s*\{\s*fluid:\s*true/);
+  assert.match(ensureProject, /inferred_project_url/);
+  assert.match(ensureProject, /scope_mode="inferred"/);
+  assert.match(ensureProject, /token does not grant access to project/);
+  assert.doesNotMatch(ensureProject, /cat\s+[^\n]*project.*\.json/);
 
   assert.match(upsertEnv, /type:\s*'sensitive'/);
   assert.match(upsertEnv, /upsert=true/);
   assert.match(upsertEnv, /VERCEL_ENV_VALUE/);
   assert.match(upsertEnv, /Never print the API response/);
+  assert.match(upsertEnv, /inferred_url/);
+  assert.match(upsertEnv, /auth_context="inferred"/);
   assert.doesNotMatch(upsertEnv, /printf[^\n]*VERCEL_ENV_VALUE/);
   assert.doesNotMatch(upsertEnv, /echo[^\n]*VERCEL_ENV_VALUE/);
 
