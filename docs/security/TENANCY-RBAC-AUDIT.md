@@ -1,89 +1,164 @@
 # Fundação de Segurança — Tenant, Escopo, RBAC e Auditoria
 
-## Hierarquia organizacional
-`Tenant → Empresa → Filial`
+## Status do documento
 
-O tenant é a fronteira primária de isolamento. Empresas e filiais são escopos organizacionais internos do tenant, não substitutos do tenant.
+`TARGET DESIGN / NOT IMPLEMENTED`
 
-A migration `db/migrations/0001_foundation.sql` estabelece a primeira defesa estrutural com FKs compostas para impedir combinações incoerentes entre tenant, empresa e filial.
+Este documento descreve o modelo de segurança organizacional planejado para as fases 008–017. Ele **não representa schema atualmente existente** no banco.
 
-## Entidades estruturais iniciais
-- `organization.tenants`;
-- `organization.companies`;
-- `organization.branches`;
-- `identity.users`;
-- `identity.user_identities`;
-- `identity.memberships`;
-- `identity.roles`;
-- `identity.permissions`;
-- `identity.role_permissions`;
-- `identity.membership_roles`;
-- `audit.audit_logs`.
+Estado canônico em 23/08/2026:
 
-## Usuário e identidade
-`identity.users` representa o usuário de negócio do Moventra e não deve ser confundido com a conta técnica de um provider de autenticação.
+```text
+G1 = APPROVED
+007 = ACTIVE
+008–017 = NOT ACTIVE / NOT IMPLEMENTED
+G2 = NOT APPROVED
+```
 
-`identity.user_identities` liga o usuário a identidades externas por `provider + provider_subject`. Isso permite trocar ou combinar provedores sem alterar o identificador de negócio do usuário.
+## Hierarquia organizacional alvo
 
-## Membership
-Usuário e tenant são relacionados por membership explícito. Uma mesma identidade pode, quando autorizada, participar de diferentes tenants sem compartilhar dados entre eles.
+```text
+Tenant → Empresa → Filial
+```
 
-O membership pode possuir escopo:
-- no tenant inteiro;
-- em uma empresa;
-- em uma filial.
+O tenant será a fronteira primária de isolamento. Empresas e filiais serão escopos organizacionais internos do tenant, não substitutos do tenant.
 
-Uma filial exige empresa correspondente, e as FKs compostas preservam o mesmo tenant.
+## Estado físico atual do banco
 
-## Autorização
-A autorização deve combinar:
+A migration `db/migrations/0001_foundation.sql` é deliberadamente não-domínio e contém somente metadados técnicos da fundação em `moventra_meta`.
+
+No encerramento da fase 006:
+
+```text
+organization schema = absent
+identity schema = absent
+audit schema = absent
+public business tables = 0
+```
+
+Portanto, os nomes de entidades abaixo são **modelo futuro**, não tabelas implementadas.
+
+## Entidades estruturais planejadas
+
+Quando suas fases forem ativadas, a modelagem deverá contemplar, sem antecipação indevida:
+
+- Tenant;
+- Company/Empresa;
+- Branch/Filial;
+- User;
+- identidades externas do usuário quando necessárias;
+- Membership;
+- Role;
+- Permission;
+- relação Role ↔ Permission;
+- atribuição de Role ao membership/escopo;
+- Audit Log transversal.
+
+Os nomes físicos, schemas, constraints e detalhes finais serão definidos pelas migrations de cada fase, sob as convenções oficiais vigentes.
+
+## Usuário e identidade — princípio alvo
+
+A identidade de negócio do Moventra deve permanecer desacoplada da conta técnica de um provider de autenticação.
+
+Quando implementado, o vínculo externo deve permitir mapear `provider + provider_subject` para a identidade de negócio sem tornar o provider a PK canônica do domínio.
+
+## Membership — princípio alvo
+
+Usuário e tenant devem ser relacionados por membership explícito.
+
+O membership poderá possuir escopo no tenant, empresa ou filial conforme as regras aprovadas. Relações organizacionais deverão preservar coerência tenant-aware por constraints/FKs e autorização backend.
+
+## Autorização — princípio alvo
+
+A autorização deverá combinar:
+
 1. identidade autenticada;
 2. tenant ativo;
 3. membership válida;
-4. permissões do papel;
+4. roles/permissões;
 5. escopo organizacional;
 6. regras específicas do recurso/domínio.
 
-Nenhuma autorização crítica deve depender somente do frontend.
+Nenhuma autorização crítica dependerá somente do frontend.
 
-## RBAC
-O RBAC inicial utiliza:
-- `identity.permissions` — catálogo global de permissões atômicas;
-- `identity.roles` — papéis configuráveis por tenant;
-- `identity.role_permissions` — permissões atribuídas aos papéis;
-- `identity.membership_roles` — papéis atribuídos ao membership organizacional.
+## RBAC — princípio alvo
 
-Permissions devem representar ações de negócio, por exemplo `operations.trip.read`, `operations.trip.update` ou `finance.payment.approve`.
+Permissões devem representar ações de negócio atômicas, por exemplo:
 
-## Isolamento em profundidade
-A estratégia oficial é defense-in-depth:
+```text
+operations.trip.read
+operations.trip.update
+finance.payment.approve
+```
+
+Roles deverão ser atribuídas dentro de escopo organizacional explícito e não poderão conceder acesso cross-tenant por acidente.
+
+## Isolamento em profundidade — estratégia aprovada
+
+A estratégia definida na ADR-0002 é:
+
 1. contexto de tenant obrigatório no backend;
-2. constraints/FKs tenant-aware no banco;
+2. constraints/FKs tenant-aware;
 3. RBAC e escopo organizacional;
-4. RLS onde aplicável;
+4. RLS onde aplicável como segunda camada;
 5. testes cross-tenant automatizados;
-6. auditoria das decisões sensíveis e tentativas negadas.
+6. auditoria de decisões sensíveis e tentativas negadas.
 
-A ativação de RLS está deliberadamente separada da migration 0001 e depende da definição da role de runtime, propagação transacional de `tenant_id` e estratégia de bypass administrativo auditado. Ver `docs/architecture/ADR-0002-tenant-isolation.md`.
+RLS não será ativada antes da existência do modelo tenant-aware, contrato de contexto transacional e testes correspondentes.
 
-## Auditoria
-`audit.audit_logs` registra a trilha transversal inicial com ator, tenant, empresa/filial quando aplicável, ação, entidade, before/after, request/correlation/transaction IDs, IP, user agent, motivo, resultado e timestamp.
+## Auditoria — princípio alvo
 
-A migration 0001 define a tabela como append-only no banco, bloqueando UPDATE e DELETE por trigger.
+A futura auditoria transversal deverá registrar, quando aplicável:
 
-## Separação de trilhas
-- Audit Trail: mudanças de negócio;
-- Security Audit: autenticação, privilégios, bloqueios e acessos suspeitos;
-- Operational Event Log: eventos operacionais de carga/viagem/tracking;
-- Financial/Fiscal Ledger: eventos imutáveis ou reversíveis por lançamento compensatório.
+- ator;
+- tenant;
+- empresa/filial;
+- ação;
+- entidade;
+- before/after com redaction;
+- request/correlation/transaction IDs;
+- origem;
+- IP/user agent quando pertinente;
+- motivo;
+- resultado;
+- timestamp.
 
-Financeiro e Fiscal futuramente terão ledgers/eventos específicos e não devem depender apenas de `audit_logs`.
+A implementação deverá diferenciar:
+
+- Audit Trail;
+- Security Audit;
+- Operational Event Log;
+- Financial/Fiscal Ledger.
+
+Financeiro e Fiscal não devem depender de uma tabela de auditoria genérica para representar ledger.
+
+## Sequência oficial relacionada
+
+```text
+007 — Convenções de Dados = ACTIVE
+008 — Tenant
+009 — Empresa
+010 — Filial
+011 — Usuários
+012 — Memberships
+013 — Auth
+014 — RBAC
+015 — Escopo Organizacional
+016 — RLS / Defesa adicional
+017 — Auditoria Central
+```
+
+Nenhuma fase posterior deve ser marcada como implementada apenas porque este target design existe.
 
 ## Gate G2
-G2 — Security Ready continua pendente até existirem:
-- autenticação implementada;
+
+`G2 — Security Ready` permanece pendente até existirem e forem testados:
+
+- autenticação;
+- memberships;
 - RBAC aplicado no backend;
-- RLS/segunda camada de isolamento validada onde aplicável;
+- isolamento tenant-aware;
+- RLS/segunda camada onde aplicável;
 - testes cross-tenant;
-- auditoria transversal da aplicação;
+- auditoria transversal;
 - testes de autorização e auditoria.
