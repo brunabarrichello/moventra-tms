@@ -19,6 +19,7 @@ export function getDatabasePool() {
 
   pool = new Pool({
     connectionString,
+    enableChannelBinding: true,
     max: integerSetting('DB_POOL_MAX', DEFAULT_POOL_MAX, 1, 50),
     idleTimeoutMillis: integerSetting(
       'DB_POOL_IDLE_TIMEOUT_MS',
