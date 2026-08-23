@@ -21,7 +21,7 @@ O Moventra TMS é uma plataforma SaaS empresarial multi-tenant, multiempresa e m
 
 A arquitetura inicial adota **monólito modular**, organizado por domínios e preparado para extração de serviços somente quando houver necessidade operacional e métricas reais. A decisão está registrada em `docs/architecture/ADR-0001-modular-monolith.md`.
 
-## Estado oficial da fundação
+## Estado oficial
 
 Em 23/08/2026:
 
@@ -34,10 +34,12 @@ Em 23/08/2026:
 006 — Banco Base = CONCLUDED
 G1 — Foundation Ready = APPROVED
 007 — Convenções de Dados = CONCLUDED
-008 — Tenant = ACTIVE
+008 — Tenant = ACTIVE / IMPLEMENTED
 009 — Empresa = NOT ACTIVE
 G2 — Security Ready = NOT APPROVED
 ```
+
+`008 — Tenant` está implementada e parcialmente evidenciada, mas ainda não está `CONCLUDED`: falta a promoção protegida da aplicação em Production para a revisão mergeada e a consolidação final da governança.
 
 A linha canônica de continuidade está em:
 
@@ -45,23 +47,99 @@ A linha canônica de continuidade está em:
 docs/foundation/IMPLEMENTATION-ORDER.md
 ```
 
-## Banco base
+## Banco e migrations
 
 Provider oficial: Neon Postgres 18.6.
 
-- Migration: `db/migrations/0001_foundation.sql`;
-- Validação: `db/validation/0001_foundation_validation.sql`;
-- Runner: `node scripts/db/migrate.mjs`;
-- histórico/checksum: `moventra_meta.schema_migrations`;
-- contrato técnico: `moventra_meta.database_contract`.
+Foundation:
 
-A **migration 0001 é deliberadamente não-domínio**. Ela não cria Tenant, Empresa, Filial, Usuários, Memberships, RBAC ou Auditoria.
+```text
+db/migrations/0001_foundation.sql
+db/validation/0001_foundation_validation.sql
+```
 
-A fase 008 está autorizada, mas isso **não** significa que Tenant já exista fisicamente no banco. Até a migration da 008 ser implementada e validada, Neon `main` e `staging` continuam apenas com o baseline técnico 0001.
+Tenant:
+
+```text
+db/migrations/0002_tenant.sql
+db/validation/0002_tenant_validation.sql
+```
+
+Runner:
+
+```text
+node scripts/db/migrate.mjs
+```
+
+Histórico/checksum:
+
+```text
+moventra_meta.schema_migrations
+```
+
+A migration 0001 permanece deliberadamente não-domínio.
+
+A migration 0002 introduz somente:
+
+```text
+organization.tenants
+```
+
+A raiz Tenant não contém `tenant_id` apontando para si própria. Empresa, Filial, Usuários, Memberships, Auth, RBAC, RLS e Auditoria continuam pertencendo às fases seguintes.
+
+A `0002_tenant.sql` foi aplicada e validada em Neon `staging` e `main` com checksum:
+
+```text
+2ceaf3d10ea4bac0c0d1d39b0638054a9409ce879156f59ef6758aef549ce875
+```
+
+## Fase 008 — Tenant
+
+Implementação:
+
+```text
+src/modules/organization/tenant/tenant-domain.js
+src/modules/organization/tenant/tenant-repository.js
+```
+
+Lifecycle inicial:
+
+```text
+PROVISIONING
+ACTIVE
+SUSPENDED
+CLOSING
+CLOSED
+```
+
+A implementação usa transições explícitas e optimistic locking por `version`.
+
+PR técnica:
+
+```text
+#54 — feat(tenant): implement phase 008 aggregate root
+merge commit = ca0259da26a9d57513d3aecd1c9f972413376b58
+```
+
+Quality gates da revisão técnica:
+
+```text
+Foundation CI run 32673556166 = success
+Moventra CI run 32673556165 = success
+```
+
+Staging Vercel já serve a revisão mergeada:
+
+```text
+/health = HTTP 200
+version = ca0259da26a9d57513d3aecd1c9f972413376b58
+```
+
+A aplicação em Production ainda deve passar pelo gate protegido antes da promoção formal da fase 008.
 
 ## Runtime e entrega
 
-A aplicação foundation atual utiliza Node `22.x`, `pg`/node-postgres e Vercel Build Output API v3.
+A aplicação utiliza Node `22.x`, `pg`/node-postgres e Vercel Build Output API v3.
 
 A cadeia oficial preserva o mesmo artefato entre staging e production:
 
@@ -77,13 +155,7 @@ CI
 → production evidence
 ```
 
-A produção da fundação foi validada na revisão:
-
-```text
-517f44e788d0f74488ba54a09b44f18284d2b117
-```
-
-com `/health = HTTP 200` e `/api/database-health = HTTP 200 / status=ready`.
+Não é permitido substituir o gate protegido por deploy manual apenas para acelerar promoção de fase.
 
 ## Convenções de dados
 
@@ -95,20 +167,25 @@ Fontes:
 - `docs/implementation/007-convencoes-de-dados.md` — evidência e governança da fase;
 - `tests/architecture/data-conventions.test.js` — guardrails automatizados.
 
-Evidência de implementação da 007:
+## Próxima transição
+
+Estado atual:
 
 ```text
-PR #51
-merge commit = 46e08ce5cefe2c5d3df9eb89bcaee096dc9f9fa5
-Foundation CI run = 32672159870 / success
-Moventra CI run = 32672159907 / success
+008 = ACTIVE / IMPLEMENTED
+009 = NOT ACTIVE
 ```
 
-## Fase ativa — 008 Tenant
+Próximo gate:
 
-A próxima unidade oficial é `008 — Tenant`.
-
-A 008 deve materializar somente o agregado raiz SaaS e seus invariantes, obedecendo `DATA-CONVENTIONS.md`, ADR-0002 e a linha oficial de implantação. Empresa (009), Filial (010), Usuários (011), Memberships (012), Auth (013), RBAC (014), Escopo Organizacional (015), RLS (016) e Auditoria (017) não devem ser antecipados.
+```text
+protected Production promotion
+→ revision identity
+→ health/readiness
+→ production evidence
+→ 008 = CONCLUDED
+→ 009 — Empresa = ACTIVE
+```
 
 ## Integrações de engenharia
 

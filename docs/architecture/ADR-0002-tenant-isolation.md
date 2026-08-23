@@ -4,7 +4,11 @@
 
 Aceito em 2026-08-22 para a fundação do Moventra TMS.
 
-Revisado em 2026-08-23 para refletir a decisão de manter a migration 0001 estritamente técnica e não-domínio.
+Revisado em 2026-08-23 para refletir:
+
+- migration 0001 estritamente técnica e não-domínio;
+- conclusão da fase 007 — Convenções de Dados;
+- implementação física inicial do agregado raiz Tenant na fase 008.
 
 ## Contexto
 
@@ -12,7 +16,7 @@ O Moventra TMS é SaaS multi-tenant, multiempresa e multifilial. A aplicação n
 
 ## Decisão
 
-A defesa será implementada em camadas quando as fases organizacionais e de segurança forem ativadas:
+A defesa será implementada em camadas conforme as fases organizacionais e de segurança forem ativadas:
 
 1. `tenant_id` obrigatório nas entidades tenant-scoped;
 2. FKs/constraints tenant-aware para preservar coerência tenant → empresa → filial;
@@ -23,13 +27,11 @@ A defesa será implementada em camadas quando as fases organizacionais e de segu
 7. auditoria de tentativas negadas e alterações de escopo;
 8. integrações e jobs carregando tenant/contexto explicitamente, sem inferência ambígua.
 
-## Relação com a migration 0001
+## Implementação progressiva
 
-A migration `db/migrations/0001_foundation.sql` **não implementa Tenant, Empresa, Filial, Usuários, Memberships, RBAC, RLS ou Auditoria**.
+A migration `db/migrations/0001_foundation.sql` **não implementa Tenant, Empresa, Filial, Usuários, Memberships, RBAC, RLS ou Auditoria**. Ela permanece o baseline técnico em `moventra_meta`.
 
-Após a correção de governança da fase 006, o baseline 0001 cria somente infraestrutura técnica de migrations/contrato em `moventra_meta`.
-
-As camadas desta ADR serão materializadas progressivamente nas fases oficiais:
+As camadas desta ADR são materializadas progressivamente nas fases:
 
 ```text
 008 — Tenant
@@ -44,7 +46,37 @@ As camadas desta ADR serão materializadas progressivamente nas fases oficiais:
 017 — Auditoria Central
 ```
 
-A aceitação desta ADR define a **estratégia-alvo**, não comprova implementação física desses controles.
+A aceitação da ADR define a estratégia-alvo; cada camada somente pode ser considerada implementada quando houver evidência da sua fase.
+
+## Estado da fase 008
+
+A fase 008 introduziu fisicamente a raiz SaaS:
+
+```text
+organization.tenants
+```
+
+pela migration:
+
+```text
+db/migrations/0002_tenant.sql
+```
+
+A raiz Tenant **não possui `tenant_id` autorreferente**. Essa ausência é intencional: o Tenant é a própria fronteira raiz; entidades tenant-scoped das fases posteriores é que carregarão `tenant_id`.
+
+A implementação atual inclui:
+
+- PK UUID com `uuidv7()` quando gerada no PostgreSQL;
+- business key `code` separada da PK;
+- lifecycle explícito;
+- timezone e moeda padrão mínimos;
+- timestamps técnicos;
+- optimistic locking por `version`;
+- constraints de integridade;
+- camada de domínio/persistência mínima;
+- architecture tests proibindo antecipação de fases 009+.
+
+Isso **não** significa que autorização multi-tenant esteja pronta. Ainda não existem Empresa, Filial, Usuários, Memberships, Auth, RBAC, propagação de tenant context, RLS ou auditoria transversal.
 
 ## Critério para ativar RLS
 
@@ -64,16 +96,22 @@ RLS somente poderá ser ativada depois de:
 - aumenta rigor de queries, jobs e integrações;
 - exige disciplina de contexto transacional;
 - evita acoplamento prematuro de RLS ao provider de autenticação;
-- evita antecipar schema de segurança antes das fases correspondentes.
+- evita antecipar schema de segurança antes das fases correspondentes;
+- estabelece Tenant como raiz organizacional sem confundi-lo com Empresa.
 
 ## Gates relacionados
 
-- `G1 — Foundation Ready`: não depende da implementação desta ADR; foi aprovado após a conclusão das fases 001–006.
-- `G2 — Security Ready`: depende da implementação e teste real de autenticação, memberships, RBAC, isolamento tenant-aware, RLS/segunda camada onde aplicável e auditoria transversal.
+- `G1 — Foundation Ready`: aprovado e vigente;
+- `G2 — Security Ready`: continua dependente da implementação e teste real das fases organizacionais/de segurança seguintes.
+
+Estado atual:
 
 ```text
 G1 = APPROVED
 G2 = NOT APPROVED
-007 = ACTIVE
-008+ = NOT ACTIVE até promoção sequencial
+007 = CONCLUDED
+008 = ACTIVE / IMPLEMENTED
+009+ = NOT ACTIVE até promoção sequencial
 ```
+
+A fase 008 somente será promovida para `CONCLUDED` após a evidência final de Production e governança correspondente.
