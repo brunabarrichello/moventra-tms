@@ -35,16 +35,18 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: staging
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_NAME: moventra-tms-staging
+      VERCEL_NODE_VERSION: 22.x
       SOURCE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.artifact_run_id }}
       SELECTED_ARTIFACT_NAME: ${{ github.event_name == 'workflow_run' && format('moventra-tms-{0}', github.event.workflow_run.head_sha) || inputs.artifact_name }}
       STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging.vercel.app' || inputs.staging_url }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout release revision utilities
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -67,6 +69,43 @@ jobs:
           printf 'source_run_id=%s\n' "$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
           printf 'github_artifact_name=%s\n' "$SELECTED_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
+      - name: Validate protected staging credentials
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN is required'; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
+          test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
+          test -n "$DATABASE_URL" || { echo '::error::DATABASE_URL is required in the protected GitHub staging environment'; exit 1; }
+
+      - name: Converge staging Vercel project
+        id: vercel-project
+        run: |
+          set -euo pipefail
+          result="$(bash scripts/release/ensure-vercel-project.sh)"
+          printf '%s\n' "$result"
+          while IFS='=' read -r key value; do
+            case "$key" in
+              project_id)
+                printf 'VERCEL_PROJECT_ID=%s\n' "$value" >> "$GITHUB_ENV"
+                printf 'project_id=%s\n' "$value" >> "$GITHUB_OUTPUT"
+                ;;
+              node_version) printf 'node_version=%s\n' "$value" >> "$GITHUB_OUTPUT" ;;
+            esac
+          done <<< "$result"
+
+      - name: Synchronize staging DATABASE_URL to Vercel
+        env:
+          VERCEL_PROJECT_ID: ${{ steps.vercel-project.outputs.project_id }}
+          VERCEL_ENV_KEY: DATABASE_URL
+          VERCEL_ENV_VALUE: ${{ secrets.DATABASE_URL }}
+          VERCEL_ENV_TARGET: production
+          VERCEL_ENV_COMMENT: Moventra staging runtime database credential managed by protected release automation
+        run: |
+          set -euo pipefail
+          bash scripts/release/vercel-upsert-sensitive-env.sh
+
       - name: Download immutable prebuilt artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,28 +116,6 @@ jobs:
             exact \
             "${{ steps.source.outputs.github_artifact_name }}" \
             release-artifact
-
-      - name: Validate staging deployment configuration
-        run: |
-          set -euo pipefail
-          test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN is required'; exit 1; }
-          test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
-          test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
-
-      - name: Resolve current staging Vercel project ID
-        id: vercel-project
-        run: |
-          set -euo pipefail
-          status="$(curl --silent --show-error --output /tmp/vercel-project.json --write-out '%{http_code}' \
-            --header "Authorization: Bearer ${VERCEL_TOKEN}" \
-            "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_NAME}?teamId=${VERCEL_ORG_ID}")"
-          test "$status" = "200" || {
-            echo "::error::Vercel staging project ${VERCEL_PROJECT_NAME} is unavailable (HTTP ${status})"
-            exit 1
-          }
-          project_id="$(node --input-type=module -e "import fs from 'node:fs'; const p=JSON.parse(fs.readFileSync('/tmp/vercel-project.json','utf8')); if(!p.id) process.exit(2); process.stdout.write(p.id)")"
-          printf 'VERCEL_PROJECT_ID=%s\n' "$project_id" >> "$GITHUB_ENV"
-          printf 'project_id=%s\n' "$project_id" >> "$GITHUB_OUTPUT"
 
       - name: Verify immutable artifact contract
         id: metadata
@@ -152,12 +169,22 @@ jobs:
           bash scripts/release/smoke-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
           bash scripts/release/smoke-health.sh "$STAGING_URL" "$EXPECTED_SHA"
 
+      - name: Verify staging database readiness
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          EXPECTED_SHA: ${{ steps.metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/smoke-database-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-database-health.sh "$STAGING_URL" "$EXPECTED_SHA"
+
       - name: Record staging evidence
         env:
           COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
           ARTIFACT_SHA256: ${{ steps.metadata.outputs.artifact_sha256 }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
           VERCEL_PROJECT_ID: ${{ steps.vercel-project.outputs.project_id }}
+          VERCEL_NODE_VERSION_EFFECTIVE: ${{ steps.vercel-project.outputs.node_version }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -172,6 +199,10 @@ jobs:
           artifact_sha256=${ARTIFACT_SHA256}
           vercel_project_name=${VERCEL_PROJECT_NAME}
           vercel_project_id=${VERCEL_PROJECT_ID}
+          vercel_node_version=${VERCEL_NODE_VERSION_EFFECTIVE}
+          database_url_synced=true
+          application_health=success
+          database_health=success
           deployment_url=${DEPLOYMENT_URL}
           stable_url=${STAGING_URL}
           workflow_actor=${GITHUB_ACTOR}
