@@ -33,8 +33,10 @@ Em 23/08/2026:
 005 — Secrets Management = CONCLUDED
 006 — Banco Base = CONCLUDED
 G1 — Foundation Ready = APPROVED
-007 — Convenções de Dados = ACTIVE
-008 — Tenant = NOT ACTIVE
+007 — Convenções de Dados = CONCLUDED
+008 — Tenant = ACTIVE
+009 — Empresa = NOT ACTIVE
+G2 — Security Ready = NOT APPROVED
 ```
 
 A linha canônica de continuidade está em:
@@ -53,9 +55,9 @@ Provider oficial: Neon Postgres 18.6.
 - histórico/checksum: `moventra_meta.schema_migrations`;
 - contrato técnico: `moventra_meta.database_contract`.
 
-A **migration 0001 é deliberadamente não-domínio**. Ela não cria Tenant, Empresa, Filial, Usuários, Memberships, RBAC ou Auditoria. Essas entidades pertencem às fases 008–017 e somente poderão ser introduzidas quando suas etapas forem oficialmente ativadas.
+A **migration 0001 é deliberadamente não-domínio**. Ela não cria Tenant, Empresa, Filial, Usuários, Memberships, RBAC ou Auditoria.
 
-No encerramento da fase 006, Neon `main` e `staging` possuem o baseline técnico 0001 e zero tabelas de negócio em `public`.
+A fase 008 está autorizada, mas isso **não** significa que Tenant já exista fisicamente no banco. Até a migration da 008 ser implementada e validada, Neon `main` e `staging` continuam apenas com o baseline técnico 0001.
 
 ## Runtime e entrega
 
@@ -75,7 +77,7 @@ CI
 → production evidence
 ```
 
-A produção foi validada na revisão:
+A produção da fundação foi validada na revisão:
 
 ```text
 517f44e788d0f74488ba54a09b44f18284d2b117
@@ -83,16 +85,30 @@ A produção foi validada na revisão:
 
 com `/health = HTTP 200` e `/api/database-health = HTTP 200 / status=ready`.
 
-## Convenções de dados — fase ativa
+## Convenções de dados
 
-A próxima unidade oficial é `007 — Convenções de Dados`.
+A fase `007 — Convenções de Dados` está concluída.
 
 Fontes:
 
-- `docs/data/DATA-CONVENTIONS.md`;
-- `docs/implementation/007-convencoes-de-dados.md`.
+- `docs/data/DATA-CONVENTIONS.md` — contrato canônico;
+- `docs/implementation/007-convencoes-de-dados.md` — evidência e governança da fase;
+- `tests/architecture/data-conventions.test.js` — guardrails automatizados.
 
-Tenant (008) não deve ser iniciado antes da conclusão da 007.
+Evidência de implementação da 007:
+
+```text
+PR #51
+merge commit = 46e08ce5cefe2c5d3df9eb89bcaee096dc9f9fa5
+Foundation CI run = 32672159870 / success
+Moventra CI run = 32672159907 / success
+```
+
+## Fase ativa — 008 Tenant
+
+A próxima unidade oficial é `008 — Tenant`.
+
+A 008 deve materializar somente o agregado raiz SaaS e seus invariantes, obedecendo `DATA-CONVENTIONS.md`, ADR-0002 e a linha oficial de implantação. Empresa (009), Filial (010), Usuários (011), Memberships (012), Auth (013), RBAC (014), Escopo Organizacional (015), RLS (016) e Auditoria (017) não devem ser antecipados.
 
 ## Integrações de engenharia
 
