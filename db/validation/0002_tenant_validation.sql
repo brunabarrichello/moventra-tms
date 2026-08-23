@@ -156,10 +156,8 @@ BEGIN
        AND table_name = 'tenants'
        AND column_name = 'version';
 
-    IF version_default IS NULL OR btrim(version_default, '()''::bigint') <> '1' THEN
-        IF version_default NOT IN ('1', '1::bigint') THEN
-            RAISE EXCEPTION 'organization.tenants.version must default to 1';
-        END IF;
+    IF version_default IS NULL OR version_default !~ '^\(?1(?:::bigint)?\)?$' THEN
+        RAISE EXCEPTION 'organization.tenants.version must default to 1';
     END IF;
 
     IF (
