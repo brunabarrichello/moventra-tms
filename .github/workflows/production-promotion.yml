@@ -228,6 +228,8 @@ jobs:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PRODUCTION_PROJECT_ID }}
+      VERCEL_PROJECT_NAME: moventra-tms
+      VERCEL_NODE_VERSION: 22.x
       PRODUCTION_URL: ${{ needs.preflight.outputs.production_url }}
     steps:
       - name: Checkout exact approved revision
@@ -290,6 +292,33 @@ jobs:
           test -n "$VERCEL_TOKEN" || { echo '::error::production VERCEL_TOKEN is required'; exit 1; }
           test -n "$VERCEL_ORG_ID" || { echo '::error::production VERCEL_ORG_ID is required'; exit 1; }
           test -n "$VERCEL_PROJECT_ID" || { echo '::error::VERCEL_PRODUCTION_PROJECT_ID is required'; exit 1; }
+          test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
+          test "$VERCEL_NODE_VERSION" = '22.x' || { echo '::error::production Vercel Node policy must be 22.x'; exit 1; }
+
+      - name: Converge production Vercel project
+        id: vercel-project
+        run: |
+          set -euo pipefail
+          result="$(bash scripts/release/ensure-vercel-project.sh)"
+          printf '%s\n' "$result"
+          resolved_project_id="$(printf '%s\n' "$result" | awk -F= '$1=="project_id" {print $2}')"
+          resolved_node_version="$(printf '%s\n' "$result" | awk -F= '$1=="node_version" {print $2}')"
+          [[ "$resolved_project_id" =~ ^prj_[A-Za-z0-9]+$ ]] || {
+            echo '::error::Could not resolve production Vercel project ID'
+            exit 1
+          }
+          test "$resolved_project_id" = "$VERCEL_PROJECT_ID" || {
+            echo '::error::Resolved production Vercel project does not match VERCEL_PRODUCTION_PROJECT_ID'
+            exit 1
+          }
+          test "$resolved_node_version" = "$VERCEL_NODE_VERSION" || {
+            echo '::error::Production Vercel project Node policy did not converge to 22.x'
+            exit 1
+          }
+          {
+            printf 'project_id=%s\n' "$resolved_project_id"
+            printf 'node_version=%s\n' "$resolved_node_version"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Re-verify exact immutable artifact
         id: metadata
@@ -332,11 +361,22 @@ jobs:
           bash scripts/release/smoke-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
           bash scripts/release/smoke-health.sh "$PRODUCTION_URL" "$EXPECTED_SHA"
 
+      - name: Verify production database readiness
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          EXPECTED_SHA: ${{ steps.metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/smoke-database-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-database-health.sh "$PRODUCTION_URL" "$EXPECTED_SHA"
+
       - name: Record production evidence
         env:
           APPROVER: ${{ steps.approval.outputs.approver }}
           APPROVAL_STATE: ${{ steps.approval.outputs.state }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          PROJECT_ID: ${{ steps.vercel-project.outputs.project_id }}
+          NODE_VERSION: ${{ steps.vercel-project.outputs.node_version }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -356,6 +396,10 @@ jobs:
           workflow_source_actor=${{ needs.preflight.outputs.source_actor }}
           approval_state=${APPROVAL_STATE}
           approver=${APPROVER}
+          vercel_project_id=${PROJECT_ID}
+          vercel_node_version=${NODE_VERSION}
+          revision_identity=success
+          database_readiness=success
           deployment_url=${DEPLOYMENT_URL}
           stable_url=${PRODUCTION_URL}
           workflow_run_id=${GITHUB_RUN_ID}

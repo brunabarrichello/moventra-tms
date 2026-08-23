@@ -102,13 +102,21 @@ test('deployment credentials are scoped to protected GitHub environments', async
   assert.match(production, /VERCEL_TOKEN:\s*\$\{\{\s*secrets\.VERCEL_TOKEN\s*\}\}/);
   assert.match(production, /VERCEL_ORG_ID:\s*\$\{\{\s*vars\.VERCEL_ORG_ID\s*\}\}/);
   assert.match(production, /VERCEL_PROJECT_ID:\s*\$\{\{\s*vars\.VERCEL_PRODUCTION_PROJECT_ID\s*\}\}/);
+  assert.match(production, /VERCEL_PROJECT_NAME:\s*moventra-tms/);
+  assert.match(production, /VERCEL_NODE_VERSION:\s*22\.x/);
+  assert.match(production, /Converge production Vercel project/);
+  assert.match(production, /ensure-vercel-project\.sh/);
+  assert.match(production, /Resolved production Vercel project does not match VERCEL_PRODUCTION_PROJECT_ID/);
+  assert.match(production, /Verify production database readiness/);
+  assert.match(production, /smoke-database-health\.sh/);
+  assert.match(production, /database_readiness=success/);
 
   for (const workflow of [bootstrap, staging, rollback, production]) {
     assert.doesNotMatch(workflow, /VERCEL_TOKEN:\s*\$\{\{\s*vars\./);
   }
 });
 
-test('Vercel staging provisioning converges policy and synchronizes database credentials without logging values', async () => {
+test('Vercel project provisioning converges policy and synchronizes staging database credentials without logging values', async () => {
   const ensureProject = await read('scripts/release/ensure-vercel-project.sh');
   const upsertEnv = await read('scripts/release/vercel-upsert-sensitive-env.sh');
   const databaseSmoke = await read('scripts/release/smoke-database-health.sh');
