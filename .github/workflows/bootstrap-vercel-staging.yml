@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - .github/workflows/bootstrap-vercel-staging.yml
+  workflow_run:
+    workflows: ["Moventra CI"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +20,7 @@ env:
 jobs:
   bootstrap:
     name: Provision staging project
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: staging
     timeout-minutes: 10
@@ -119,6 +124,7 @@ jobs:
           fluid_compute=true
           git_integration=disabled
           provisioned_by=github-actions
+          trigger=${GITHUB_EVENT_NAME}
           workflow_run_id=${GITHUB_RUN_ID}
           result=success
           EOF
