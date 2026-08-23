@@ -29,6 +29,7 @@ EOF
 
 vercel_cli_version="${VERCEL_CLI_VERSION:-59.4.0}"
 export VERCEL_TOKEN
+export MOVENTRA_VERCEL_CLI_VERSION="$vercel_cli_version"
 
 cat > "$workdir/deploy-prebuilt.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -36,6 +37,7 @@ set -euo pipefail
 
 : "${DATABASE_URL:?DATABASE_URL is required in the Vercel production environment}"
 : "${VERCEL_TOKEN:?VERCEL_TOKEN is required}"
+: "${MOVENTRA_VERCEL_CLI_VERSION:?MOVENTRA_VERCEL_CLI_VERSION is required}"
 
 # DATABASE_URL is intentionally obtained at execution time from the linked
 # Vercel project and never written into the immutable application artifact.
@@ -44,7 +46,10 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
   printf '::add-mask::%s\n' "$DATABASE_URL"
 fi
 
-exec vercel deploy \
+# Invoke the same pinned CLI explicitly. Do not rely on the transient PATH
+# created by the outer `npx vercel env run` process being preserved for the
+# nested command.
+exec npx --yes "vercel@${MOVENTRA_VERCEL_CLI_VERSION}" deploy \
   --prebuilt \
   --prod \
   --yes \
@@ -55,16 +60,15 @@ chmod 700 "$workdir/deploy-prebuilt.sh"
 
 cd "$workdir"
 # `vercel env run` reads the current Production environment from the linked
-# project without persisting it to a dotenv file. The child deployment then
-# explicitly receives DATABASE_URL as a runtime variable, which is required
-# for fresh prebuilt deployments after Project Settings/Environment changes.
+# project without persisting it to a dotenv file. Authentication uses the
+# exported VERCEL_TOKEN supported by the Vercel CLI. The child deployment then
+# explicitly receives DATABASE_URL as a runtime variable.
 deployment_output="$(
   NPM_CONFIG_LOGLEVEL=error \
   NO_UPDATE_NOTIFIER=1 \
   VERCEL_TELEMETRY_DISABLED=1 \
   npx --yes "vercel@${vercel_cli_version}" env run \
     --environment=production \
-    --token "$VERCEL_TOKEN" \
     -- ./deploy-prebuilt.sh \
     2>&1
 )"
