@@ -14,7 +14,7 @@ on:
       staging_url:
         description: Stable staging URL used for revision-aware smoke validation
         required: true
-        default: https://moventra-tms-staging.vercel.app
+        default: https://moventra-tms-staging-alebru.vercel.app
         type: string
 
 permissions:
@@ -35,10 +35,9 @@ jobs:
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ vars.VERCEL_STAGING_PROJECT_ID }}
       VERCEL_PROJECT_NAME: moventra-tms-staging
       RELEASE_GATE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.release_gate_run_id }}
-      STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging.vercel.app' || inputs.staging_url }}
+      STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging-alebru.vercel.app' || inputs.staging_url }}
     steps:
       - name: Checkout release revision utilities
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -186,20 +185,22 @@ jobs:
           test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
           test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
 
-      - name: Resolve current staging Vercel project ID
+      - name: Converge current staging Vercel project
         id: vercel-project
+        env:
+          VERCEL_NODE_VERSION: 22.x
         run: |
           set -euo pipefail
-          status="$(curl --silent --show-error --output /tmp/vercel-project.json --write-out '%{http_code}' \
-            --header "Authorization: Bearer ${VERCEL_TOKEN}" \
-            "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_NAME}?teamId=${VERCEL_ORG_ID}")"
-          test "$status" = "200" || {
-            echo "::error::Vercel staging project ${VERCEL_PROJECT_NAME} is unavailable (HTTP ${status})"
-            exit 1
-          }
-          project_id="$(node --input-type=module -e "import fs from 'node:fs'; const p=JSON.parse(fs.readFileSync('/tmp/vercel-project.json','utf8')); if(!p.id) process.exit(2); process.stdout.write(p.id)")"
-          printf 'VERCEL_PROJECT_ID=%s\n' "$project_id" >> "$GITHUB_ENV"
-          printf 'project_id=%s\n' "$project_id" >> "$GITHUB_OUTPUT"
+          result="$(bash scripts/release/ensure-vercel-project.sh)"
+          printf '%s\n' "$result"
+          while IFS='=' read -r key value; do
+            case "$key" in
+              project_id)
+                printf 'VERCEL_PROJECT_ID=%s\n' "$value" >> "$GITHUB_ENV"
+                printf 'project_id=%s\n' "$value" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          done <<< "$result"
 
       - name: Verify rollback artifact contract
         id: rollback_metadata

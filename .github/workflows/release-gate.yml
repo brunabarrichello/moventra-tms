@@ -18,7 +18,7 @@ on:
       staging_url:
         description: Stable staging URL
         required: true
-        default: https://moventra-tms-staging.vercel.app
+        default: https://moventra-tms-staging-alebru.vercel.app
         type: string
 
 permissions:
@@ -43,7 +43,7 @@ jobs:
       VERCEL_NODE_VERSION: 22.x
       SOURCE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.artifact_run_id }}
       SELECTED_ARTIFACT_NAME: ${{ github.event_name == 'workflow_run' && format('moventra-tms-{0}', github.event.workflow_run.head_sha) || inputs.artifact_name }}
-      STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging.vercel.app' || inputs.staging_url }}
+      STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging-alebru.vercel.app' || inputs.staging_url }}
     steps:
       - name: Checkout release revision utilities
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
