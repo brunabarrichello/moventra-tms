@@ -11,7 +11,7 @@ const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const fixtureSha = '0123456789abcdef0123456789abcdef01234567';
 
-test('Vercel Build Output API artifact embeds immutable revision identity', async () => {
+test('Vercel Build Output API artifact embeds immutable revision identity and safe database diagnostics', async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'moventra-build-output-'));
   const outputRoot = path.join(tempRoot, '.vercel', 'output');
 
@@ -50,7 +50,17 @@ test('Vercel Build Output API artifact embeds immutable revision identity', asyn
     const databaseHandler = await readFile(path.join(databaseFunctionDir, 'index.js'), 'utf8');
     assert.match(databaseHandler, new RegExp(fixtureSha));
     assert.match(databaseHandler, /checkDatabaseReadiness/);
+    assert.match(databaseHandler, /classifyDatabaseHealthError/);
+    assert.match(databaseHandler, /getDatabaseHealthSnapshot\(\{ ok: false \}, BUILD_VERSION, reason\)/);
     assert.doesNotMatch(databaseHandler, /databaseName|serverVersionNum/);
+
+    const bundledCore = await readFile(
+      path.join(databaseFunctionDir, 'src', 'core', 'database-health.js'),
+      'utf8',
+    );
+    assert.match(bundledCore, /configuration_missing/);
+    assert.match(bundledCore, /authentication_failed/);
+    assert.match(bundledCore, /connection_failed/);
 
     await access(path.join(databaseFunctionDir, 'node_modules', 'pg', 'package.json'));
     await access(path.join(databaseFunctionDir, 'node_modules', '@vercel', 'functions', 'package.json'));
