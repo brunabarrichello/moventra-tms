@@ -21,13 +21,13 @@ A existência de schema, migration, workflow ou documento não promove automatic
 |---|---|---|
 | 001 — Governança | **CONCLUDED** | identidade oficial, governança, CODEOWNERS, histórico e processo de mudança versionados |
 | 002 — Arquitetura Base | **CONCLUDED** | ADR-0001 aceito; monólito modular permanece arquitetura inicial oficial |
-| 003 — Ambientes | **CONCLUDED** | Development segregado por branch/configuração e execução local/efêmera; Test no CI; staging e production em projetos Vercel separados; Neon segregado por branches |
-| 004 — CI/CD | **CONCLUDED** | build-once, artefato imutável, staging, rollback/restore, production protegida, revision identity e production evidence validados; run `32662438316` attempt 3 = success |
-| 005 — Secrets Management | **CONCLUDED** | stores segregados, credenciais por ambiente, política/CI e cutover operacional validados; risco do token legado permanece explicitamente aceito e não bloqueante |
-| 006 — Banco Base | **CONCLUDED** | PostgreSQL/Neon 18.6, baseline técnico 0001, migration framework, least privilege, runtime pool e readiness 200 em staging e production; `B006-02 = RESOLVED` |
-| 007 — Convenções de Dados | **ACTIVE / DEFINED** | `docs/data/DATA-CONVENTIONS.md` existe; fase autorizada a transformar convenções em contrato verificável antes de iniciar Tenant |
-| 008 — Tenant | **NOT ACTIVE / DEFINED** | nenhuma entidade criada no banco; execução depende da conclusão da 007 |
-| 009 — Empresa | **NOT ACTIVE / DEFINED** | nenhuma entidade criada; depende de Tenant |
+| 003 — Ambientes | **CONCLUDED** | Development/Test/Staging/Production segregados conforme a arquitetura vigente |
+| 004 — CI/CD | **CONCLUDED** | build-once, artefato imutável, staging, rollback/restore, production protegida, revision identity e evidence validados; promotion run `32662438316` attempt 3 = success |
+| 005 — Secrets Management | **CONCLUDED** | stores segregados, credenciais por ambiente, least privilege e governança de secrets validados |
+| 006 — Banco Base | **CONCLUDED** | PostgreSQL/Neon 18.6, baseline técnico 0001, migration framework, runtime least privilege e readiness validados; `B006-02 = RESOLVED` |
+| 007 — Convenções de Dados | **CONCLUDED** | contrato canônico em `docs/data/DATA-CONVENTIONS.md`, guardrails em `tests/architecture/data-conventions.test.js`, PR #51 mergeada e CI verde |
+| 008 — Tenant | **ACTIVE / DEFINED** | primeira etapa estrutural autorizada após a 007; nenhuma entidade criada ainda |
+| 009 — Empresa | **NOT ACTIVE / DEFINED** | nenhuma entidade criada; depende da conclusão de Tenant |
 | 010 — Filial | **NOT ACTIVE / DEFINED** | nenhuma entidade criada; depende de Empresa |
 | 011 — Usuários | **NOT ACTIVE / DEFINED** | identidade de negócio ainda não implementada no banco |
 | 012 — Memberships | **NOT ACTIVE / DEFINED** | vínculo usuário ↔ tenant/empresa/filial ainda não implementado |
@@ -35,7 +35,7 @@ A existência de schema, migration, workflow ou documento não promove automatic
 | 014 — RBAC | **NOT ACTIVE / DEFINED** | autorização backend e modelo físico ainda não implementados |
 | 015 — Escopo Organizacional | **NOT ACTIVE / DEFINED** | enforcement tenant/company/branch será posterior a RBAC/memberships |
 | 016 — RLS / Defesa adicional | **NOT ACTIVE / DEFINED** | ADR-0002 vigente; RLS somente após contrato de contexto e testes cross-tenant |
-| 017 — Auditoria Central | **NOT ACTIVE / DEFINED** | trilha transversal ainda não implementada; não há tabela de auditoria antecipada no baseline 0001 |
+| 017 — Auditoria Central | **NOT ACTIVE / DEFINED** | trilha transversal ainda não implementada |
 
 ## Banco base — estado confirmado
 
@@ -52,7 +52,7 @@ migration 0001 records = 1
 
 A branch `staging` apresenta o mesmo baseline técnico e zero tabelas de negócio em `public`.
 
-Portanto, as fases 008–017 permanecem não implementadas e não podem ser inferidas a partir da fase 006.
+A ativação da 008 **não** significa implementação de Tenant. Até a primeira migration da fase 008 ser criada, o banco continua deliberadamente sem tabelas de negócio.
 
 ## Gate G1 — Foundation Ready
 
@@ -61,18 +61,29 @@ Portanto, as fases 008–017 permanecem não implementadas e não podem ser infe
 ### Evidências do gate
 
 - arquitetura base formalizada e vigente;
-- matriz de ambientes segregada e atualizada;
+- matriz de ambientes segregada;
 - CI/CD com build-once, artifact imutável, staging, rollback/restore e promoção protegida;
 - Production Promotion run `32662438316`, attempt `3`, conclusion `success`;
-- production `/health = 200` na revisão `517f44e788d0f74488ba54a09b44f18284d2b117`;
-- production `/api/database-health = 200 / ready` na mesma revisão;
+- production `/health = 200` e `/api/database-health = 200 / ready` na revisão canônica da fundação;
 - Secrets Management concluído e governado;
 - Banco Base concluído e reproduzível por migrations;
-- staging dedicado validado com `/health = 200` e `/api/database-health = 200 / ready`;
-- `B006-02 = RESOLVED`;
-- nenhuma entidade de fase posterior foi antecipada.
+- staging dedicado validado;
+- `B006-02 = RESOLVED`.
 
 G1 aprova a **fundação técnica**, não os controles de segurança de negócio das fases 008–017.
+
+## 007 — evidência de conclusão
+
+A fase 007 consolidou as convenções em contrato normativo e adicionou checks automatizados sem criar entidade de negócio.
+
+```text
+PR #51
+merge commit = 46e08ce5cefe2c5d3df9eb89bcaee096dc9f9fa5
+Foundation CI run = 32672159870 / success
+Moventra CI run = 32672159907 / success
+```
+
+O contrato fixa UUIDv7, temporalidade, money/decimal, naming SQL, escopo tenant-aware, histórico/LGPD, concorrência, estados e regras de migration para as fases seguintes.
 
 ## Gate G2 — Security Ready
 
@@ -93,13 +104,15 @@ G2 continua dependente, no mínimo, de:
 
 ```text
 006 = CONCLUDED
-B006-02 = RESOLVED
 G1 = APPROVED
-007 = ACTIVE
+007 = CONCLUDED
+008 = ACTIVE
+009 = NOT ACTIVE
+G2 = NOT APPROVED
 ```
 
-A única etapa autorizada imediatamente após esta promoção é:
+A única etapa estrutural autorizada agora é:
 
-**007 — Convenções de Dados**.
+**008 — Tenant**.
 
-Tenant (008) não deve ser ativado antes da conclusão e evidência da 007.
+Empresa (009) e todas as etapas seguintes permanecem não ativas até a conclusão e evidência da 008.
