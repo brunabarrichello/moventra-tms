@@ -85,11 +85,18 @@ test('deployment credentials are scoped to protected GitHub environments', async
   assert.match(staging, /ensure-vercel-project\.sh/);
   assert.match(staging, /vercel-upsert-sensitive-env\.sh/);
   assert.match(staging, /smoke-database-health\.sh/);
+  assert.match(staging, /https:\/\/moventra-tms-staging-alebru\.vercel\.app/);
   assert.match(staging, /VERCEL_PROJECT_ID=%s\\n'\s*"\$value"\s*>>\s*"\$GITHUB_ENV"/);
   assert.doesNotMatch(staging, /vars\.VERCEL_STAGING_PROJECT_ID/);
+  assert.doesNotMatch(staging, /https:\/\/moventra-tms-staging\.vercel\.app/);
 
   assert.match(rollback, /VERCEL_PROJECT_NAME:\s*moventra-tms-staging/);
-  assert.match(rollback, /Resolve current staging Vercel project ID/);
+  assert.match(rollback, /Converge current staging Vercel project/);
+  assert.match(rollback, /ensure-vercel-project\.sh/);
+  assert.match(rollback, /https:\/\/moventra-tms-staging-alebru\.vercel\.app/);
+  assert.doesNotMatch(rollback, /vars\.VERCEL_STAGING_PROJECT_ID/);
+  assert.doesNotMatch(rollback, /Resolve current staging Vercel project ID/);
+  assert.doesNotMatch(rollback, /https:\/\/moventra-tms-staging\.vercel\.app/);
 
   assert.match(production, /environment:\s*\n\s*name:\s*production/);
   assert.match(production, /VERCEL_TOKEN:\s*\$\{\{\s*secrets\.VERCEL_TOKEN\s*\}\}/);
