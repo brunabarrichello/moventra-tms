@@ -76,12 +76,20 @@ test('deployment credentials are scoped to protected GitHub environments', async
   }
 
   assert.match(bootstrap, /VERCEL_PROJECT_NAME:\s*moventra-tms-staging/);
+  assert.match(bootstrap, /ensure-vercel-project\.sh/);
+  assert.doesNotMatch(bootstrap, /workflows:\s*\["Moventra CI"\]/);
+
   assert.match(staging, /VERCEL_PROJECT_NAME:\s*moventra-tms-staging/);
-  assert.match(staging, /v9\/projects\/\$\{VERCEL_PROJECT_NAME\}\?teamId=\$\{VERCEL_ORG_ID\}/);
-  assert.match(staging, /VERCEL_PROJECT_ID=%s\\n'\s*"\$project_id"\s*>>\s*"\$GITHUB_ENV"/);
+  assert.match(staging, /VERCEL_NODE_VERSION:\s*22\.x/);
+  assert.match(staging, /DATABASE_URL:\s*\$\{\{\s*secrets\.DATABASE_URL\s*\}\}/);
+  assert.match(staging, /ensure-vercel-project\.sh/);
+  assert.match(staging, /vercel-upsert-sensitive-env\.sh/);
+  assert.match(staging, /smoke-database-health\.sh/);
+  assert.match(staging, /VERCEL_PROJECT_ID=%s\\n'\s*"\$value"\s*>>\s*"\$GITHUB_ENV"/);
   assert.doesNotMatch(staging, /vars\.VERCEL_STAGING_PROJECT_ID/);
 
-  assert.match(rollback, /VERCEL_PROJECT_ID:\s*\$\{\{\s*vars\.VERCEL_STAGING_PROJECT_ID\s*\}\}/);
+  assert.match(rollback, /VERCEL_PROJECT_NAME:\s*moventra-tms-staging/);
+  assert.match(rollback, /Resolve current staging Vercel project ID/);
 
   assert.match(production, /environment:\s*\n\s*name:\s*production/);
   assert.match(production, /VERCEL_TOKEN:\s*\$\{\{\s*secrets\.VERCEL_TOKEN\s*\}\}/);
@@ -91,6 +99,29 @@ test('deployment credentials are scoped to protected GitHub environments', async
   for (const workflow of [bootstrap, staging, rollback, production]) {
     assert.doesNotMatch(workflow, /VERCEL_TOKEN:\s*\$\{\{\s*vars\./);
   }
+});
+
+test('Vercel staging provisioning converges policy and synchronizes database credentials without logging values', async () => {
+  const ensureProject = await read('scripts/release/ensure-vercel-project.sh');
+  const upsertEnv = await read('scripts/release/vercel-upsert-sensitive-env.sh');
+  const databaseSmoke = await read('scripts/release/smoke-database-health.sh');
+
+  assert.match(ensureProject, /PATCH/);
+  assert.match(ensureProject, /nodeVersion/);
+  assert.match(ensureProject, /previewDeploymentsDisabled/);
+  assert.match(ensureProject, /resourceConfig:\s*\{\s*fluid:\s*true/);
+
+  assert.match(upsertEnv, /type:\s*'sensitive'/);
+  assert.match(upsertEnv, /upsert=true/);
+  assert.match(upsertEnv, /VERCEL_ENV_VALUE/);
+  assert.match(upsertEnv, /Never print the API response/);
+  assert.doesNotMatch(upsertEnv, /printf[^\n]*VERCEL_ENV_VALUE/);
+  assert.doesNotMatch(upsertEnv, /echo[^\n]*VERCEL_ENV_VALUE/);
+
+  assert.match(databaseSmoke, /api\/database-health/);
+  assert.match(databaseSmoke, /payload\.status !== "ready"/);
+  assert.match(databaseSmoke, /payload\.service !== "database"/);
+  assert.match(databaseSmoke, /payload\.version !== process\.env\.EXPECTED_SHA/);
 });
 
 test('secrets policy defines segregation, rotation, audit and fail-closed controls', async () => {
