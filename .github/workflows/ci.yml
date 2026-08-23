@@ -29,7 +29,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate mandatory foundation files
+      - name: Validate mandatory platform files
         run: |
           set -euo pipefail
           required_files=(
@@ -41,6 +41,8 @@ jobs:
             "src/server.js"
             "src/core/database-health.js"
             "src/infrastructure/database/postgres.js"
+            "src/modules/organization/tenant/tenant-domain.js"
+            "src/modules/organization/tenant/tenant-repository.js"
             "api/database-health.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
@@ -48,17 +50,22 @@ jobs:
             "scripts/ci/build-vercel-output.mjs"
             "scripts/db/migrate.mjs"
             "db/migrations/0001_foundation.sql"
+            "db/migrations/0002_tenant.sql"
             "db/validation/0001_foundation_validation.sql"
+            "db/validation/0002_tenant_validation.sql"
             ".github/workflows/release-gate.yml"
             ".github/workflows/rollback-drill.yml"
             ".github/workflows/production-promotion.yml"
+            "docs/data/DATA-CONVENTIONS.md"
             "docs/implementation/004-cicd.md"
             "docs/implementation/005-secrets-management.md"
             "docs/implementation/006-banco-base.md"
+            "docs/implementation/007-convencoes-de-dados.md"
+            "docs/implementation/008-tenant.md"
           )
 
           for file in "${required_files[@]}"; do
-            test -f "$file" || { echo "::error file=$file::Mandatory foundation file is missing"; exit 1; }
+            test -f "$file" || { echo "::error file=$file::Mandatory platform file is missing"; exit 1; }
           done
 
           for hook in scripts/ci/lint.sh scripts/ci/test.sh scripts/ci/build.sh; do
@@ -146,6 +153,7 @@ jobs:
           set -euo pipefail
           npm ls --all
           node --input-type=module -e "await import('./src/infrastructure/database/postgres.js')"
+          node --input-type=module -e "await import('./src/modules/organization/tenant/tenant-repository.js')"
 
   database-contract:
     name: PostgreSQL migration contract
@@ -189,8 +197,16 @@ jobs:
         run: node scripts/db/migrate.mjs
       - name: Re-run migrations to prove idempotent history behavior
         run: node scripts/db/migrate.mjs
-      - name: Validate database foundation contract
-        run: psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0001_foundation_validation.sql
+      - name: Validate every database contract
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          validations=(db/validation/*_validation.sql)
+          test "${#validations[@]}" -gt 0 || { echo "::error::No database validation contracts found"; exit 1; }
+          for validation in "${validations[@]}"; do
+            echo "Validating ${validation}"
+            psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f "$validation"
+          done
 
   build:
     name: Build immutable artifact
@@ -239,7 +255,7 @@ jobs:
           mkdir -p evidence
           cat > evidence/ci-run.txt <<EOF
           product=Moventra TMS
-          phase=foundation
+          phase=platform
           repository=${GITHUB_REPOSITORY}
           commit_sha=${GITHUB_SHA}
           ref=${GITHUB_REF}
