@@ -1,6 +1,12 @@
 -- Moventra TMS — Validation for migration 0001
 -- Phase: 006 — Banco Base
 -- Read-only contract checks. Failures raise exceptions and must fail CI/deployment.
+--
+-- This validation is intentionally forward-compatible: it verifies that the
+-- phase-006 foundation remains intact after later migrations are applied.
+-- The immutable contents of 0001_foundation.sql are separately guarded by
+-- tests/architecture/database-foundation.test.js so later domain schemas do
+-- not create false failures in this cumulative validation contract.
 
 DO $validation$
 DECLARE
@@ -36,35 +42,11 @@ BEGIN
     SELECT checksum
       INTO applied_checksum
       FROM moventra_meta.schema_migrations
-     WHERE version = 1;
+     WHERE version = 1
+       AND name = '0001_foundation.sql';
 
     IF applied_checksum IS NULL OR applied_checksum !~ '^[0-9a-f]{64}$' THEN
         RAISE EXCEPTION 'migration 0001 checksum history is missing or invalid';
-    END IF;
-
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.schemata
-        WHERE schema_name IN (
-            'organization', 'identity', 'audit', 'crm', 'commercial', 'operations',
-            'drivers', 'fleet', 'tracking', 'risk', 'finance', 'fiscal',
-            'notifications', 'integrations', 'billing'
-        )
-    ) THEN
-        RAISE EXCEPTION 'phase 006 introduced a schema that belongs to a later phase';
-    END IF;
-
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'moventra_meta')
-          AND table_name IN (
-              'tenants', 'companies', 'branches', 'users', 'user_identities',
-              'memberships', 'permissions', 'roles', 'role_permissions',
-              'membership_roles', 'audit_logs'
-          )
-    ) THEN
-        RAISE EXCEPTION 'phase 006 introduced a domain table that belongs to a later phase';
     END IF;
 END
 $validation$;
