@@ -19,19 +19,21 @@ test('PostgreSQL runtime dependencies are exact and Vercel Fluid is enabled', as
   assert.equal(vercelConfig.fluid, true);
 });
 
-test('PostgreSQL runtime adapter encapsulates pooling and transaction boundaries', async () => {
+test('PostgreSQL runtime adapter encapsulates pooling, channel binding and transaction boundaries', async () => {
   const source = await readFile(
     path.join(root, 'src/infrastructure/database/postgres.js'),
     'utf8',
   );
 
   assert.match(source, /new Pool\(/);
+  assert.match(source, /enableChannelBinding:\s*true/);
   assert.match(source, /attachDatabasePool\(pool\)/);
   assert.match(source, /process\.env\.DATABASE_URL/);
   assert.match(source, /client\.query\('BEGIN'\)/);
   assert.match(source, /client\.query\('COMMIT'\)/);
   assert.match(source, /client\.query\('ROLLBACK'\)/);
   assert.match(source, /client\.release\(\)/);
+  assert.doesNotMatch(source, /rejectUnauthorized:\s*false/);
   assert.doesNotMatch(source, /console\.(log|error)\([^\n]*DATABASE_URL/);
 });
 
