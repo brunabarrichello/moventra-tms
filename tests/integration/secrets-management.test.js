@@ -64,23 +64,31 @@ test('gitignore protects local secret material while allowing the empty template
 });
 
 test('deployment credentials are scoped to protected GitHub environments', async () => {
+  const bootstrap = await read('.github/workflows/bootstrap-vercel-staging.yml');
   const staging = await read('.github/workflows/release-gate.yml');
   const rollback = await read('.github/workflows/rollback-drill.yml');
   const production = await read('.github/workflows/production-promotion.yml');
 
-  for (const workflow of [staging, rollback]) {
+  for (const workflow of [bootstrap, staging, rollback]) {
     assert.match(workflow, /environment:\s*staging/);
     assert.match(workflow, /VERCEL_TOKEN:\s*\$\{\{\s*secrets\.VERCEL_TOKEN\s*\}\}/);
     assert.match(workflow, /VERCEL_ORG_ID:\s*\$\{\{\s*vars\.VERCEL_ORG_ID\s*\}\}/);
-    assert.match(workflow, /VERCEL_PROJECT_ID:\s*\$\{\{\s*vars\.VERCEL_STAGING_PROJECT_ID\s*\}\}/);
   }
+
+  assert.match(bootstrap, /VERCEL_PROJECT_NAME:\s*moventra-tms-staging/);
+  assert.match(staging, /VERCEL_PROJECT_NAME:\s*moventra-tms-staging/);
+  assert.match(staging, /v9\/projects\/\$\{VERCEL_PROJECT_NAME\}\?teamId=\$\{VERCEL_ORG_ID\}/);
+  assert.match(staging, /VERCEL_PROJECT_ID=%s\\n'\s*"\$project_id"\s*>>\s*"\$GITHUB_ENV"/);
+  assert.doesNotMatch(staging, /vars\.VERCEL_STAGING_PROJECT_ID/);
+
+  assert.match(rollback, /VERCEL_PROJECT_ID:\s*\$\{\{\s*vars\.VERCEL_STAGING_PROJECT_ID\s*\}\}/);
 
   assert.match(production, /environment:\s*\n\s*name:\s*production/);
   assert.match(production, /VERCEL_TOKEN:\s*\$\{\{\s*secrets\.VERCEL_TOKEN\s*\}\}/);
   assert.match(production, /VERCEL_ORG_ID:\s*\$\{\{\s*vars\.VERCEL_ORG_ID\s*\}\}/);
   assert.match(production, /VERCEL_PROJECT_ID:\s*\$\{\{\s*vars\.VERCEL_PRODUCTION_PROJECT_ID\s*\}\}/);
 
-  for (const workflow of [staging, rollback, production]) {
+  for (const workflow of [bootstrap, staging, rollback, production]) {
     assert.doesNotMatch(workflow, /VERCEL_TOKEN:\s*\$\{\{\s*vars\./);
   }
 });

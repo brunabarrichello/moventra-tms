@@ -1,0 +1,132 @@
+name: Bootstrap Vercel Staging
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/bootstrap-vercel-staging.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VERCEL_PROJECT_NAME: moventra-tms-staging
+
+jobs:
+  bootstrap:
+    name: Provision staging project
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 10
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+    steps:
+      - name: Validate administrative credentials
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN is required'; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
+
+      - name: Create or resolve staging project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.vercel.com"
+          auth="Authorization: Bearer ${VERCEL_TOKEN}"
+          project_url="${api}/v9/projects/${VERCEL_PROJECT_NAME}?teamId=${VERCEL_ORG_ID}"
+
+          status="$(curl --silent --show-error --output /tmp/project.json --write-out '%{http_code}' \
+            --header "$auth" \
+            "$project_url")"
+
+          if [[ "$status" == "404" ]]; then
+            printf '{"name":"%s"}\n' "$VERCEL_PROJECT_NAME" > /tmp/create-project.json
+            curl --fail --silent --show-error \
+              --request POST \
+              --url "${api}/v11/projects?teamId=${VERCEL_ORG_ID}" \
+              --header "$auth" \
+              --header 'Content-Type: application/json' \
+              --data-binary @/tmp/create-project.json \
+              > /tmp/project.json
+          elif [[ "$status" != "200" ]]; then
+            echo "::error::Unable to resolve Vercel project (HTTP ${status})"
+            cat /tmp/project.json >&2 || true
+            exit 1
+          fi
+
+          project_id="$(node --input-type=module -e "import fs from 'node:fs'; const p=JSON.parse(fs.readFileSync('/tmp/project.json','utf8')); if(!p.id) process.exit(2); process.stdout.write(p.id)")"
+          project_name="$(node --input-type=module -e "import fs from 'node:fs'; const p=JSON.parse(fs.readFileSync('/tmp/project.json','utf8')); process.stdout.write(p.name ?? '')")"
+          test "$project_name" = "$VERCEL_PROJECT_NAME"
+          printf 'project_id=%s\n' "$project_id" >> "$GITHUB_OUTPUT"
+          printf 'project_name=%s\n' "$project_name" >> "$GITHUB_OUTPUT"
+
+      - name: Apply Moventra staging project policy
+        env:
+          PROJECT_ID: ${{ steps.project.outputs.project_id }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/project-policy.json <<'JSON'
+          {
+            "nodeVersion": "22.x",
+            "autoExposeSystemEnvs": false,
+            "directoryListing": false,
+            "previewDeploymentsDisabled": true,
+            "resourceConfig": {
+              "fluid": true
+            }
+          }
+          JSON
+
+          curl --fail --silent --show-error \
+            --request PATCH \
+            --url "https://api.vercel.com/v9/projects/${PROJECT_ID}?teamId=${VERCEL_ORG_ID}" \
+            --header "Authorization: Bearer ${VERCEL_TOKEN}" \
+            --header 'Content-Type: application/json' \
+            --data-binary @/tmp/project-policy.json \
+            > /tmp/project-updated.json
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const p = JSON.parse(fs.readFileSync('/tmp/project-updated.json', 'utf8'));
+          const errors = [];
+          if (p.name !== process.env.VERCEL_PROJECT_NAME) errors.push('project name mismatch');
+          if (p.nodeVersion !== '22.x') errors.push(`nodeVersion=${p.nodeVersion}`);
+          if (p.directoryListing !== false) errors.push(`directoryListing=${p.directoryListing}`);
+          if (errors.length) {
+            console.error(`::error::Vercel staging policy validation failed: ${errors.join(', ')}`);
+            process.exit(1);
+          }
+          console.log(`Vercel staging project configured: ${p.name} (${p.id})`);
+          NODE
+
+      - name: Record bootstrap evidence
+        env:
+          PROJECT_ID: ${{ steps.project.outputs.project_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/vercel-staging-bootstrap.txt <<EOF
+          product=Moventra TMS
+          environment=staging
+          vercel_project_name=${VERCEL_PROJECT_NAME}
+          vercel_project_id=${PROJECT_ID}
+          node_version=22.x
+          directory_listing=false
+          preview_deployments_disabled=true
+          fluid_compute=true
+          git_integration=disabled
+          provisioned_by=github-actions
+          workflow_run_id=${GITHUB_RUN_ID}
+          result=success
+          EOF
+
+      - name: Upload bootstrap evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vercel-staging-bootstrap
+          path: evidence/vercel-staging-bootstrap.txt
+          if-no-files-found: error
+          retention-days: 90
