@@ -138,6 +138,13 @@ function requireDatabaseUrl() {
     );
   }
 
+  if (!parsed.username || !parsed.password) {
+    throw databaseConfigurationError(
+      'MVT_DB_CREDENTIAL_MISSING',
+      'DATABASE_URL must include application credentials',
+    );
+  }
+
   return value;
 }
 

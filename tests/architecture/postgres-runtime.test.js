@@ -29,6 +29,8 @@ test('PostgreSQL runtime adapter encapsulates pooling, channel binding and trans
   assert.match(source, /enableChannelBinding:\s*true/);
   assert.match(source, /attachDatabasePool\(pool\)/);
   assert.match(source, /process\.env\.DATABASE_URL/);
+  assert.match(source, /!parsed\.username\s*\|\|\s*!parsed\.password/);
+  assert.match(source, /MVT_DB_CREDENTIAL_MISSING/);
   assert.match(source, /client\.query\('BEGIN'\)/);
   assert.match(source, /client\.query\('COMMIT'\)/);
   assert.match(source, /client\.query\('ROLLBACK'\)/);
