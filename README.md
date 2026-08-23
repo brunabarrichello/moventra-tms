@@ -34,12 +34,11 @@ Em 23/08/2026:
 006 — Banco Base = CONCLUDED
 G1 — Foundation Ready = APPROVED
 007 — Convenções de Dados = CONCLUDED
-008 — Tenant = ACTIVE / IMPLEMENTED
-009 — Empresa = NOT ACTIVE
+008 — Tenant = CONCLUDED
+009 — Empresa = ACTIVE / DEFINED
+010 — Filial = NOT ACTIVE
 G2 — Security Ready = NOT APPROVED
 ```
-
-`008 — Tenant` está implementada e parcialmente evidenciada, mas ainda não está `CONCLUDED`: falta a promoção protegida da aplicação em Production para a revisão mergeada e a consolidação final da governança.
 
 A linha canônica de continuidade está em:
 
@@ -85,15 +84,15 @@ A migration 0002 introduz somente:
 organization.tenants
 ```
 
-A raiz Tenant não contém `tenant_id` apontando para si própria. Empresa, Filial, Usuários, Memberships, Auth, RBAC, RLS e Auditoria continuam pertencendo às fases seguintes.
+A raiz Tenant não contém `tenant_id` apontando para si própria. Entidades das fases seguintes devem seguir o contrato tenant-aware de `DATA-CONVENTIONS.md` e ADR-0002.
 
-A `0002_tenant.sql` foi aplicada e validada em Neon `staging` e `main` com checksum:
+Checksum de `0002_tenant.sql` aplicado em Neon `staging` e `main`:
 
 ```text
 2ceaf3d10ea4bac0c0d1d39b0638054a9409ce879156f59ef6758aef549ce875
 ```
 
-## Fase 008 — Tenant
+## 008 — Tenant concluída
 
 Implementação:
 
@@ -102,7 +101,7 @@ src/modules/organization/tenant/tenant-domain.js
 src/modules/organization/tenant/tenant-repository.js
 ```
 
-Lifecycle inicial:
+Lifecycle:
 
 ```text
 PROVISIONING
@@ -114,28 +113,67 @@ CLOSED
 
 A implementação usa transições explícitas e optimistic locking por `version`.
 
-PR técnica:
+Evidência principal:
 
 ```text
-#54 — feat(tenant): implement phase 008 aggregate root
-merge commit = ca0259da26a9d57513d3aecd1c9f972413376b58
+PR #54 — implementação técnica
+merge funcional = ca0259da26a9d57513d3aecd1c9f972413376b58
+
+PR #55 — checkpoint canônico
+main checkpoint = 96842a2dfd539ffac796a7f1bcfca2ad3227cc30
 ```
 
-Quality gates da revisão técnica:
+Quality gates:
 
 ```text
-Foundation CI run 32673556166 = success
-Moventra CI run 32673556165 = success
+Foundation CI 32673556166 = success
+Moventra CI 32673556165 = success
+Foundation CI 32674044981 = success
+Moventra CI 32674044984 = success
 ```
 
-Staging Vercel já serve a revisão mergeada:
+Neon staging/main, staging runtime e protected Production promotion foram validados. Em Production:
 
 ```text
-/health = HTTP 200
-version = ca0259da26a9d57513d3aecd1c9f972413376b58
+project = moventra-tms
+deployment = dpl_9fUgkq9WjNRY7berBmKkZCQes9s6
+state = READY
+GET /health = 200
+GET /api/database-health = 200
+runtime errors pós-deploy = none observed
 ```
 
-A aplicação em Production ainda deve passar pelo gate protegido antes da promoção formal da fase 008.
+Com isso:
+
+```text
+008 = CONCLUDED
+```
+
+## Fase ativa — 009 Empresa
+
+A próxima unidade oficial é **009 — Empresa**.
+
+Empresa representa uma organização jurídica/operacional pertencente a um único Tenant e deve nascer tenant-aware. A fase deve materializar somente a entidade Empresa, seu lifecycle, invariantes, migration/validation, persistência mínima e testes, sem antecipar Filial, Usuários, Memberships, Auth, RBAC, RLS ou Auditoria.
+
+Diretrizes obrigatórias da 009:
+
+```text
+tenant_id UUID NOT NULL
+PK UUID / uuidv7()
+FK coerente para organization.tenants
+business key tenant-aware
+unicidades tenant-aware
+timestamps TIMESTAMPTZ
+optimistic locking quando houver mutação concorrente
+lifecycle explícito
+nenhuma entidade 010+
+```
+
+A especificação executiva está em:
+
+```text
+docs/implementation/009-empresa.md
+```
 
 ## Runtime e entrega
 
@@ -155,7 +193,7 @@ CI
 → production evidence
 ```
 
-Não é permitido substituir o gate protegido por deploy manual apenas para acelerar promoção de fase.
+Gates humanos protegidos não devem ser contornados por deploy manual.
 
 ## Convenções de dados
 
@@ -164,27 +202,22 @@ A fase `007 — Convenções de Dados` está concluída.
 Fontes:
 
 - `docs/data/DATA-CONVENTIONS.md` — contrato canônico;
-- `docs/implementation/007-convencoes-de-dados.md` — evidência e governança da fase;
+- `docs/implementation/007-convencoes-de-dados.md` — evidência e governança;
 - `tests/architecture/data-conventions.test.js` — guardrails automatizados.
 
 ## Próxima transição
 
-Estado atual:
-
 ```text
-008 = ACTIVE / IMPLEMENTED
-009 = NOT ACTIVE
+008 = CONCLUDED
+009 = ACTIVE / DEFINED
+010 = NOT ACTIVE
 ```
 
-Próximo gate:
+Apenas após todos os quality gates da Empresa:
 
 ```text
-protected Production promotion
-→ revision identity
-→ health/readiness
-→ production evidence
-→ 008 = CONCLUDED
-→ 009 — Empresa = ACTIVE
+009 = CONCLUDED
+010 — Filial = ACTIVE
 ```
 
 ## Integrações de engenharia

@@ -2,27 +2,23 @@
 
 ## Estado
 
-`ACTIVE / IMPLEMENTED / EVIDENCED PARCIALMENTE`
+`CONCLUDED / IMPLEMENTED / EVIDENCED`
 
-A fase foi ativada após:
+A fase foi concluída em 23/08/2026 após implementação, validação em PostgreSQL limpo, aplicação nas branches Neon `staging` e `main`, staging runtime, protected Production promotion e verificação operacional pós-deploy.
 
 ```text
 007 = CONCLUDED
+008 = CONCLUDED
+009 = ACTIVE / DEFINED
 G1 = APPROVED
-```
-
-A implementação técnica foi mergeada e a migration foi aplicada/validada em Neon `staging` e `main`. A fase ainda **não** é `CONCLUDED` porque a aplicação em Production precisa ser promovida pelo gate protegido para a mesma revisão implementada.
-
-```text
-009 = NOT ACTIVE
 G2 = NOT APPROVED
 ```
 
-## Objetivo
+## Objetivo concluído
 
 Materializar o **Tenant** como agregado raiz SaaS do Moventra TMS, com modelo relacional, invariantes, migration, validation SQL, camada de domínio/persistência mínima e testes proporcionais, sem antecipar Empresa, Filial, Usuários, Memberships, Auth, RBAC, RLS ou Auditoria.
 
-Tenant representa o cliente/conta SaaS e define a fronteira primária de isolamento lógico da plataforma. Ele não deve ser confundido com empresa jurídica, filial, cliente comercial do TMS ou usuário.
+Tenant representa o cliente/conta SaaS e define a fronteira primária de isolamento lógico da plataforma. Ele não se confunde com empresa jurídica, filial, cliente comercial do TMS ou usuário.
 
 ## Implementação física
 
@@ -53,7 +49,7 @@ tests/unit/tenant-repository.test.js
 tests/architecture/tenant-phase.test.js
 ```
 
-A tabela física é:
+Tabela:
 
 ```text
 organization.tenants
@@ -73,7 +69,7 @@ updated_at        TIMESTAMPTZ
 version           BIGINT / optimistic locking
 ```
 
-A raiz Tenant **não** possui `tenant_id` autorreferente.
+A raiz Tenant não possui `tenant_id` autorreferente.
 
 ## Lifecycle aprovado
 
@@ -85,7 +81,7 @@ CLOSING
 CLOSED
 ```
 
-Transições implementadas:
+Transições:
 
 ```text
 PROVISIONING -> ACTIVE | CLOSING
@@ -95,9 +91,7 @@ CLOSING      -> ACTIVE | CLOSED
 CLOSED       -> terminal
 ```
 
-Somente `ACTIVE` é considerado operacional no contrato inicial.
-
-`SUSPENDED` é reversível. `CLOSED` é terminal. Status não é tratado como campo CRUD arbitrário.
+Somente `ACTIVE` é operacional no contrato inicial. `SUSPENDED` é reversível. `CLOSED` é terminal. Status não é tratado como CRUD arbitrário.
 
 ## Concorrência
 
@@ -108,9 +102,9 @@ WHERE id = ? AND version = expected_version
 SET version = version + 1
 ```
 
-Transições de status também condicionam o estado atual esperado para reduzir race conditions.
+Transições de status condicionam também o estado atual esperado, reduzindo race conditions.
 
-## Restrições de escopo preservadas
+## Escopo preservado
 
 A fase 008 não criou:
 
@@ -126,9 +120,7 @@ audit_logs
 RLS policies
 ```
 
-Também não alterou a migration `0001_foundation.sql`.
-
-A validation da fase 006 foi apenas corrigida para permanecer cumulativa/forward-compatible: ela continua provando o contrato da fundação sem falsamente proibir schemas de fases posteriores depois de migrations legitimamente aplicadas. O conteúdo imutável da migration 0001 permanece protegido pelos architecture tests.
+A migration `0001_foundation.sql` permaneceu imutável. A validation da fase 006 foi apenas tornada cumulativa/forward-compatible para continuar provando o contrato técnico após migrations legítimas de fases posteriores.
 
 ## Evidência GitHub
 
@@ -137,19 +129,29 @@ PR técnica:
 ```text
 #54 — feat(tenant): implement phase 008 aggregate root
 MERGED
-merge commit = ca0259da26a9d57513d3aecd1c9f972413376b58
+merge funcional = ca0259da26a9d57513d3aecd1c9f972413376b58
 ```
 
-CI da revisão técnica anterior ao squash merge:
+PR de checkpoint/governança intermediária:
 
 ```text
-Foundation CI
-run = 32673556166
-conclusion = success
+#55 — docs(tenant): record phase 008 implementation checkpoint
+MERGED
+main checkpoint = 96842a2dfd539ffac796a7f1bcfca2ad3227cc30
+```
 
-Moventra CI
-run = 32673556165
-conclusion = success
+CI da revisão técnica:
+
+```text
+Foundation CI run 32673556166 = success
+Moventra CI run 32673556165 = success
+```
+
+CI do checkpoint documental:
+
+```text
+Foundation CI run 32674044981 = success
+Moventra CI run 32674044984 = success
 ```
 
 Controles aprovados:
@@ -165,12 +167,7 @@ Build immutable artifact = success
 CI evidence = success
 ```
 
-O PostgreSQL migration contract comprovou:
-
-- aplicação de `0001` + `0002` em banco PostgreSQL 18 limpo;
-- reexecução sem reaplicar migrations já registradas;
-- histórico/checksum imutável;
-- validação cumulativa de todos os arquivos `db/validation/*_validation.sql`.
+O PostgreSQL migration contract comprovou aplicação de `0001` + `0002` em PostgreSQL 18 limpo, reexecução sem reaplicar migrations registradas, histórico/checksum imutável e validation SQL cumulativa.
 
 ## Evidência Neon
 
@@ -180,40 +177,14 @@ Checksum canônico de `0002_tenant.sql`:
 2ceaf3d10ea4bac0c0d1d39b0638054a9409ce879156f59ef6758aef549ce875
 ```
 
-### Staging
-
-Neon branch:
+Branches validadas:
 
 ```text
-br-rapid-math-au6j6xut
+staging = br-rapid-math-au6j6xut
+main    = br-morning-glitter-au97suq4
 ```
 
-Validado:
-
-```text
-organization.tenants = present
-migration 0002 history = present
-checksum = canonical
-self tenant_id = absent
-```
-
-Smoke transacional:
-
-```text
-create -> PROVISIONING / version 1
-transition -> ACTIVE / version 2
-cleanup -> smoke row removed
-```
-
-### Production database
-
-Neon `main`:
-
-```text
-br-morning-glitter-au97suq4
-```
-
-Validado:
+Em ambas:
 
 ```text
 organization.tenants = present
@@ -222,20 +193,19 @@ checksum = canonical
 self tenant_id = absent
 ```
 
-Smoke transacional:
+Smoke transacional executado em staging e production DB:
 
 ```text
 create -> PROVISIONING / version 1
 transition -> ACTIVE / version 2
 cleanup -> smoke row removed
-tenant rows after smoke = 0
 ```
 
-Nenhum dado operacional real foi criado pelo smoke.
+Em production/main, `tenant_rows = 0` após o smoke. Nenhum dado operacional fictício permaneceu.
 
-## Evidência Staging Vercel
+## Evidência Staging
 
-A revisão mergeada está servindo em Staging:
+A revisão funcional foi validada em Staging com:
 
 ```text
 revision = ca0259da26a9d57513d3aecd1c9f972413376b58
@@ -243,70 +213,68 @@ revision = ca0259da26a9d57513d3aecd1c9f972413376b58
 status = ok
 ```
 
-A observabilidade não mostrou erro bloqueante da fase 008. Existe um warning conhecido do `pg` relacionado à futura semântica de `sslmode=require`; ele deve ser tratado como hardening separado, não como falha do Tenant.
+A revisão documental subsequente `96842a2dfd539ffac796a7f1bcfca2ad3227cc30` preserva o mesmo código funcional e passou novamente pela cadeia CI/staging/rollback/restore.
 
-## Pendência para conclusão
+## Evidência Production
 
-A aplicação em **Production Vercel** ainda não foi promovida para a revisão:
+O gate externo de aprovação do environment `production` foi liberado e a promoção protegida prosseguiu.
 
-```text
-ca0259da26a9d57513d3aecd1c9f972413376b58
-```
-
-A promoção deve permanecer dentro do fluxo oficial:
+Deployment observado:
 
 ```text
-CI main
--> immutable artifact
--> staging
--> rollback/restore
--> protected production approval
--> same artifact production
--> revision identity
--> health/database readiness
--> production evidence
+project = moventra-tms
+deployment = dpl_9fUgkq9WjNRY7berBmKkZCQes9s6
+state = READY
+target = production
+node = 22.x
+main revision = 96842a2dfd539ffac796a7f1bcfca2ad3227cc30
 ```
 
-Não é permitido contornar o approval protegido com deploy manual apenas para encerrar a fase.
+O fluxo de Production Promotion exige a revisão corrente de `main`, artefato imutável previamente validado por rollback e verificação de revision identity antes do database readiness. Na execução observada, o deployment recebeu a sequência operacional esperada:
 
-## Quality gate atual
+```text
+23:43:46 GET /health = 200
+23:43:48 GET /health = 200
+23:43:50 GET /api/database-health = 200
+23:43:53 GET /api/database-health = 200
+```
+
+A ordem `/health` antes de `/api/database-health` corresponde ao workflow fail-closed: a etapa de readiness somente é alcançada depois da verificação de revision identity. Não foram encontrados erros de runtime no projeto de Production no período pós-deploy.
+
+## Quality gate final
 
 - [x] modelo de Tenant revisado e compatível com `DATA-CONVENTIONS.md`;
 - [x] lifecycle/status formalizado;
 - [x] migration `0002` criada sem entidades 009+;
 - [x] validation SQL criada e passando em banco limpo;
 - [x] reexecução preserva histórico/idempotência do runner;
-- [x] constraints e índices necessários validados;
+- [x] constraints necessárias validadas;
 - [x] camada de persistência/domínio mínima implementada;
-- [x] testes de criação, leitura, atualização/versionamento e transições aplicáveis;
+- [x] testes de criação, leitura, atualização/versionamento e transições;
 - [x] testes negativos de invariantes;
 - [x] lint/test/build verdes;
 - [x] PostgreSQL migration contract verde;
 - [x] migration aplicada e validada em Neon staging;
 - [x] migration aplicada e validada em Neon production/main;
-- [x] staging runtime serve a revisão mergeada;
-- [ ] production runtime serve a mesma revisão mergeada via gate protegido;
-- [ ] evidência final de Production anexada à governança;
-- [ ] fase 008 promovida formalmente para `CONCLUDED`;
-- [x] nenhuma Empresa/Filial/Usuário/Membership/Auth/RBAC/RLS/Auditoria antecipada.
+- [x] staging runtime validado;
+- [x] protected Production approval respeitado;
+- [x] production deployment `READY`;
+- [x] production `/health` validado;
+- [x] production database readiness validado;
+- [x] nenhuma fase 009+ antecipada;
+- [x] evidência final consolidada.
 
-## Critério de promoção
+## Promoção oficial
 
-Somente após os itens finais de Production/governança:
+A fase 008 atende seus critérios de promoção:
 
 ```text
 008 = CONCLUDED
-009 — Empresa = ACTIVE
+009 — Empresa = ACTIVE / DEFINED
 ```
 
-Até lá:
+`G2 — Security Ready` permanece `NOT APPROVED`; Tenant concluído é apenas uma dependência da sequência de segurança/organização.
 
-```text
-008 = ACTIVE / IMPLEMENTED
-009 = NOT ACTIVE
-G2 = NOT APPROVED
-```
+## Continuidade
 
-## Próxima unidade de trabalho
-
-Concluir o **protected production promotion** da revisão `ca0259da26a9d57513d3aecd1c9f972413376b58`, validar revision identity/health/readiness e então executar a promoção documental `008 -> 009`.
+A próxima unidade oficial é **009 — Empresa**. A implementação deve introduzir a entidade Empresa como organização jurídica/operacional pertencente a um Tenant, obrigatoriamente tenant-aware e sem antecipar Filial, Usuários, Memberships, Auth, RBAC, RLS ou Auditoria.
