@@ -39,7 +39,7 @@ jobs:
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ vars.VERCEL_STAGING_PROJECT_ID }}
+      VERCEL_PROJECT_NAME: moventra-tms-staging
       SOURCE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.artifact_run_id }}
       SELECTED_ARTIFACT_NAME: ${{ github.event_name == 'workflow_run' && format('moventra-tms-{0}', github.event.workflow_run.head_sha) || inputs.artifact_name }}
       STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging.vercel.app' || inputs.staging_url }}
@@ -83,7 +83,22 @@ jobs:
           set -euo pipefail
           test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN is required'; exit 1; }
           test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
-          test -n "$VERCEL_PROJECT_ID" || { echo '::error::VERCEL_STAGING_PROJECT_ID is required'; exit 1; }
+          test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
+
+      - name: Resolve current staging Vercel project ID
+        id: vercel-project
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --output /tmp/vercel-project.json --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${VERCEL_TOKEN}" \
+            "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_NAME}?teamId=${VERCEL_ORG_ID}")"
+          test "$status" = "200" || {
+            echo "::error::Vercel staging project ${VERCEL_PROJECT_NAME} is unavailable (HTTP ${status})"
+            exit 1
+          }
+          project_id="$(node --input-type=module -e "import fs from 'node:fs'; const p=JSON.parse(fs.readFileSync('/tmp/vercel-project.json','utf8')); if(!p.id) process.exit(2); process.stdout.write(p.id)")"
+          printf 'VERCEL_PROJECT_ID=%s\n' "$project_id" >> "$GITHUB_ENV"
+          printf 'project_id=%s\n' "$project_id" >> "$GITHUB_OUTPUT"
 
       - name: Verify immutable artifact contract
         id: metadata
@@ -142,6 +157,7 @@ jobs:
           COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
           ARTIFACT_SHA256: ${{ steps.metadata.outputs.artifact_sha256 }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          VERCEL_PROJECT_ID: ${{ steps.vercel-project.outputs.project_id }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -154,6 +170,8 @@ jobs:
           github_artifact_name=${SELECTED_ARTIFACT_NAME}
           commit_sha=${COMMIT_SHA}
           artifact_sha256=${ARTIFACT_SHA256}
+          vercel_project_name=${VERCEL_PROJECT_NAME}
+          vercel_project_id=${VERCEL_PROJECT_ID}
           deployment_url=${DEPLOYMENT_URL}
           stable_url=${STAGING_URL}
           workflow_actor=${GITHUB_ACTOR}
