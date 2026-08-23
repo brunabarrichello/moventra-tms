@@ -2,19 +2,20 @@
 
 ## Estado
 
-`ACTIVE / DEFINED`
+`ACTIVE / IMPLEMENTED / EVIDENCED PARCIALMENTE`
 
-Ativada oficialmente após:
+A fase foi ativada após:
 
 ```text
 007 = CONCLUDED
 G1 = APPROVED
 ```
 
-G2 permanece:
+A implementação técnica foi mergeada e a migration foi aplicada/validada em Neon `staging` e `main`. A fase ainda **não** é `CONCLUDED` porque a aplicação em Production precisa ser promovida pelo gate protegido para a mesma revisão implementada.
 
 ```text
-NOT APPROVED
+009 = NOT ACTIVE
+G2 = NOT APPROVED
 ```
 
 ## Objetivo
@@ -23,34 +24,95 @@ Materializar o **Tenant** como agregado raiz SaaS do Moventra TMS, com modelo re
 
 Tenant representa o cliente/conta SaaS e define a fronteira primária de isolamento lógico da plataforma. Ele não deve ser confundido com empresa jurídica, filial, cliente comercial do TMS ou usuário.
 
-## Fontes obrigatórias
+## Implementação física
 
-- `docs/data/DATA-CONVENTIONS.md`;
-- `docs/architecture/ADR-0002-tenant-isolation.md`;
-- `docs/foundation/IMPLEMENTATION-ORDER.md`;
-- migration framework vigente em `scripts/db/migrate.mjs`.
+Migration:
 
-## Escopo da fase 008
+```text
+db/migrations/0002_tenant.sql
+```
 
-A 008 deve definir e implementar somente os elementos necessários ao ciclo de vida do Tenant:
+Validation SQL:
 
-- identidade técnica UUIDv7;
-- chave/código de negócio estável quando necessário;
-- nome de exibição do tenant;
-- status/lifecycle explícito;
-- timezone padrão do tenant;
-- moeda padrão do tenant quando aplicável à configuração SaaS inicial;
-- timestamps técnicos;
-- optimistic locking quando aplicável;
-- constraints e índices;
-- repository/serviço mínimo necessário para provar persistência e invariantes;
-- testes unitários, de integração e de contrato de banco aplicáveis.
+```text
+db/validation/0002_tenant_validation.sql
+```
 
-O desenho final de campos deve ser validado antes da migration para evitar transformar Tenant em depósito de configurações futuras.
+Domínio/persistência:
 
-## Não escopo
+```text
+src/modules/organization/tenant/tenant-domain.js
+src/modules/organization/tenant/tenant-repository.js
+```
 
-A fase 008 **NÃO DEVE** criar:
+Testes:
+
+```text
+tests/unit/tenant-domain.test.js
+tests/unit/tenant-repository.test.js
+tests/architecture/tenant-phase.test.js
+```
+
+A tabela física é:
+
+```text
+organization.tenants
+```
+
+Campos implementados:
+
+```text
+id                UUID / uuidv7()
+code              business key global estável
+display_name      nome de exibição
+status            lifecycle explícito
+default_timezone  timezone IANA no boundary da aplicação
+default_currency  código de moeda de 3 letras
+created_at        TIMESTAMPTZ
+updated_at        TIMESTAMPTZ
+version           BIGINT / optimistic locking
+```
+
+A raiz Tenant **não** possui `tenant_id` autorreferente.
+
+## Lifecycle aprovado
+
+```text
+PROVISIONING
+ACTIVE
+SUSPENDED
+CLOSING
+CLOSED
+```
+
+Transições implementadas:
+
+```text
+PROVISIONING -> ACTIVE | CLOSING
+ACTIVE       -> SUSPENDED | CLOSING
+SUSPENDED    -> ACTIVE | CLOSING
+CLOSING      -> ACTIVE | CLOSED
+CLOSED       -> terminal
+```
+
+Somente `ACTIVE` é considerado operacional no contrato inicial.
+
+`SUSPENDED` é reversível. `CLOSED` é terminal. Status não é tratado como campo CRUD arbitrário.
+
+## Concorrência
+
+Atualizações mutáveis usam optimistic locking por `version`:
+
+```text
+WHERE id = ? AND version = expected_version
+SET version = version + 1
+```
+
+Transições de status também condicionam o estado atual esperado para reduzir race conditions.
+
+## Restrições de escopo preservadas
+
+A fase 008 não criou:
 
 ```text
 companies
@@ -62,117 +124,175 @@ permissions
 sessions
 audit_logs
 RLS policies
-clientes comerciais
-billing SaaS completo
-feature flags
-configurações hierárquicas completas
 ```
 
-Referências a conceitos futuros podem existir somente como documentação de dependência, sem tabelas, FKs ou APIs antecipadas.
+Também não alterou a migration `0001_foundation.sql`.
 
-## Modelo relacional alvo
+A validation da fase 006 foi apenas corrigida para permanecer cumulativa/forward-compatible: ela continua provando o contrato da fundação sem falsamente proibir schemas de fases posteriores depois de migrations legitimamente aplicadas. O conteúdo imutável da migration 0001 permanece protegido pelos architecture tests.
 
-O schema de domínio para Tenant deve seguir o ADR de tenancy e o contrato de dados. A proposta deve privilegiar um único agregado raiz, sem duplicar dados de Empresa.
+## Evidência GitHub
 
-Requisitos estruturais mínimos:
+PR técnica:
 
 ```text
-PK              = UUID / uuidv7()
-status          = domínio estável e validado
-created_at      = TIMESTAMPTZ NOT NULL
-updated_at      = TIMESTAMPTZ NOT NULL
-version         = BIGINT quando houver edição concorrente
-soft delete     = somente se o lifecycle justificar
+#54 — feat(tenant): implement phase 008 aggregate root
+MERGED
+merge commit = ca0259da26a9d57513d3aecd1c9f972413376b58
 ```
 
-O Tenant é a própria raiz do escopo e, portanto, sua tabela raiz não carrega `tenant_id` apontando para si mesma. Entidades tenant-scoped das fases seguintes carregarão `tenant_id` conforme `DATA-CONVENTIONS.md`.
-
-## Lifecycle
-
-Estados iniciais a validar na implementação:
+CI da revisão técnica anterior ao squash merge:
 
 ```text
-PROVISIONING
-ACTIVE
-SUSPENDED
-CLOSING
-CLOSED
+Foundation CI
+run = 32673556166
+conclusion = success
+
+Moventra CI
+run = 32673556165
+conclusion = success
 ```
 
-A implementação deve decidir formalmente:
-
-- quais transições são válidas;
-- quais estados permitem operação normal;
-- se `CLOSED` é terminal;
-- se suspensão é reversível;
-- como lifecycle se relaciona com exclusão e retenção.
-
-Status não pode ser editado arbitrariamente como CRUD sem validação de transição.
-
-## Invariantes mínimas
-
-A implementação deve garantir:
-
-1. `id` imutável e UUIDv7 quando gerado pelo banco;
-2. business key, se existir, separada da PK;
-3. timezone em identificador IANA válido no boundary da aplicação;
-4. status dentro do domínio aprovado;
-5. timestamps coerentes;
-6. nenhuma relação cross-tenant — ainda que a fase 008 contenha apenas a raiz;
-7. nenhuma FK para entidades de fases 009+;
-8. migration idempotente pelo framework e validation SQL correspondente;
-9. nenhuma alteração destrutiva da migration 0001.
-
-## Migration esperada
-
-A primeira migration de domínio poderá ser:
+Controles aprovados:
 
 ```text
-db/migrations/0002_tenant.sql
+Repository contract = success
+Lint = success
+Tests = success
+Security baseline = success
+PostgreSQL runtime dependencies = success
+PostgreSQL migration contract = success
+Build immutable artifact = success
+CI evidence = success
 ```
 
-com validação correspondente:
+O PostgreSQL migration contract comprovou:
+
+- aplicação de `0001` + `0002` em banco PostgreSQL 18 limpo;
+- reexecução sem reaplicar migrations já registradas;
+- histórico/checksum imutável;
+- validação cumulativa de todos os arquivos `db/validation/*_validation.sql`.
+
+## Evidência Neon
+
+Checksum canônico de `0002_tenant.sql`:
 
 ```text
-db/validation/0002_tenant_validation.sql
+2ceaf3d10ea4bac0c0d1d39b0638054a9409ce879156f59ef6758aef549ce875
 ```
 
-O nome final deve obedecer o padrão do migration framework vigente.
+### Staging
 
-A migration deve criar apenas o schema/tabela/constraints necessários ao Tenant e não pode materializar fases posteriores.
+Neon branch:
 
-## Segurança
+```text
+br-rapid-math-au6j6xut
+```
 
-Mesmo antes de Auth/RBAC/RLS:
+Validado:
 
-- APIs futuras não podem confiar em ID fornecido pelo cliente como autorização;
-- nenhum secret deve ser persistido na tabela de Tenant;
-- dados pessoais devem ser minimizados nesta fase;
-- RLS não deve ser antecipada sem o contexto definido nas fases posteriores;
-- testes devem preparar a futura defesa cross-tenant sem fingir que ela já está implementada.
+```text
+organization.tenants = present
+migration 0002 history = present
+checksum = canonical
+self tenant_id = absent
+```
 
-## Testes e quality gates
+Smoke transacional:
 
-A fase somente poderá ser concluída quando houver evidência de:
+```text
+create -> PROVISIONING / version 1
+transition -> ACTIVE / version 2
+cleanup -> smoke row removed
+```
 
-- [ ] modelo de Tenant revisado e compatível com `DATA-CONVENTIONS.md`;
-- [ ] lifecycle/status formalizado;
-- [ ] migration `0002` criada sem entidades 009+;
-- [ ] validation SQL criada e passando em banco limpo;
-- [ ] reexecução de migration preserva histórico/idempotência do runner;
-- [ ] constraints e índices necessários validados;
-- [ ] camada de persistência/domínio mínima implementada quando necessária;
-- [ ] testes de criação, leitura, atualização/versionamento e transições aplicáveis;
-- [ ] testes negativos de invariantes;
-- [ ] lint/test/build verdes;
-- [ ] PostgreSQL migration contract verde;
-- [ ] documentação atualizada;
-- [ ] CI verde;
-- [ ] nenhuma Empresa/Filial/Usuário/Membership/Auth/RBAC/RLS/Auditoria antecipada.
+### Production database
+
+Neon `main`:
+
+```text
+br-morning-glitter-au97suq4
+```
+
+Validado:
+
+```text
+organization.tenants = present
+migration 0002 history = present
+checksum = canonical
+self tenant_id = absent
+```
+
+Smoke transacional:
+
+```text
+create -> PROVISIONING / version 1
+transition -> ACTIVE / version 2
+cleanup -> smoke row removed
+tenant rows after smoke = 0
+```
+
+Nenhum dado operacional real foi criado pelo smoke.
+
+## Evidência Staging Vercel
+
+A revisão mergeada está servindo em Staging:
+
+```text
+revision = ca0259da26a9d57513d3aecd1c9f972413376b58
+/health = HTTP 200
+status = ok
+```
+
+A observabilidade não mostrou erro bloqueante da fase 008. Existe um warning conhecido do `pg` relacionado à futura semântica de `sslmode=require`; ele deve ser tratado como hardening separado, não como falha do Tenant.
+
+## Pendência para conclusão
+
+A aplicação em **Production Vercel** ainda não foi promovida para a revisão:
+
+```text
+ca0259da26a9d57513d3aecd1c9f972413376b58
+```
+
+A promoção deve permanecer dentro do fluxo oficial:
+
+```text
+CI main
+-> immutable artifact
+-> staging
+-> rollback/restore
+-> protected production approval
+-> same artifact production
+-> revision identity
+-> health/database readiness
+-> production evidence
+```
+
+Não é permitido contornar o approval protegido com deploy manual apenas para encerrar a fase.
+
+## Quality gate atual
+
+- [x] modelo de Tenant revisado e compatível com `DATA-CONVENTIONS.md`;
+- [x] lifecycle/status formalizado;
+- [x] migration `0002` criada sem entidades 009+;
+- [x] validation SQL criada e passando em banco limpo;
+- [x] reexecução preserva histórico/idempotência do runner;
+- [x] constraints e índices necessários validados;
+- [x] camada de persistência/domínio mínima implementada;
+- [x] testes de criação, leitura, atualização/versionamento e transições aplicáveis;
+- [x] testes negativos de invariantes;
+- [x] lint/test/build verdes;
+- [x] PostgreSQL migration contract verde;
+- [x] migration aplicada e validada em Neon staging;
+- [x] migration aplicada e validada em Neon production/main;
+- [x] staging runtime serve a revisão mergeada;
+- [ ] production runtime serve a mesma revisão mergeada via gate protegido;
+- [ ] evidência final de Production anexada à governança;
+- [ ] fase 008 promovida formalmente para `CONCLUDED`;
+- [x] nenhuma Empresa/Filial/Usuário/Membership/Auth/RBAC/RLS/Auditoria antecipada.
 
 ## Critério de promoção
 
-Somente após todos os quality gates:
+Somente após os itens finais de Production/governança:
 
 ```text
 008 = CONCLUDED
@@ -182,10 +302,11 @@ Somente após todos os quality gates:
 Até lá:
 
 ```text
+008 = ACTIVE / IMPLEMENTED
 009 = NOT ACTIVE
 G2 = NOT APPROVED
 ```
 
 ## Próxima unidade de trabalho
 
-Executar um **DELTA AUDIT curto da fase 008** e desenhar a migration `0002_tenant.sql` a partir do contrato canônico, começando pelo modelo relacional e lifecycle antes de escrever código.
+Concluir o **protected production promotion** da revisão `ca0259da26a9d57513d3aecd1c9f972413376b58`, validar revision identity/health/readiness e então executar a promoção documental `008 -> 009`.
