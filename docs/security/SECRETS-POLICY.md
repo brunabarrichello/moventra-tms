@@ -55,23 +55,29 @@ Aplica-se a GitHub Actions/Environments, Neon/PostgreSQL, Vercel, e-mail, SMS, W
 
 Usar **GitHub Environments** para secrets específicos de ambiente e `vars` para identificadores não sensíveis.
 
-Contrato atual da cadeia 004/005:
+Contrato atual da cadeia 004/005/006:
 
 | Ambiente | Nome | Tipo | Consumidor | Observação |
 |---|---|---|---|---|
-| staging | `VERCEL_TOKEN` | secret | Release Gate / Rollback Drill | valor não deve ser exposto |
-| staging | `VERCEL_ORG_ID` | var | Release Gate / Rollback Drill | identificador não sensível |
-| staging | `VERCEL_STAGING_PROJECT_ID` | var | Release Gate / Rollback Drill | identificador não sensível |
+| staging | `VERCEL_TOKEN` | secret | Bootstrap / Release Gate / Rollback Drill | valor não deve ser exposto |
+| staging | `VERCEL_ORG_ID` | var | Bootstrap / Release Gate / Rollback Drill | identificador não sensível |
+| staging | `DATABASE_URL` | secret | Release Gate | fonte protegida para sincronização do runtime Vercel; nunca registrar valor |
 | production | `VERCEL_TOKEN` | secret | Production Promotion | deve ser independente do staging |
 | production | `VERCEL_ORG_ID` | var | Production Promotion | identificador não sensível |
 | production | `VERCEL_PRODUCTION_PROJECT_ID` | var | Production Promotion | identificador não sensível |
 | job | `GITHUB_TOKEN` | ephemeral credential | GitHub REST API | permissões declaradas por workflow |
 
+O staging não depende de um `VERCEL_STAGING_PROJECT_ID` estático. O Project ID corrente é resolvido pelo nome canônico `moventra-tms-staging` após convergência idempotente da política do projeto.
+
 O repositório não deve depender de repository-level secrets para credenciais produtivas quando o consumo é específico de um environment.
 
 ### Banco de dados
 
-`DATABASE_URL` e credenciais equivalentes ficam reservadas para a fase 006. Elas não devem ser adicionadas ao Git antes da definição do banco base e devem ser segregadas por ambiente/branch de banco.
+`DATABASE_URL` é secret de runtime e deve ser segregada por ambiente/branch de banco. Em staging, a cópia mantida no GitHub Environment existe somente como fonte protegida de provisionamento; o Release Gate a sincroniza para a Vercel como variável `sensitive` com target `production`, sem imprimir payload ou resposta que possam conter o valor.
+
+`DATABASE_MIGRATION_URL`, quando utilizada, deve permanecer separada da credencial de runtime e apontar para role de migração com privilégios estritamente necessários. A aplicação em runtime não deve receber credenciais de migração.
+
+Nenhuma connection string real pode ser armazenada no Git, em issues, documentação, artifacts ou logs.
 
 ## 7. Desenvolvimento local
 
@@ -87,6 +93,8 @@ O repositório não deve depender de repository-level secrets para credenciais p
 - `GITHUB_TOKEN` deve usar permissions mínimas por workflow/job;
 - workflows não devem imprimir secrets nem passá-los como argumentos de linha de comando quando existir alternativa por environment/stdin;
 - falha na resolução de secret obrigatório deve resultar em fail-closed;
+- sincronizações de secrets para providers externos devem usar payload temporário com permissões restritas e eliminar arquivos temporários ao final;
+- respostas de APIs de secrets não devem ser impressas quando puderem conter valores sensíveis;
 - artifacts de evidência podem conter somente metadata não secreta, como nome lógico, hash/digest, actor, run ID e estado.
 
 ## 9. Rotação e revogação
