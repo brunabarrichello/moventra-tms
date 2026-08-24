@@ -2,84 +2,36 @@
 
 ## Estado
 
-`ACTIVE / DEFINED`
+`CONCLUDED`
 
-Ativada oficialmente após:
+Concluída oficialmente após implementação, validação e promoção protegida em Production da revisão funcional:
+
+```text
+3a3980a88ee39f63985da8358d1d88b6faf0a526
+```
+
+Transição oficial:
 
 ```text
 008 — Tenant = CONCLUDED
+009 — Empresa = CONCLUDED
+010 — Filial = ACTIVE / DEFINED
 G1 = APPROVED
-```
-
-Permanecem:
-
-```text
-010 — Filial = NOT ACTIVE
 G2 = NOT APPROVED
 ```
 
-## Objetivo
+## Objetivo concluído
 
-Materializar **Empresa** como organização jurídica/operacional pertencente a um Tenant do Moventra TMS.
+A fase 009 materializou **Empresa** como organização jurídica/operacional pertencente a exatamente um Tenant do Moventra TMS.
 
-Empresa é tenant-scoped e representa a pessoa jurídica ou unidade empresarial de nível corporativo sob a qual operações, contratos, documentos, faturamento e filiais poderão futuramente ser organizados. Ela não se confunde com:
+Empresa permanece distinta de:
 
 - Tenant — conta/raiz SaaS;
 - Filial — unidade organizacional subordinada à Empresa, fase 010;
 - cliente comercial do TMS — entidade futura do domínio CRM/Comercial;
 - usuário/membership — identidade e vínculo de acesso, fases 011/012.
 
-## Fontes obrigatórias
-
-- `docs/data/DATA-CONVENTIONS.md`;
-- `docs/architecture/ADR-0002-tenant-isolation.md`;
-- `docs/implementation/008-tenant.md`;
-- `docs/foundation/IMPLEMENTATION-ORDER.md`;
-- migration framework em `scripts/db/migrate.mjs`.
-
-## Escopo da fase 009
-
-A fase deve implementar somente o agregado/entidade Empresa e os artefatos mínimos para provar suas invariantes:
-
-- identidade técnica UUIDv7;
-- `tenant_id UUID NOT NULL`;
-- business key estável e única dentro do Tenant;
-- nome jurídico e nome de exibição/fantasia quando aplicável;
-- país de registro em código ISO 3166-1 alpha-2;
-- identificador fiscal primário genérico/jurisdicional quando informado;
-- lifecycle/status explícito;
-- overrides opcionais de timezone e moeda, herdando Tenant quando ausentes;
-- timestamps técnicos;
-- optimistic locking;
-- constraints e índices tenant-aware;
-- FK para Tenant;
-- chave candidata `(tenant_id, id)` para FKs tenant-aware das fases seguintes;
-- migration e validation SQL;
-- domínio/persistência mínima;
-- testes unitários, negativos e de contrato de banco.
-
-## Não escopo
-
-A fase 009 **NÃO DEVE** criar:
-
-```text
-branches
-users
-memberships
-roles
-permissions
-sessions
-audit_logs
-RLS policies
-customers
-contracts
-billing entities
-fiscal documents
-```
-
-Também não deve criar tabelas de endereço, contatos ou múltiplas inscrições fiscais sem uma decisão própria de domínio. Esses conceitos poderão ser adicionados nas fases/domínios adequados, evitando transformar Empresa em depósito de dados futuros.
-
-## Modelo relacional alvo
+## Modelo físico implementado
 
 Tabela:
 
@@ -87,42 +39,51 @@ Tabela:
 organization.companies
 ```
 
-Estrutura recomendada para implementação:
-
-| Campo | Regra |
-|---|---|
-| `id` | `UUID NOT NULL DEFAULT uuidv7()`; PK imutável |
-| `tenant_id` | `UUID NOT NULL`; FK para `organization.tenants(id)` |
-| `code` | business key estável; lowercase; única por Tenant |
-| `legal_name` | nome jurídico; obrigatório; normalizado no boundary |
-| `display_name` | nome de exibição/fantasia; opcional |
-| `registration_country` | ISO 3166-1 alpha-2, uppercase |
-| `primary_tax_identifier_type` | tipo jurisdicional opcional, ex.: `CNPJ`, `EIN`, `VAT`; sem enum PostgreSQL rígido |
-| `primary_tax_identifier` | valor normalizado opcional; deve ser pareado com o tipo |
-| `status` | lifecycle explícito |
-| `default_timezone` | override IANA opcional; `NULL` herda Tenant |
-| `default_currency` | override ISO 4217 opcional; `NULL` herda Tenant |
-| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` |
-| `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` |
-| `version` | `BIGINT NOT NULL DEFAULT 1`; optimistic locking |
-
-A migration deve incluir:
+Migration:
 
 ```text
-PK (id)
-FK (tenant_id) -> organization.tenants(id)
-UNIQUE (tenant_id, id)
-UNIQUE (tenant_id, code)
-INDEX (tenant_id, status)
+db/migrations/0003_company.sql
 ```
 
-Quando `primary_tax_identifier` existir, sua unicidade deve ser tenant-aware e jurisdicional, preferencialmente por índice/constraint parcial equivalente a:
+Validation SQL:
 
 ```text
-(tenant_id, registration_country, primary_tax_identifier_type, primary_tax_identifier)
+db/validation/0003_company_validation.sql
 ```
 
-O valor deve ser persistido normalizado. Regras de validação específicas de CNPJ/EIN/VAT pertencem ao boundary/domínio e não devem ser codificadas como regex universal no banco.
+Domínio/persistência:
+
+```text
+src/modules/organization/company/company-domain.js
+src/modules/organization/company/company-repository.js
+```
+
+Testes:
+
+```text
+tests/unit/company-domain.test.js
+tests/unit/company-repository.test.js
+tests/architecture/company-phase.test.js
+```
+
+Campos materializados:
+
+```text
+id                          UUID / uuidv7()
+tenant_id                   UUID NOT NULL
+code                        business key tenant-aware
+legal_name                  nome jurídico
+display_name                nome de exibição opcional
+registration_country        ISO 3166-1 alpha-2
+primary_tax_identifier_type tipo jurisdicional opcional
+primary_tax_identifier      identificador normalizado opcional
+status                      lifecycle explícito
+default_timezone            override opcional; NULL herda Tenant
+default_currency            override opcional; NULL herda Tenant
+created_at                  TIMESTAMPTZ
+updated_at                  TIMESTAMPTZ
+version                     BIGINT / optimistic locking
+```
 
 ## Relação Tenant → Empresa
 
@@ -133,18 +94,48 @@ Tenant 1 ─────── 0..N Empresa
 Empresa N ────── 1 Tenant
 ```
 
-Regras:
+Regras consolidadas:
 
-1. Empresa sempre pertence a exatamente um Tenant;
-2. `tenant_id` é imutável após criação — mover Empresa entre tenants não é operação suportada;
-3. `code` é único somente dentro do Tenant, permitindo o mesmo código em tenants distintos;
-4. o backend nunca deve aceitar `tenant_id` do cliente como autorização suficiente;
-5. ativação operacional de Empresa exige Tenant em estado `ACTIVE` no serviço de domínio;
-6. encerramento/suspensão do Tenant prevalece sobre capacidade operacional da Empresa, mesmo que o status da Empresa permaneça `ACTIVE`.
+1. Empresa pertence a exatamente um Tenant;
+2. `tenant_id` é imutável após criação;
+3. `code` é único dentro do Tenant, não global;
+4. todas as queries de negócio são tenant-scoped;
+5. ativações exigem Tenant operacional (`ACTIVE`);
+6. Tenant não operacional prevalece sobre o status local da Empresa;
+7. futura Filial referencia a Empresa por chave tenant-aware.
 
-## Lifecycle proposto
+## Constraints e índices relevantes
 
-Estados iniciais:
+Implementados:
+
+```text
+PK (id)
+FK (tenant_id) -> organization.tenants(id)
+UNIQUE (tenant_id, id)
+UNIQUE (tenant_id, code)
+INDEX (tenant_id, status)
+UNIQUE parcial tenant-aware para identificador fiscal quando informado
+```
+
+A chave candidata `(tenant_id, id)` foi criada deliberadamente para permitir FKs compostas que preservem o boundary do Tenant nas fases posteriores.
+
+## Identificador fiscal
+
+O modelo central não é acoplado exclusivamente a CNPJ/Brasil.
+
+O contrato utiliza:
+
+```text
+registration_country
+primary_tax_identifier_type
+primary_tax_identifier
+```
+
+Tipo e valor são opcionais, porém pareados. Regras jurisdicionais específicas pertencem ao boundary/domínio e podem evoluir sem transformar o banco central em uma enumeração rígida de países/documentos.
+
+## Lifecycle implementado
+
+Estados:
 
 ```text
 DRAFT
@@ -162,24 +153,11 @@ INACTIVE -> ACTIVE | CLOSED
 CLOSED   -> terminal
 ```
 
-Semântica:
-
-- `DRAFT`: cadastro incompleto ou ainda não liberado para operação;
-- `ACTIVE`: empresa operacional;
-- `INACTIVE`: desativação administrativa reversível;
-- `CLOSED`: encerramento terminal; histórico deve ser preservado.
-
-`status` não pode ser alterado por CRUD arbitrário. A camada de domínio deve validar a transição e o estado do Tenant.
-
-## Exclusão e retenção
-
-A fase não deve usar hard delete como operação normal de Empresa. Empresas participam de relações operacionais, fiscais e financeiras futuras e precisam preservar identidade histórica.
-
-A exclusão lógica não é necessária se `CLOSED` cumprir o lifecycle. Qualquer futura anonimização/retention deve seguir LGPD, obrigações fiscais e `DATA-CONVENTIONS.md` sem destruir referências históricas.
+`status` não é campo CRUD arbitrário. A camada de domínio valida transições e exige Tenant operacional quando uma Empresa é ativada.
 
 ## Concorrência
 
-Toda mutação deve usar optimistic locking:
+Mutações usam optimistic locking:
 
 ```text
 WHERE tenant_id = ?
@@ -188,141 +166,187 @@ WHERE tenant_id = ?
 SET version = version + 1
 ```
 
-Zero linhas atualizadas representa conflito de concorrência/recurso inexistente no escopo e deve ser convertido para erro de domínio/HTTP 409 quando aplicável.
-
-Transições devem condicionar também o `status` esperado quando isso fortalecer a invariante.
+Transições também condicionam o estado esperado. Stale version é conflito de concorrência e não deve sobrescrever silenciosamente alterações concorrentes.
 
 ## Isolamento tenant-aware
 
-Mesmo antes de RLS, toda leitura/mutação de Empresa deve receber o contexto de Tenant explicitamente e consultar por:
+O repository não oferece mutações de negócio por `id` isolado. Leitura e escrita usam explicitamente o contexto de Tenant.
+
+Os testes provaram, entre outros contratos:
 
 ```text
-tenant_id + company_id/business key
+mesmo code em tenants diferentes = permitido
+mesmo code no mesmo tenant = rejeitado
+tenant incorreto não lê/altera Empresa
+optimistic locking = enforced
+tenant_id = não mutável
 ```
 
-Repository methods não devem oferecer variantes inseguras de atualização por `id` isolado.
+RLS permanece fora do escopo até a fase 016; o isolamento lógico de aplicação já é obrigatório e validado no backend.
 
-A futura Filial deverá poder usar FK composta:
+## Evidência GitHub
+
+PR técnica:
 
 ```text
-(tenant_id, company_id)
-    -> organization.companies(tenant_id, id)
+#58 — feat(company): implement phase 009 tenant-aware company
+MERGED
+merge commit = 3a3980a88ee39f63985da8358d1d88b6faf0a526
 ```
 
-Por isso `UNIQUE (tenant_id, id)` é obrigatório na 009.
-
-## Segurança e LGPD
-
-- nenhuma autorização deve depender somente do UUID;
-- nenhum secret deve ser armazenado em `companies`;
-- identificadores fiscais devem ser minimizados e protegidos conforme classificação de dados;
-- logs não devem despejar payload completo de Empresa sem necessidade;
-- RLS permanece fora de escopo até a fase 016;
-- testes da 009 devem provar que repository updates não cruzam `tenant_id`.
-
-## Migration esperada
+CI da PR técnica:
 
 ```text
-db/migrations/0003_company.sql
+Foundation CI
+run = 32675529694
+conclusion = success
+
+Moventra CI
+run = 32675529687
+conclusion = success
 ```
 
-Validation SQL:
+Quality gates aprovados:
 
 ```text
-db/validation/0003_company_validation.sql
+Repository contract = success
+PostgreSQL runtime dependencies = success
+Security baseline = success
+Lint = success
+Tests = success
+PostgreSQL migration contract = success
+Build immutable artifact = success
+CI evidence = success
 ```
 
-A migration deve criar somente artefatos pertencentes à 009 e não pode alterar migrations 0001/0002 já aplicadas.
+## Evidência Neon
 
-## Domínio/persistência esperados
-
-Sem introduzir ORM ou nova infraestrutura:
+Migration 0003 aplicada e validada em:
 
 ```text
-src/modules/organization/company/company-domain.js
-src/modules/organization/company/company-repository.js
+staging = br-rapid-math-au6j6xut
+main    = br-morning-glitter-au97suq4
 ```
 
-O repository deve operar com `pg`/node-postgres e seguir o padrão estabelecido pelo Tenant.
+Checksum canônico registrado:
 
-## Testes mínimos
+```text
+149bf9550606dd864e42a7955949ac37f3703be20432eea045b7375089de248a
+```
 
-### Domínio
+Validado em ambos os ambientes:
 
-- criação válida em `DRAFT`;
-- normalização/validação de code;
-- validação ISO country;
-- pareamento de tax identifier type/value;
-- timezone IANA opcional;
-- currency opcional;
-- transições válidas;
-- transições inválidas;
-- `CLOSED` terminal;
-- Tenant não ativo impede ativação de Empresa.
+```text
+organization.companies = present
+migration 0003 history = present
+FK Tenant = present
+UNIQUE (tenant_id, id) = present
+INDEX (tenant_id, status) = present
+unique fiscal tenant-aware = present
+```
 
-### Persistência
+Smoke transacional e cross-tenant foi executado com cleanup. Ao final:
 
-- create/read tenant-scoped;
-- update com optimistic locking;
-- stale version rejeitada;
-- transition com tenant + id + versão/status;
-- mesmo `code` permitido em tenants diferentes;
-- mesmo `code` rejeitado dentro do mesmo Tenant;
-- update usando tenant incorreto não altera registro;
-- `tenant_id` não é mutável.
+```text
+smoke tenants = 0
+smoke companies = 0
+```
 
-### Banco/arquitetura
+Nenhum dado operacional real foi deixado pelo smoke.
 
-- migration `0003` aplica em banco limpo após 0001/0002;
-- reexecução do runner preserva histórico;
-- validation SQL passa;
-- tabela possui `tenant_id UUID NOT NULL`;
-- FK para Tenant existe;
-- `(tenant_id, id)` é unique;
-- nenhuma tabela/entidade 010+ é criada.
+## Evidência Staging
 
-## Quality gates
+A revisão funcional foi servida em Staging:
 
-A fase somente pode ser concluída quando:
+```text
+revision = 3a3980a88ee39f63985da8358d1d88b6faf0a526
+GET /health = 200
+GET /api/database-health = 200
+```
 
-- [ ] modelo de Empresa revisado e coerente com 007/008/ADR-0002;
-- [ ] lifecycle formalizado;
-- [ ] contrato de identificador fiscal primário definido sem acoplamento exclusivo ao Brasil;
-- [ ] migration `0003` implementada;
-- [ ] validation SQL implementada;
-- [ ] migration executa em PostgreSQL 18 limpo após 0001/0002;
-- [ ] reexecução/histórico de migration validada;
-- [ ] FK Tenant e unicidades tenant-aware validadas;
-- [ ] `(tenant_id, id)` disponível para futuras FKs compostas;
-- [ ] domínio/persistência mínima implementados;
-- [ ] optimistic locking validado;
-- [ ] testes negativos e cross-tenant de repository aprovados;
-- [ ] lint/test/build verdes;
-- [ ] PostgreSQL migration contract verde;
-- [ ] migration aplicada/validada em Neon staging e main;
-- [ ] staging runtime validado;
-- [ ] protected Production promotion concluída sem bypass;
-- [ ] production revision identity/health/readiness validados;
-- [ ] documentação e issue atualizadas;
-- [ ] nenhuma fase 010+ antecipada.
+O warning conhecido do `pg` sobre futura semântica de `sslmode=require` permanece como hardening separado e não bloqueia a fase 009.
 
-## Critério de promoção
+## Evidência Production
 
-Somente após todos os quality gates:
+Após aprovação humana do environment protegido, um novo deployment Production foi observado:
+
+```text
+project = moventra-tms
+deployment = dpl_GARNpGpTwdN3UxBfjpKmgngZHDF5
+state = READY
+target = production
+aliasError = null
+```
+
+Revision identity:
+
+```text
+GET /health = HTTP 200
+version = 3a3980a88ee39f63985da8358d1d88b6faf0a526
+```
+
+Database readiness foi observado no mesmo deployment pelos runtime logs:
+
+```text
+GET /api/database-health = HTTP 200
+```
+
+Observabilidade pós-deploy:
+
+```text
+runtime errors = none observed
+```
+
+O primeiro deploy Production após a tentativa anterior ainda servia a revisão de governança `63fc424...`; esse mismatch foi corretamente bloqueado e não foi aceito como evidência da fase. A fase só foi concluída após o deployment acima servir exatamente a revisão funcional `3a3980a...`.
+
+## Restrições preservadas
+
+A fase 009 não criou nem ativou antecipadamente:
+
+```text
+branches
+users
+memberships
+roles
+permissions
+sessions
+audit_logs
+RLS policies
+```
+
+Também não alterou migrations já aplicadas 0001/0002.
+
+## Quality gate final
+
+- [x] modelo de Empresa coerente com 007/008/ADR-0002;
+- [x] lifecycle formalizado;
+- [x] identificador fiscal genérico/jurisdicional;
+- [x] migration `0003` implementada;
+- [x] validation SQL implementada;
+- [x] migration validada em PostgreSQL 18 limpo após 0001/0002;
+- [x] reexecução/histórico idempotente validado;
+- [x] FK Tenant e unicidades tenant-aware validadas;
+- [x] `(tenant_id, id)` disponível para FKs compostas;
+- [x] domínio/persistência mínima implementados;
+- [x] optimistic locking validado;
+- [x] testes negativos e cross-tenant aprovados;
+- [x] lint/test/build verdes;
+- [x] PostgreSQL migration contract verde;
+- [x] migration aplicada/validada em Neon staging e main;
+- [x] staging runtime validado;
+- [x] protected Production promotion concluída sem bypass;
+- [x] Production revision identity/health/readiness validados;
+- [x] evidência final registrada;
+- [x] nenhuma fase 010+ antecipada durante a implementação da 009.
+
+## Promoção
+
+Resultado oficial:
 
 ```text
 009 = CONCLUDED
 010 — Filial = ACTIVE / DEFINED
-```
-
-Até lá:
-
-```text
-009 = ACTIVE
-010 = NOT ACTIVE
 G2 = NOT APPROVED
 ```
 
-## Próxima unidade de trabalho
-
-Executar um DELTA AUDIT da 009 contra o código/migrations atuais e implementar `0003_company.sql`, validation SQL, domínio, repository e testes sem antecipar Filial.
+O commit `3a3980a88ee39f63985da8358d1d88b6faf0a526` é a revisão funcional/runtime que fecha a fase 009. Commits posteriores exclusivamente de governança/documentação não invalidam a evidência funcional já produzida; devem seguir a cadeia normal de CI/release sem criar um ciclo infinito de identidade de revisão.
