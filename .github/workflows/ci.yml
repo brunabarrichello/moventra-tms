@@ -47,6 +47,8 @@ jobs:
             "src/modules/organization/company/company-repository.js"
             "src/modules/organization/branch/branch-domain.js"
             "src/modules/organization/branch/branch-repository.js"
+            "src/modules/identity/user/user-domain.js"
+            "src/modules/identity/user/user-repository.js"
             "api/database-health.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
@@ -57,10 +59,12 @@ jobs:
             "db/migrations/0002_tenant.sql"
             "db/migrations/0003_company.sql"
             "db/migrations/0004_branch.sql"
+            "db/migrations/0005_user.sql"
             "db/validation/0001_foundation_validation.sql"
             "db/validation/0002_tenant_validation.sql"
             "db/validation/0003_company_validation.sql"
             "db/validation/0004_branch_validation.sql"
+            "db/validation/0005_user_validation.sql"
             ".github/workflows/release-gate.yml"
             ".github/workflows/rollback-drill.yml"
             ".github/workflows/production-promotion.yml"
@@ -72,6 +76,7 @@ jobs:
             "docs/implementation/008-tenant.md"
             "docs/implementation/009-empresa.md"
             "docs/implementation/010-filial.md"
+            "docs/implementation/011-usuarios.md"
           )
 
           for file in "${required_files[@]}"; do
@@ -166,6 +171,7 @@ jobs:
           node --input-type=module -e "await import('./src/modules/organization/tenant/tenant-repository.js')"
           node --input-type=module -e "await import('./src/modules/organization/company/company-repository.js')"
           node --input-type=module -e "await import('./src/modules/organization/branch/branch-repository.js')"
+          node --input-type=module -e "await import('./src/modules/identity/user/user-repository.js')"
 
   database-contract:
     name: PostgreSQL migration contract
