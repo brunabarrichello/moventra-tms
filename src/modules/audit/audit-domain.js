@@ -10,20 +10,14 @@ const MAX_DEPTH = 8;
 
 export function normalizeAuditEvent(input) {
   assertRecord(input, 'Audit event');
-  const tenantId = normalizeOptionalUuid(input.tenantId, 'Tenant id');
+  const tenantId = normalizeRequiredUuid(input.tenantId, 'Tenant id');
   const actorUserId = normalizeOptionalUuid(input.actorUserId, 'Actor user id');
   const actorMembershipId = normalizeOptionalUuid(input.actorMembershipId, 'Actor membership id');
   const companyId = normalizeOptionalUuid(input.companyId, 'Company id');
   const branchId = normalizeOptionalUuid(input.branchId, 'Branch id');
 
-  if (actorMembershipId && !tenantId) {
-    throw auditError('MVT_AUDIT_SCOPE_INVALID', 'Actor Membership requires Tenant context');
-  }
-  if (companyId && !tenantId) {
-    throw auditError('MVT_AUDIT_SCOPE_INVALID', 'Company context requires Tenant context');
-  }
-  if (branchId && (!tenantId || !companyId)) {
-    throw auditError('MVT_AUDIT_SCOPE_INVALID', 'Branch context requires Tenant and Company context');
+  if (branchId && !companyId) {
+    throw auditError('MVT_AUDIT_SCOPE_INVALID', 'Branch context requires Company context');
   }
 
   const outcome = requireString(input.outcome, 'Outcome').toUpperCase();
@@ -112,6 +106,13 @@ function normalizeOptionalText(value, maximum) {
     throw auditError('MVT_AUDIT_TEXT_INVALID', 'Audit text exceeds allowed length');
   }
   return normalized;
+}
+
+function normalizeRequiredUuid(value, label) {
+  if (value === null || value === undefined || value === '') {
+    throw auditError('MVT_AUDIT_TENANT_REQUIRED', `${label} is required`);
+  }
+  return normalizeOptionalUuid(value, label);
 }
 
 function normalizeOptionalUuid(value, label) {
