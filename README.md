@@ -19,11 +19,9 @@
 
 O Moventra TMS é uma plataforma SaaS empresarial multi-tenant, multiempresa e multifilial, com RBAC, auditoria, rastreabilidade, segurança por padrão, LGPD, observabilidade, idempotência e isolamento de dados entre tenants.
 
-A arquitetura inicial adota **monólito modular**, organizado por domínios e preparado para extração de serviços somente quando houver necessidade operacional e métricas reais. A decisão está registrada em `docs/architecture/ADR-0001-modular-monolith.md`.
+A arquitetura inicial adota **monólito modular**, organizado por domínios e preparado para extração de serviços somente quando houver necessidade operacional e métricas reais.
 
 ## Estado oficial
-
-Em 23/08/2026:
 
 ```text
 001 — Governança = CONCLUDED
@@ -36,168 +34,162 @@ G1 — Foundation Ready = APPROVED
 007 — Convenções de Dados = CONCLUDED
 008 — Tenant = CONCLUDED
 009 — Empresa = CONCLUDED
-010 — Filial = ACTIVE / DEFINED
-011 — Usuários = NOT ACTIVE
+010 — Filial = CONCLUDED
+011 — Usuários = ACTIVE / DEFINED
+012 — Memberships = NOT ACTIVE
+013 — Auth = NOT ACTIVE
+014 — RBAC = NOT ACTIVE
+015 — Escopo Organizacional = NOT ACTIVE
+016 — RLS / Defesa adicional = NOT ACTIVE
+017 — Auditoria Central = NOT ACTIVE
 G2 — Security Ready = NOT APPROVED
 ```
 
-A linha canônica de continuidade está em:
-
-```text
-docs/foundation/IMPLEMENTATION-ORDER.md
-```
+A linha canônica de continuidade está em `docs/foundation/IMPLEMENTATION-ORDER.md`.
 
 ## Banco e migrations
 
-Provider oficial: Neon Postgres 18.6.
+Provider oficial: Neon PostgreSQL 18.6.
 
-Migrations de domínio vigentes:
+Migrations vigentes:
 
 ```text
 db/migrations/0001_foundation.sql
 db/migrations/0002_tenant.sql
 db/migrations/0003_company.sql
+db/migrations/0004_branch.sql
 ```
 
-Validations:
+Validations correspondentes:
 
 ```text
 db/validation/0001_foundation_validation.sql
 db/validation/0002_tenant_validation.sql
 db/validation/0003_company_validation.sql
+db/validation/0004_branch_validation.sql
 ```
 
-Runner:
+Histórico/checksum é controlado por `moventra_meta.schema_migrations` via `scripts/db/migrate.mjs`.
+
+## Hierarquia organizacional concluída até a fase 010
 
 ```text
-node scripts/db/migrate.mjs
+Tenant
+└── Empresa
+    └── Filial
 ```
 
-Histórico/checksum:
+### 008 — Tenant
+
+`organization.tenants` é a raiz SaaS, com UUIDv7, lifecycle explícito, timezone/moeda padrão, timestamps e optimistic locking. Não possui `tenant_id` autorreferente.
+
+### 009 — Empresa
+
+`organization.companies` pertence a exatamente um Tenant e usa chaves/queries tenant-aware, business key única no Tenant e optimistic locking.
+
+Revisão funcional concluída em Production:
 
 ```text
-moventra_meta.schema_migrations
+3a3980a88ee39f63985da8358d1d88b6faf0a526
 ```
 
-## 008 — Tenant concluída
+### 010 — Filial
 
-Tenant é a raiz SaaS e está materializado em:
-
-```text
-organization.tenants
-```
-
-Principais propriedades:
+`organization.branches` pertence a uma Empresa no mesmo Tenant e reforça a coerência por FK composta:
 
 ```text
-UUIDv7
-business key global estável
-lifecycle explícito
-TIMESTAMPTZ
-optimistic locking
-sem tenant_id autorreferente
-```
-
-A conclusão da 008 foi evidenciada em CI, Neon, Staging e Production protegida.
-
-## 009 — Empresa concluída
-
-Empresa é a organização jurídica/operacional tenant-scoped e está materializada em:
-
-```text
-organization.companies
+(tenant_id, company_id)
+  -> organization.companies(tenant_id, id)
 ```
 
 Contratos principais:
 
 ```text
-tenant_id UUID NOT NULL
-FK -> organization.tenants(id)
-UNIQUE (tenant_id, id)
-UNIQUE (tenant_id, code)
-identificador fiscal jurisdicional opcional
-DRAFT / ACTIVE / INACTIVE / CLOSED
+UNIQUE (tenant_id, company_id, id)
+UNIQUE (tenant_id, company_id, code)
+no máximo uma headquarters por Empresa
+lifecycle DRAFT / ACTIVE / INACTIVE / CLOSED
+ativação exige Tenant e Empresa ACTIVE
 optimistic locking
-repository tenant-scoped
-cross-tenant guardrails
+repository tenant+company-scoped
+cross-tenant e cross-company guardrails
 ```
 
 PR técnica:
 
 ```text
-#58 — feat(company): implement phase 009 tenant-aware company
-merge funcional = 3a3980a88ee39f63985da8358d1d88b6faf0a526
+#61 — feat(branch): implement phase 010 tenant/company-aware branch
+merge funcional = e165a42954aea5c211b3812b5f2e0b34a9b24ada
 ```
 
 CI:
 
 ```text
-Foundation CI 32675529694 = success
-Moventra CI 32675529687 = success
+Foundation CI 32679033828 = success
+Moventra CI 32679033865 = success
 ```
 
-Migration 0003 aplicada/validada em Neon staging e main:
+Migration 0004 aplicada/validada em Neon Staging/Main:
 
 ```text
-checksum = 149bf9550606dd864e42a7955949ac37f3703be20432eea045b7375089de248a
+checksum = ae678058e2adb0f58e116f2e665e4f7a0f3526034313ce08b69c4e889cb69802
 ```
 
-Production final da revisão funcional:
+Production final:
 
 ```text
-project = moventra-tms
-deployment = dpl_GARNpGpTwdN3UxBfjpKmgngZHDF5
-state = READY
-revision = 3a3980a88ee39f63985da8358d1d88b6faf0a526
-GET /health = 200
-GET /api/database-health = 200
-runtime errors pós-deploy = none observed
+stable /health = 200
+stable revision = e165a42954aea5c211b3812b5f2e0b34a9b24ada
+stable /api/database-health = 200 / ready
+runtime errors pós-promoção = none observed
+rollback/restore = validated
 ```
 
 Com isso:
 
 ```text
-009 = CONCLUDED
+010 = CONCLUDED
 ```
 
-## Fase ativa — 010 Filial
+## Fase ativa — 011 Usuários
 
-A próxima unidade oficial é **010 — Filial**.
+A próxima unidade oficial é **011 — Usuários**.
 
-Filial deve representar uma unidade organizacional/operacional de uma Empresa dentro do mesmo Tenant. O modelo deve nascer tenant-aware e preservar coerência entre os três níveis:
+### Princípio de identidade
+
+A identidade de negócio do usuário deve ser global e provider-agnostic.
 
 ```text
-Tenant -> Empresa -> Filial
+User = identidade humana/de negócio canônica
+Membership = vínculo User ↔ Tenant/Empresa/Filial (fase 012)
+Auth = vínculo técnico com provider/credentials/subjects (fase 013)
 ```
 
-Diretrizes obrigatórias da 010:
+Logo, a fase 011 não deve adicionar `tenant_id`, `company_id` ou `branch_id` ao User, nem armazenar password hash, session, OAuth/OIDC subject ou provider id.
+
+Escopo esperado:
 
 ```text
-id UUID / uuidv7()
-tenant_id UUID NOT NULL
-company_id UUID NOT NULL
-FK composta (tenant_id, company_id)
-  -> organization.companies(tenant_id, id)
-business key única por Empresa
+identity.users
+UUIDv7
+email canônico/único
+display name
+locale/timezone opcionais
 lifecycle explícito
-timezone/moeda como overrides opcionais
+timestamps
 optimistic locking
-queries tenant/company-scoped
-cross-tenant e cross-company guardrails
-nenhuma entidade 011+
+migration/validation
+domínio/repository/testes
+nenhuma entidade 012+
 ```
 
-A especificação executiva está em:
-
-```text
-docs/implementation/010-filial.md
-```
+A especificação executiva está em `docs/implementation/011-usuarios.md`.
 
 ## Runtime e entrega
 
 A aplicação utiliza Node `22.x`, `pg`/node-postgres e Vercel Build Output API v3.
 
-A cadeia oficial preserva o mesmo artefato entre staging e production:
+Cadeia oficial:
 
 ```text
 CI
@@ -213,37 +205,37 @@ CI
 
 Gates humanos protegidos não devem ser contornados por deploy manual.
 
-## Convenções de dados
+## Convenções e segurança
 
-A fase `007 — Convenções de Dados` está concluída e continua obrigatória para todas as fases seguintes.
-
-Fontes:
+Fontes canônicas:
 
 - `docs/data/DATA-CONVENTIONS.md`;
 - `docs/architecture/ADR-0002-tenant-isolation.md`;
-- `tests/architecture/data-conventions.test.js`.
+- `docs/security/TENANCY-RBAC-AUDIT.md`;
+- `docs/foundation/IMPLEMENTATION-ORDER.md`.
 
 ## Próxima transição
 
 ```text
-009 = CONCLUDED
-010 = ACTIVE / DEFINED
-011 = NOT ACTIVE
+010 = CONCLUDED
+011 = ACTIVE / DEFINED
+012 = NOT ACTIVE
+G2 = NOT APPROVED
 ```
 
-Somente após todos os quality gates da Filial:
+Somente após todos os quality gates de Usuários:
 
 ```text
-010 = CONCLUDED
-011 — Usuários = ACTIVE
+011 = CONCLUDED
+012 — Memberships = ACTIVE
 ```
 
 ## Integrações de engenharia
 
 - GitHub: código, branches, pull requests, issues e CI/CD;
 - Neon Postgres: banco PostgreSQL e branches de banco;
-- Atlassian Rovo: Jira e Confluence quando utilizados como gestão/conhecimento;
-- Vercel: deploy de staging e production;
+- Atlassian Rovo: gestão/conhecimento em Jira e Confluence;
+- Vercel: deploy de Staging e Production;
 - Google Drive: documentação e artefatos complementares;
 - Sent: SMS, WhatsApp e RCS quando o domínio de comunicação for ativado.
 

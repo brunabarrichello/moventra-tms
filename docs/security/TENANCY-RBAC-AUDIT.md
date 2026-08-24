@@ -2,88 +2,84 @@
 
 ## Status do documento
 
-`TARGET DESIGN / NOT IMPLEMENTED`
+`TARGET DESIGN / PARTIALLY IMPLEMENTED`
 
-Este documento descreve o modelo de segurança organizacional planejado para as fases 008–017. Ele **não representa schema atualmente existente** no banco.
+Este documento descreve o modelo de segurança organizacional das fases 008–017. As fases 008–010 estão concluídas; 011 — Usuários está ativa. Memberships/Auth/RBAC/Escopo/RLS/Auditoria ainda não estão implementados.
 
-Estado canônico em 23/08/2026:
+Estado canônico:
 
 ```text
 G1 = APPROVED
-007 = ACTIVE
-008–017 = NOT ACTIVE / NOT IMPLEMENTED
+008 = CONCLUDED
+009 = CONCLUDED
+010 = CONCLUDED
+011 = ACTIVE / DEFINED
+012–017 = NOT ACTIVE / NOT IMPLEMENTED
 G2 = NOT APPROVED
 ```
 
-## Hierarquia organizacional alvo
+## Hierarquia organizacional implementada
 
 ```text
 Tenant → Empresa → Filial
 ```
 
-O tenant será a fronteira primária de isolamento. Empresas e filiais serão escopos organizacionais internos do tenant, não substitutos do tenant.
+O Tenant é a fronteira primária de isolamento SaaS. Empresas e Filiais são escopos organizacionais internos e preservam coerência tenant-aware por constraints/FKs compostas.
 
-## Estado físico atual do banco
-
-A migration `db/migrations/0001_foundation.sql` é deliberadamente não-domínio e contém somente metadados técnicos da fundação em `moventra_meta`.
-
-No encerramento da fase 006:
+Estruturas existentes:
 
 ```text
-organization schema = absent
-identity schema = absent
-audit schema = absent
-public business tables = 0
+organization.tenants
+organization.companies
+organization.branches
 ```
 
-Portanto, os nomes de entidades abaixo são **modelo futuro**, não tabelas implementadas.
+## Usuário e identidade — decisão da fase 011
 
-## Entidades estruturais planejadas
+A identidade de negócio do Moventra permanece desacoplada de Tenant e da conta técnica de um provider de autenticação.
 
-Quando suas fases forem ativadas, a modelagem deverá contemplar, sem antecipação indevida:
+A fase 011 deverá materializar:
 
-- Tenant;
-- Company/Empresa;
-- Branch/Filial;
-- User;
-- identidades externas do usuário quando necessárias;
-- Membership;
-- Role;
-- Permission;
-- relação Role ↔ Permission;
-- atribuição de Role ao membership/escopo;
-- Audit Log transversal.
+```text
+identity.users
+```
 
-Os nomes físicos, schemas, constraints e detalhes finais serão definidos pelas migrations de cada fase, sob as convenções oficiais vigentes.
+Princípios obrigatórios:
 
-## Usuário e identidade — princípio alvo
+```text
+User é identidade global do SaaS
+User não possui tenant_id/company_id/branch_id
+User não armazena password/session/provider_subject
+User pode futuramente participar de múltiplos Tenants via Membership
+```
 
-A identidade de negócio do Moventra deve permanecer desacoplada da conta técnica de um provider de autenticação.
-
-Quando implementado, o vínculo externo deve permitir mapear `provider + provider_subject` para a identidade de negócio sem tornar o provider a PK canônica do domínio.
+A identidade externa futura deverá mapear `provider + provider_subject` para o User canônico sem tornar o provider a PK do domínio. Esse vínculo pertence à fase 013 — Auth.
 
 ## Membership — princípio alvo
 
-Usuário e tenant devem ser relacionados por membership explícito.
+Usuário e Tenant serão relacionados por Membership explícito na fase 012.
 
-O membership poderá possuir escopo no tenant, empresa ou filial conforme as regras aprovadas. Relações organizacionais deverão preservar coerência tenant-aware por constraints/FKs e autorização backend.
+O Membership poderá possuir escopo organizacional no Tenant, Empresa ou Filial conforme regras aprovadas. Relações deverão preservar coerência tenant-aware por constraints/FKs e autorização no backend.
+
+Não adicionar `tenant_id` diretamente ao User para simular Membership.
 
 ## Autorização — princípio alvo
 
 A autorização deverá combinar:
 
 1. identidade autenticada;
-2. tenant ativo;
-3. membership válida;
-4. roles/permissões;
-5. escopo organizacional;
-6. regras específicas do recurso/domínio.
+2. User operacional;
+3. Tenant operacional;
+4. Membership válida;
+5. roles/permissões;
+6. escopo organizacional;
+7. regras específicas do recurso/domínio.
 
-Nenhuma autorização crítica dependerá somente do frontend.
+Nenhuma autorização crítica dependerá somente do frontend ou de UUID fornecido pelo cliente.
 
 ## RBAC — princípio alvo
 
-Permissões devem representar ações de negócio atômicas, por exemplo:
+Permissões representam ações de negócio atômicas, por exemplo:
 
 ```text
 operations.trip.read
@@ -93,26 +89,39 @@ finance.payment.approve
 
 Roles deverão ser atribuídas dentro de escopo organizacional explícito e não poderão conceder acesso cross-tenant por acidente.
 
-## Isolamento em profundidade — estratégia aprovada
+## Isolamento em profundidade
 
-A estratégia definida na ADR-0002 é:
+A estratégia definida na ADR-0002 permanece:
 
-1. contexto de tenant obrigatório no backend;
+1. contexto de Tenant obrigatório no backend onde o recurso for tenant-scoped;
 2. constraints/FKs tenant-aware;
-3. RBAC e escopo organizacional;
-4. RLS onde aplicável como segunda camada;
+3. Membership/RBAC e escopo organizacional;
+4. RLS onde aplicável como defesa adicional;
 5. testes cross-tenant automatizados;
 6. auditoria de decisões sensíveis e tentativas negadas.
 
-RLS não será ativada antes da existência do modelo tenant-aware, contrato de contexto transacional e testes correspondentes.
+As fases 009/010 já materializam parte do item 2. RLS não será ativada antes da existência do modelo de contexto/autorização e testes correspondentes.
+
+## PII de User
+
+`primary_email` de `identity.users` será PII.
+
+Regras alvo:
+
+- minimização de dados;
+- não registrar e-mail completo desnecessariamente em logs;
+- nenhuma credencial na tabela de User;
+- APIs futuras devem evitar user enumeration;
+- retenção/anonymization deverão respeitar LGPD e integridade histórica;
+- alteração/verificação de e-mail relacionada à autenticação deve ser tratada na fase Auth, sem acoplar a PK do User ao provider.
 
 ## Auditoria — princípio alvo
 
-A futura auditoria transversal deverá registrar, quando aplicável:
+A futura Auditoria Central deverá registrar, quando aplicável:
 
-- ator;
-- tenant;
-- empresa/filial;
+- ator/User;
+- Tenant;
+- Empresa/Filial;
 - ação;
 - entidade;
 - before/after com redaction;
@@ -123,42 +132,36 @@ A futura auditoria transversal deverá registrar, quando aplicável:
 - resultado;
 - timestamp.
 
-A implementação deverá diferenciar:
-
-- Audit Trail;
-- Security Audit;
-- Operational Event Log;
-- Financial/Fiscal Ledger.
-
-Financeiro e Fiscal não devem depender de uma tabela de auditoria genérica para representar ledger.
+A implementação diferenciará Audit Trail, Security Audit, Operational Event Log e ledgers Financeiro/Fiscal.
 
 ## Sequência oficial relacionada
 
 ```text
-007 — Convenções de Dados = ACTIVE
-008 — Tenant
-009 — Empresa
-010 — Filial
-011 — Usuários
-012 — Memberships
-013 — Auth
-014 — RBAC
-015 — Escopo Organizacional
-016 — RLS / Defesa adicional
-017 — Auditoria Central
+008 — Tenant = CONCLUDED
+009 — Empresa = CONCLUDED
+010 — Filial = CONCLUDED
+011 — Usuários = ACTIVE
+012 — Memberships = NOT ACTIVE
+013 — Auth = NOT ACTIVE
+014 — RBAC = NOT ACTIVE
+015 — Escopo Organizacional = NOT ACTIVE
+016 — RLS / Defesa adicional = NOT ACTIVE
+017 — Auditoria Central = NOT ACTIVE
 ```
 
-Nenhuma fase posterior deve ser marcada como implementada apenas porque este target design existe.
+Nenhuma fase posterior deve ser marcada como implementada apenas porque o target design existe.
 
 ## Gate G2
 
-`G2 — Security Ready` permanece pendente até existirem e forem testados:
+`G2 — Security Ready = NOT APPROVED`.
 
+Continua pendente até existirem e forem testados, no mínimo:
+
+- Users;
+- Memberships;
 - autenticação;
-- memberships;
 - RBAC aplicado no backend;
-- isolamento tenant-aware;
-- RLS/segunda camada onde aplicável;
-- testes cross-tenant;
-- auditoria transversal;
-- testes de autorização e auditoria.
+- escopo organizacional;
+- defesa adicional/RLS onde aplicável;
+- testes cross-tenant e de autorização;
+- auditoria transversal.
