@@ -2,18 +2,19 @@
 
 ## Estado
 
-`ACTIVE / FINAL PHASE DO BATCH 012–017`
+`CONCLUDED`
 
-Após o gate técnico desta fase, o batch completo segue para a única promoção Production autorizada.
+Fase final do batch 012–017 concluída após CI, Neon Staging/Main, rollback/restore, aprovação externa do environment protegido e promoção Production da revisão funcional final.
 
 ## Objetivo
 
 Fornecer trilha central, append-only e consultável para decisões de segurança, alterações administrativas e ações críticas, mantendo separação entre Audit Trail, logs operacionais e futuros ledgers Financeiro/Fiscal.
 
-## Modelo
+## Modelo implementado
 
 `audit.audit_events` é explicitamente tenant-scoped e registra:
-- `tenant_id` obrigatório em todos os eventos;
+
+- `tenant_id NOT NULL` em todos os eventos;
 - contexto Empresa/Filial quando aplicável;
 - ator User/Membership quando conhecido;
 - `category`, `action`, entidade e resultado;
@@ -21,39 +22,101 @@ Fornecer trilha central, append-only e consultável para decisões de segurança
 - before/after/metadata estruturados, minimizados e redigidos;
 - timestamp imutável.
 
-Eventos administrativos verdadeiramente globais não são representados por `tenant_id = NULL` nesta tabela. Se essa necessidade surgir, deverá existir um agregado de auditoria administrativa separado, com autorização e política de acesso próprias, sem enfraquecer o isolamento SaaS da trilha tenant-scoped.
+Eventos administrativos verdadeiramente globais não usam `tenant_id = NULL` nesta tabela. Se necessários, deverão constituir agregado administrativo separado, com autorização e políticas próprias.
 
-## Imutabilidade
+## Imutabilidade e LGPD
 
-UPDATE e DELETE são bloqueados por trigger. O repository expõe somente `append`. Correções posteriores devem gerar novos eventos, nunca reescrever histórico.
-
-## Segurança e LGPD
-
+- UPDATE e DELETE são bloqueados por trigger com SQLSTATE `55000`;
+- repository expõe somente `append`;
+- corrections posteriores geram novo evento, nunca reescrevem histórico;
 - passwords, secrets, credentials, tokens, cookies, authorization headers, private keys e DATABASE_URL são redigidos antes da persistência;
-- payloads têm limite de tamanho e profundidade;
-- coletar somente dados necessários à finalidade da auditoria;
-- PII não deve ser copiada integralmente por conveniência;
-- todos os eventos usam `tenant_id NOT NULL` e a RLS da fase 016;
-- o Tenant é derivado do contexto autorizado da requisição/transação, nunca de input não confiável do cliente;
-- consultas tenant-scoped não possuem caminho legítimo para acessar eventos de outro Tenant.
+- payloads possuem limites de tamanho/profundidade;
+- PII deve ser minimizada conforme finalidade;
+- Audit Trail usa RLS tenant-aware e contexto autorizado da fase 016.
 
 ## Coerência organizacional
 
-- `actor_membership_id`, quando informado, é validado por FK composta `(tenant_id, actor_membership_id)`;
-- Empresa é validada por `(tenant_id, company_id)`;
-- Filial é validada por `(tenant_id, company_id, branch_id)`;
+- `actor_membership_id` é validado por `(tenant_id, actor_membership_id)`;
+- Empresa por `(tenant_id, company_id)`;
+- Filial por `(tenant_id, company_id, branch_id)`;
 - Filial exige Empresa no mesmo Tenant.
 
 ## Atomicidade
 
-Chamadores devem injetar a mesma conexão/transação de banco usada na mutação de negócio quando o evento precisa ser atomicamente consistente com a alteração auditada. O evento de auditoria deve fazer commit ou rollback junto com a mutação correspondente quando representar o resultado daquela transação.
+Quando o evento representar o resultado de uma mutação crítica, Audit e mutação de negócio devem usar a mesma conexão/transação, garantindo commit ou rollback conjunto.
 
-## Gate final do batch
+## Migration
 
-Após CI e Neon Staging verdes:
-1. promover migrations pendentes 0007–0011 para Neon Main, em ordem e com checksums imutáveis;
-2. validar banco final;
-3. validar Staging na revisão final;
-4. executar a promoção protegida única para Production;
-5. comprovar revision identity, `/health`, `/api/database-health` e ausência de erros runtime;
-6. concluir 012→017 em ordem e reavaliar `G2 — Security Ready`.
+```text
+migration = db/migrations/0011_audit.sql
+checksum  = 5f982ae3894d48833f27d447d24d932ddb99c3a3d2e6cb13eb823d9d67c86fa9
+```
+
+A migration final foi corrigida antes da promoção para manter `tenant_id NOT NULL`, alinhando a Auditoria às convenções canônicas de isolamento. O domínio também passou a exigir Tenant explicitamente; a convenção não foi relaxada.
+
+## Neon Staging
+
+- migrations 0007–0011 presentes com checksums canônicos;
+- validation 0011 verde;
+- `tenant_id NOT NULL`, trigger append-only e RLS confirmados;
+- smoke transacional inseriu evento, comprovou UPDATE/DELETE bloqueados e realizou rollback;
+- cleanup final: zero registros de smoke.
+
+## Neon Main / Production Database
+
+Migrations 0007–0011 foram promovidas **em ordem** antes do deploy de aplicação final.
+
+Validação final:
+
+```text
+audit.audit_events              = present
+audit tenant_id NOT NULL        = true
+append-only trigger             = present
+audit tenant RLS policy         = present
+security.current_tenant_id()    = present
+tenant_isolation_* policy count = 10
+```
+
+Smoke transacional em Main repetiu o bloqueio de UPDATE/DELETE e terminou com zero dados temporários.
+
+## Staging final e rollback/restore
+
+```text
+initial current = dpl_5YVSGThohdFArhqJ17Q9dQSEdQZv = READY
+rollback        = dpl_6eBXjqEorxDevA5YmwfmiyAsWZpK = READY
+restore         = dpl_47QXsmARhqek91jbyeSJBCM5TKoZ = READY
+```
+
+No deployment corrente inicial, `/health` e `/api/database-health` retornaram 200. Rollback e restore tiveram smoke `/health` 200.
+
+O warning futuro de semântica SSL do pacote `pg` permaneceu não bloqueante porque database-health retornou 200; deve ser tratado como hardening posterior, sem alterar a evidência de readiness desta fase.
+
+## Production final
+
+A aprovação explícita em chat foi seguida pela aprovação externa efetiva do environment protegido `production`. Nenhum bypass foi usado.
+
+```text
+functional/runtime revision = 6b80fe7903b5ba742041508cb7465ff529215139
+Production deployment        = dpl_EHVA4pRhCchcn6Nrn43uTefpUuue
+state                        = READY
+target                       = production
+/health                      = 200 × 2
+/api/database-health         = 200 × 2
+runtime errors               = none observed
+```
+
+A revision identity é garantida pela cadeia de artefato imutável e pelo preflight fail-closed da promoção, que exige rollback evidence da revisão corrente, artefato exato e `current main = restore SHA` antes do job protegido. O body direto de `/health` é protegido por Vercel SSO; disponibilidade/readiness foram confirmadas por runtime logs do deployment exato.
+
+## Resultado
+
+```text
+012 = CONCLUDED
+013 = CONCLUDED
+014 = CONCLUDED
+015 = CONCLUDED
+016 = CONCLUDED
+017 = CONCLUDED
+G2 — Security Ready = APPROVED
+```
+
+A promoção de aplicação Production ocorreu uma única vez no fechamento da 017, conforme governança da Issue #69.

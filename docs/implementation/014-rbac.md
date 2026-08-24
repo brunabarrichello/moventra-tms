@@ -2,9 +2,9 @@
 
 ## Estado
 
-`ACTIVE / BATCH 012–017`
+`CONCLUDED`
 
-A implementação técnica está autorizada sem promoção intermediária de Production. `CONCLUDED` depende da evidência Production final do batch na 017.
+Concluída no fechamento conjunto do batch 012–017 após promoção Production protegida da revisão funcional final.
 
 ## Objetivo
 
@@ -20,33 +20,57 @@ Auth principal
 → autorização da ação
 ```
 
-## Modelo
+## Modelo implementado
 
-- `security.permissions`: catálogo global de permissões atômicas e estáveis, por exemplo `operations.trip.read` e `finance.payment.approve`;
+- `security.permissions`: catálogo global de permissões atômicas e estáveis;
 - `security.roles`: papéis configuráveis por Tenant;
 - `security.role_permissions`: composição Role → Permission com coerência tenant-aware;
 - `security.membership_roles`: atribuição Membership → Role no mesmo Tenant, revogável e versionada.
 
-## Invariantes
+## Invariantes de autorização
 
 - autorização crítica é executada no backend;
 - nenhuma Role ou atribuição cruza Tenants;
 - Membership, Tenant e User devem estar operacionais;
 - Role e Permission devem estar ativas;
 - ausência de grant resulta em deny;
-- UUID vindo do cliente nunca é prova de autorização;
-- escopo Empresa/Filial não é antecipado nesta fase.
+- UUID fornecido pelo cliente não é autorização;
+- escopo Empresa/Filial é resolvido separadamente pela fase 015.
 
-## Concorrência e revogação
+Atribuições possuem lifecycle `ACTIVE → REVOKED`, optimistic locking e unicidade de atribuição ativa Membership/Role.
 
-Atribuições usam optimistic locking e lifecycle `ACTIVE → REVOKED`. Uma atribuição ativa duplicada para a mesma Membership/Role é impedida pelo banco.
+## Migration
 
-## Não escopo
+```text
+migration = db/migrations/0008_rbac.sql
+checksum  = 9071eccc4f7e1a80f4f2ab27bee0e75d1dc84f9e5de52dc36645bce78ca0e6f1
+```
 
-- Company/Branch scope = 015;
-- RLS = 016;
-- Auditoria Central = 017.
+Aplicada e validada em Neon Staging e Main.
 
-## Gate técnico
+## Evidência de conclusão
 
-Migration/validation PostgreSQL 18, domínio/repository, serviço de autorização, testes negativos/cross-tenant e CI devem estar verdes. Neon Staging deve receber a migration. Production permanece deferida conforme Issue #69.
+```text
+batch functional/runtime revision = 6b80fe7903b5ba742041508cb7465ff529215139
+final Foundation CI              = success (#206)
+final Moventra CI                = success (#201)
+Production deployment            = dpl_EHVA4pRhCchcn6Nrn43uTefpUuue
+Production state                 = READY
+/health                          = 200 × 2
+/api/database-health             = 200 × 2
+runtime errors                   = none observed
+```
+
+A fase foi concluída conjuntamente com 012–013 e 015–017, sem deploy Production intermediário específico da 014.
+
+## Critérios finais atendidos
+
+- [x] permission catalog global e roles/grants tenant-scoped;
+- [x] backend deny-by-default;
+- [x] coerência tenant-aware por constraints e queries;
+- [x] lifecycle/revogação e optimistic locking;
+- [x] testes negativos/cross-tenant aprovados;
+- [x] CI e PostgreSQL contract verdes;
+- [x] Neon Staging/Main validados;
+- [x] staging/rollback/restore e Production protegida evidenciados no batch final;
+- [x] health/readiness e ausência de runtime errors comprovados.

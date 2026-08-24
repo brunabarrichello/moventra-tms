@@ -2,316 +2,89 @@
 
 ## Estado
 
-`ACTIVE / DEFINED`
+`CONCLUDED`
 
-Ativada oficialmente após:
+Concluída no fechamento conjunto do batch 012–017 após promoção Production protegida da revisão funcional final.
 
-```text
-011 — Usuários = CONCLUDED
-G1 = APPROVED
-```
+## Objetivo e boundary canônico
 
-Permanecem:
+Membership materializa o vínculo explícito entre uma identidade global `User` e um `Tenant` sem duplicar identidade por organização.
 
 ```text
-013 — Auth = NOT ACTIVE
-014 — RBAC = NOT ACTIVE
-015 — Escopo Organizacional = NOT ACTIVE
-016 — RLS / Defesa adicional = NOT ACTIVE
-017 — Auditoria Central = NOT ACTIVE
-G2 = NOT APPROVED
+User = identidade global/provider-agnostic
+Membership = vínculo User ↔ Tenant
+Auth = identidade técnica de provider — fase 013
+RBAC = papéis/permissões — fase 014
+Escopo Organizacional = acesso a Empresa/Filial — fase 015
 ```
 
-## Objetivo
+A fase não adiciona `tenant_id` ao User nem `company_id`/`branch_id` ao Membership.
 
-Materializar **Membership** como vínculo explícito entre uma identidade global `User` e um `Tenant`, estabelecendo a associação organizacional mínima necessária para as fases seguintes sem antecipar autenticação, RBAC ou escopo de Empresa/Filial.
+## Modelo implementado
 
-Boundary canônico:
+`identity.memberships` possui:
+
+- UUID/UUIDv7 como PK;
+- `tenant_id UUID NOT NULL`;
+- `user_id UUID NOT NULL`;
+- `UNIQUE (tenant_id, id)`;
+- `UNIQUE (tenant_id, user_id)`;
+- FKs para Tenant e User;
+- lifecycle `PENDING / ACTIVE / SUSPENDED / REVOKED`;
+- timestamps e optimistic locking por `version`.
+
+Lifecycle:
 
 ```text
-User
-  = identidade global/provider-agnostic
-
-Membership
-  = vínculo User ↔ Tenant
-
-Auth
-  = provider + subject / credenciais / sessão
-  = fase 013
-
-RBAC
-  = papéis/permissões
-  = fase 014
-
-Escopo Organizacional
-  = acesso/assignment a Empresa e Filial
-  = fase 015
+PENDING   → ACTIVE | REVOKED
+ACTIVE    → SUSPENDED | REVOKED
+SUSPENDED → ACTIVE | REVOKED
+REVOKED   → terminal
 ```
 
-## Decisão arquitetural
+Ativação exige Tenant e User `ACTIVE` e revalida ambos atomicamente na mutação. Membership `ACTIVE` por si só não concede permissão de negócio.
 
-Membership é **tenant-scoped**, mas User permanece global.
+## Persistência e segurança
 
-A fase 012 NÃO adiciona `tenant_id` ao User e NÃO adiciona `company_id`/`branch_id` ao Membership.
+Repositories de negócio exigem Tenant explícito para leitura e mutação. O mesmo Membership ID sob Tenant incorreto não é descoberto. `tenant_id` e `user_id` são imutáveis; mutações usam optimistic locking.
 
-Isso preserva:
+Nenhuma credencial, token, Role, Permission ou escopo de Empresa/Filial pertence à tabela.
 
-- uma única identidade User para múltiplos Tenants;
-- isolamento tenant-aware no vínculo;
-- independência entre membership e autorização por escopo;
-- evolução posterior de RBAC e escopos sem remodelar a identidade global.
-
-## Modelo relacional alvo
-
-Tabela:
+## Migration
 
 ```text
-identity.memberships
+migration = db/migrations/0006_membership.sql
+checksum  = 1196de78f64408d34f3e6353a57e0d68b9d39a51fb4c31a3d2ad9d684985806c
 ```
 
-Estrutura:
+Aplicada e validada em Neon Staging e Main.
 
-| Campo | Regra |
-|---|---|
-| `id` | `UUID NOT NULL DEFAULT uuidv7()`; PK imutável |
-| `tenant_id` | `UUID NOT NULL`; boundary SaaS |
-| `user_id` | `UUID NOT NULL`; identidade global associada |
-| `status` | lifecycle explícito |
-| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` |
-| `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` |
-| `version` | `BIGINT NOT NULL DEFAULT 1`; optimistic locking |
-
-Chaves/índices mínimos:
+## Evidência de conclusão
 
 ```text
-PK (id)
-FK tenant_id -> organization.tenants(id)
-FK user_id -> identity.users(id)
-UNIQUE (tenant_id, id)
-UNIQUE (tenant_id, user_id)
-INDEX (tenant_id, status)
-INDEX (user_id, status)
+batch functional/runtime revision = 6b80fe7903b5ba742041508cb7465ff529215139
+final Foundation CI              = success (#206)
+final Moventra CI                = success (#201)
+Production deployment            = dpl_EHVA4pRhCchcn6Nrn43uTefpUuue
+Production state                 = READY
+/health                          = 200 × 2
+/api/database-health             = 200 × 2
+runtime errors                   = none observed
 ```
 
-`UNIQUE (tenant_id, id)` prepara referências futuras tenant-aware. `UNIQUE (tenant_id, user_id)` garante um único Membership canônico por User/Tenant.
+A fase foi concluída conjuntamente com 013–017 sob a autorização de batch registrada na Issue #69; não houve deploy Production intermediário específico da 012.
 
-## Cardinalidade
+## Quality gates finais
 
-```text
-User 1 ───── 0..N Membership
-Tenant 1 ─── 0..N Membership
-```
-
-Um User pode participar de múltiplos Tenants. Um Tenant pode possuir múltiplos Users por Membership.
-
-## Lifecycle
-
-Estados:
-
-```text
-PENDING
-ACTIVE
-SUSPENDED
-REVOKED
-```
-
-Transições:
-
-```text
-PENDING   -> ACTIVE | REVOKED
-ACTIVE    -> SUSPENDED | REVOKED
-SUSPENDED -> ACTIVE | REVOKED
-REVOKED   -> terminal
-```
-
-Semântica:
-
-- `PENDING`: associação registrada, ainda não operacional; não implica convite ou autenticação;
-- `ACTIVE`: associação operacional;
-- `SUSPENDED`: bloqueio reversível da associação no Tenant;
-- `REVOKED`: encerramento terminal da associação.
-
-Ativação exige simultaneamente:
-
-```text
-Tenant.status = ACTIVE
-User.status = ACTIVE
-```
-
-Membership `ACTIVE` não concede permissão de negócio por si só; RBAC permanece fase 014.
-
-## Concorrência e integridade
-
-Toda mutação usa optimistic locking:
-
-```text
-WHERE tenant_id = ?
-  AND id = ?
-  AND version = expected_version
-SET version = version + 1
-```
-
-Ativação deve revalidar `Tenant.status = ACTIVE` e `User.status = ACTIVE` de forma atômica na mesma atualização, evitando race condition entre leitura de pré-condições e transição.
-
-`tenant_id` e `user_id` são imutáveis. Mover Membership entre Tenant ou User não é update comum.
-
-## Persistência
-
-Repository esperado:
-
-```text
-src/modules/identity/membership/membership-repository.js
-```
-
-Operações mínimas:
-
-```text
-create(tenantId, userId)
-findById(tenantId, id)
-findByUserId(tenantId, userId)
-transitionStatus(tenantId, id, toStatus, expectedVersion)
-```
-
-Toda leitura/mutação de Membership deve exigir `tenant_id` explícito. Não oferecer lookup de negócio por `membership_id` isolado.
-
-Para administração global futura, queries cross-tenant devem existir em adapter/repository explícito e protegido, não reutilizar métodos tenant-scoped de forma ambígua.
-
-## Domínio
-
-Arquivo esperado:
-
-```text
-src/modules/identity/membership/membership-domain.js
-```
-
-Responsabilidades:
-
-- validar lifecycle;
-- expor `isMembershipOperational`;
-- validar pré-condições de ativação;
-- normalizar expected version;
-- produzir erros estáveis `MVT_MEMBERSHIP_*`.
-
-## Não escopo
-
-A fase 012 NÃO cria:
-
-```text
-invitations
-external_identities
-auth_accounts
-passwords
-credentials
-sessions
-refresh_tokens
-roles
-permissions
-role_assignments
-company_scope_assignments
-branch_scope_assignments
-RLS policies
-audit_logs
-```
-
-Também não adiciona `company_id` ou `branch_id` a `identity.memberships`.
-
-## Segurança e LGPD
-
-- Membership referencia `User` por UUID e não deve duplicar e-mail/PII;
-- UUID não é autorização;
-- `tenant_id` vindo do cliente não substitui contexto autorizado;
-- futura API deve ocultar existência de Membership cross-tenant;
-- nenhuma credencial ou token deve existir na tabela;
-- revogação preserva histórico por status terminal, não hard delete operacional.
-
-## Migration esperada
-
-```text
-db/migrations/0006_membership.sql
-```
-
-Validation SQL:
-
-```text
-db/validation/0006_membership_validation.sql
-```
-
-Migration 0006 deve criar somente artefatos da fase 012 e não alterar migrations 0001–0005 já aplicadas.
-
-## Testes mínimos
-
-### Domínio
-
-- lifecycle válido/inválido;
-- `REVOKED` terminal;
-- somente `ACTIVE` operacional;
-- Tenant não ativo impede ativação;
-- User não ativo impede ativação;
-- expected version positivo.
-
-### Persistência
-
-- create tenant-scoped;
-- duplicidade User/Tenant rejeitada;
-- mesmo User em Tenants diferentes permitido;
-- find por id exige tenant correto;
-- find por user exige tenant correto;
-- tenant incorreto não descobre Membership;
-- optimistic locking;
-- stale version rejeitada;
-- ativação atômica exige Tenant e User ACTIVE;
-- `tenant_id` e `user_id` imutáveis.
-
-### Banco/arquitetura
-
-- migration 0006 aplica após 0001–0005 em PostgreSQL 18;
-- reexecução preserva migration history;
-- validation SQL passa;
-- `identity.memberships` existe;
-- `tenant_id` e `user_id` são UUID NOT NULL;
-- FKs para Tenant e User existem;
-- `UNIQUE (tenant_id, id)` existe;
-- `UNIQUE (tenant_id, user_id)` existe;
-- `company_id`/`branch_id` não existem;
-- nenhuma tabela Auth/RBAC/RLS/Audit é criada.
-
-## Quality gates
-
-A fase somente pode ser concluída quando:
-
-- [ ] boundary User/Membership/Auth/RBAC/Escopo revisado;
-- [ ] lifecycle formalizado;
-- [ ] activation preconditions formalizadas;
-- [ ] migration `0006_membership.sql` implementada;
-- [ ] validation SQL implementada;
-- [ ] migration validada em PostgreSQL 18 após 0001–0005;
-- [ ] reexecução/histórico idempotente validado;
-- [ ] domínio/persistência implementados;
-- [ ] optimistic locking validado;
-- [ ] testes cross-tenant e negativos aprovados;
-- [ ] lint/test/build verdes;
-- [ ] PostgreSQL migration contract verde;
-- [ ] migration aplicada e validada em Neon Staging/Main;
-- [ ] staging runtime validado;
-- [ ] rollback/restore validado;
-- [ ] protected Production promotion concluída sem bypass;
-- [ ] Production revision identity/health/readiness validados;
-- [ ] documentação/issue atualizadas;
-- [ ] nenhuma fase 013+ antecipada.
-
-## Critério de promoção
-
-Somente após todos os quality gates:
-
-```text
-012 = CONCLUDED
-013 — Auth = ACTIVE / DEFINED
-```
-
-Até lá:
-
-```text
-012 = ACTIVE
-013 = NOT ACTIVE
-G2 = NOT APPROVED
-```
+- [x] boundary User/Membership/Auth/RBAC/Escopo revisado;
+- [x] lifecycle e activation preconditions formalizados;
+- [x] migration e validation implementadas;
+- [x] PostgreSQL 18 / migration history validados;
+- [x] domínio/persistência e optimistic locking implementados;
+- [x] testes cross-tenant, negativos e de concorrência aprovados;
+- [x] lint/test/build e PostgreSQL contract verdes;
+- [x] Neon Staging/Main validados;
+- [x] staging runtime, rollback/restore e artifact identity validados no batch final;
+- [x] Production protegida concluída sem bypass;
+- [x] revision identity, health, database readiness e runtime errors validados;
+- [x] governança final registrada.
