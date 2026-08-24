@@ -35,8 +35,9 @@ Em 23/08/2026:
 G1 — Foundation Ready = APPROVED
 007 — Convenções de Dados = CONCLUDED
 008 — Tenant = CONCLUDED
-009 — Empresa = ACTIVE / DEFINED
-010 — Filial = NOT ACTIVE
+009 — Empresa = CONCLUDED
+010 — Filial = ACTIVE / DEFINED
+011 — Usuários = NOT ACTIVE
 G2 — Security Ready = NOT APPROVED
 ```
 
@@ -50,18 +51,20 @@ docs/foundation/IMPLEMENTATION-ORDER.md
 
 Provider oficial: Neon Postgres 18.6.
 
-Foundation:
+Migrations de domínio vigentes:
 
 ```text
 db/migrations/0001_foundation.sql
-db/validation/0001_foundation_validation.sql
+db/migrations/0002_tenant.sql
+db/migrations/0003_company.sql
 ```
 
-Tenant:
+Validations:
 
 ```text
-db/migrations/0002_tenant.sql
+db/validation/0001_foundation_validation.sql
 db/validation/0002_tenant_validation.sql
+db/validation/0003_company_validation.sql
 ```
 
 Runner:
@@ -76,68 +79,76 @@ Histórico/checksum:
 moventra_meta.schema_migrations
 ```
 
-A migration 0001 permanece deliberadamente não-domínio.
+## 008 — Tenant concluída
 
-A migration 0002 introduz somente:
+Tenant é a raiz SaaS e está materializado em:
 
 ```text
 organization.tenants
 ```
 
-A raiz Tenant não contém `tenant_id` apontando para si própria. Entidades das fases seguintes devem seguir o contrato tenant-aware de `DATA-CONVENTIONS.md` e ADR-0002.
-
-Checksum de `0002_tenant.sql` aplicado em Neon `staging` e `main`:
+Principais propriedades:
 
 ```text
-2ceaf3d10ea4bac0c0d1d39b0638054a9409ce879156f59ef6758aef549ce875
+UUIDv7
+business key global estável
+lifecycle explícito
+TIMESTAMPTZ
+optimistic locking
+sem tenant_id autorreferente
 ```
 
-## 008 — Tenant concluída
+A conclusão da 008 foi evidenciada em CI, Neon, Staging e Production protegida.
 
-Implementação:
+## 009 — Empresa concluída
+
+Empresa é a organização jurídica/operacional tenant-scoped e está materializada em:
 
 ```text
-src/modules/organization/tenant/tenant-domain.js
-src/modules/organization/tenant/tenant-repository.js
+organization.companies
 ```
 
-Lifecycle:
+Contratos principais:
 
 ```text
-PROVISIONING
-ACTIVE
-SUSPENDED
-CLOSING
-CLOSED
+tenant_id UUID NOT NULL
+FK -> organization.tenants(id)
+UNIQUE (tenant_id, id)
+UNIQUE (tenant_id, code)
+identificador fiscal jurisdicional opcional
+DRAFT / ACTIVE / INACTIVE / CLOSED
+optimistic locking
+repository tenant-scoped
+cross-tenant guardrails
 ```
 
-A implementação usa transições explícitas e optimistic locking por `version`.
-
-Evidência principal:
+PR técnica:
 
 ```text
-PR #54 — implementação técnica
-merge funcional = ca0259da26a9d57513d3aecd1c9f972413376b58
-
-PR #55 — checkpoint canônico
-main checkpoint = 96842a2dfd539ffac796a7f1bcfca2ad3227cc30
+#58 — feat(company): implement phase 009 tenant-aware company
+merge funcional = 3a3980a88ee39f63985da8358d1d88b6faf0a526
 ```
 
-Quality gates:
+CI:
 
 ```text
-Foundation CI 32673556166 = success
-Moventra CI 32673556165 = success
-Foundation CI 32674044981 = success
-Moventra CI 32674044984 = success
+Foundation CI 32675529694 = success
+Moventra CI 32675529687 = success
 ```
 
-Neon staging/main, staging runtime e protected Production promotion foram validados. Em Production:
+Migration 0003 aplicada/validada em Neon staging e main:
+
+```text
+checksum = 149bf9550606dd864e42a7955949ac37f3703be20432eea045b7375089de248a
+```
+
+Production final da revisão funcional:
 
 ```text
 project = moventra-tms
-deployment = dpl_9fUgkq9WjNRY7berBmKkZCQes9s6
+deployment = dpl_GARNpGpTwdN3UxBfjpKmgngZHDF5
 state = READY
+revision = 3a3980a88ee39f63985da8358d1d88b6faf0a526
 GET /health = 200
 GET /api/database-health = 200
 runtime errors pós-deploy = none observed
@@ -146,33 +157,40 @@ runtime errors pós-deploy = none observed
 Com isso:
 
 ```text
-008 = CONCLUDED
+009 = CONCLUDED
 ```
 
-## Fase ativa — 009 Empresa
+## Fase ativa — 010 Filial
 
-A próxima unidade oficial é **009 — Empresa**.
+A próxima unidade oficial é **010 — Filial**.
 
-Empresa representa uma organização jurídica/operacional pertencente a um único Tenant e deve nascer tenant-aware. A fase deve materializar somente a entidade Empresa, seu lifecycle, invariantes, migration/validation, persistência mínima e testes, sem antecipar Filial, Usuários, Memberships, Auth, RBAC, RLS ou Auditoria.
-
-Diretrizes obrigatórias da 009:
+Filial deve representar uma unidade organizacional/operacional de uma Empresa dentro do mesmo Tenant. O modelo deve nascer tenant-aware e preservar coerência entre os três níveis:
 
 ```text
+Tenant -> Empresa -> Filial
+```
+
+Diretrizes obrigatórias da 010:
+
+```text
+id UUID / uuidv7()
 tenant_id UUID NOT NULL
-PK UUID / uuidv7()
-FK coerente para organization.tenants
-business key tenant-aware
-unicidades tenant-aware
-timestamps TIMESTAMPTZ
-optimistic locking quando houver mutação concorrente
+company_id UUID NOT NULL
+FK composta (tenant_id, company_id)
+  -> organization.companies(tenant_id, id)
+business key única por Empresa
 lifecycle explícito
-nenhuma entidade 010+
+timezone/moeda como overrides opcionais
+optimistic locking
+queries tenant/company-scoped
+cross-tenant e cross-company guardrails
+nenhuma entidade 011+
 ```
 
 A especificação executiva está em:
 
 ```text
-docs/implementation/009-empresa.md
+docs/implementation/010-filial.md
 ```
 
 ## Runtime e entrega
@@ -197,27 +215,27 @@ Gates humanos protegidos não devem ser contornados por deploy manual.
 
 ## Convenções de dados
 
-A fase `007 — Convenções de Dados` está concluída.
+A fase `007 — Convenções de Dados` está concluída e continua obrigatória para todas as fases seguintes.
 
 Fontes:
 
-- `docs/data/DATA-CONVENTIONS.md` — contrato canônico;
-- `docs/implementation/007-convencoes-de-dados.md` — evidência e governança;
-- `tests/architecture/data-conventions.test.js` — guardrails automatizados.
+- `docs/data/DATA-CONVENTIONS.md`;
+- `docs/architecture/ADR-0002-tenant-isolation.md`;
+- `tests/architecture/data-conventions.test.js`.
 
 ## Próxima transição
 
 ```text
-008 = CONCLUDED
-009 = ACTIVE / DEFINED
-010 = NOT ACTIVE
+009 = CONCLUDED
+010 = ACTIVE / DEFINED
+011 = NOT ACTIVE
 ```
 
-Apenas após todos os quality gates da Empresa:
+Somente após todos os quality gates da Filial:
 
 ```text
-009 = CONCLUDED
-010 — Filial = ACTIVE
+010 = CONCLUDED
+011 — Usuários = ACTIVE
 ```
 
 ## Integrações de engenharia
