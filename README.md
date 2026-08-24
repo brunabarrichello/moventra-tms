@@ -7,19 +7,9 @@
 **Identificador curto:** `MVT`  
 **API:** `api.moventra.*`
 
-## Aplicações previstas
-
-- `moventra-web`
-- `moventra-api`
-- `moventra-worker`
-- `moventra-driver`
-- `moventra-portal`
-
 ## Diretrizes arquiteturais
 
-O Moventra TMS é uma plataforma SaaS empresarial multi-tenant, multiempresa e multifilial, com RBAC, auditoria, rastreabilidade, segurança por padrão, LGPD, observabilidade, idempotência e isolamento de dados entre tenants.
-
-A arquitetura inicial adota **monólito modular**, organizado por domínios e preparado para extração de serviços somente quando houver necessidade operacional e métricas reais.
+O Moventra TMS é uma plataforma SaaS empresarial multi-tenant, multiempresa e multifilial, com monólito modular como arquitetura inicial, segurança por padrão, LGPD, observabilidade, idempotência e isolamento tenant-aware.
 
 ## Estado oficial
 
@@ -35,8 +25,8 @@ G1 — Foundation Ready = APPROVED
 008 — Tenant = CONCLUDED
 009 — Empresa = CONCLUDED
 010 — Filial = CONCLUDED
-011 — Usuários = ACTIVE / DEFINED
-012 — Memberships = NOT ACTIVE
+011 — Usuários = CONCLUDED
+012 — Memberships = ACTIVE / DEFINED
 013 — Auth = NOT ACTIVE
 014 — RBAC = NOT ACTIVE
 015 — Escopo Organizacional = NOT ACTIVE
@@ -45,149 +35,103 @@ G1 — Foundation Ready = APPROVED
 G2 — Security Ready = NOT APPROVED
 ```
 
-A linha canônica de continuidade está em `docs/foundation/IMPLEMENTATION-ORDER.md`.
+A linha canônica está em `docs/foundation/IMPLEMENTATION-ORDER.md`.
 
-## Banco e migrations
+## Banco e migrations vigentes
 
 Provider oficial: Neon PostgreSQL 18.6.
-
-Migrations vigentes:
 
 ```text
 db/migrations/0001_foundation.sql
 db/migrations/0002_tenant.sql
 db/migrations/0003_company.sql
 db/migrations/0004_branch.sql
+db/migrations/0005_user.sql
 ```
 
-Validations correspondentes:
+Checksums canônicos de domínio:
 
 ```text
-db/validation/0001_foundation_validation.sql
-db/validation/0002_tenant_validation.sql
-db/validation/0003_company_validation.sql
-db/validation/0004_branch_validation.sql
+0002_tenant.sql  = 2ceaf3d10ea4bac0c0d1d39b0638054a9409ce879156f59ef6758aef549ce875
+0003_company.sql = 149bf9550606dd864e42a7955949ac37f3703be20432eea045b7375089de248a
+0004_branch.sql  = ae678058e2adb0f58e116f2e665e4f7a0f3526034313ce08b69c4e889cb69802
+0005_user.sql    = 11a1c01962f68e04b4519172f6526ee0646e13fdcec142ef4842ea3ea3db8f60
 ```
 
-Histórico/checksum é controlado por `moventra_meta.schema_migrations` via `scripts/db/migrate.mjs`.
-
-## Hierarquia organizacional concluída até a fase 010
+## Hierarquia e identidade já concluídas
 
 ```text
 Tenant
 └── Empresa
     └── Filial
+
+User = identidade global/provider-agnostic
 ```
 
-### 008 — Tenant
+`identity.users` não possui `tenant_id`, `company_id` ou `branch_id`; o vínculo com organização passa a ser responsabilidade explícita de Membership.
 
-`organization.tenants` é a raiz SaaS, com UUIDv7, lifecycle explícito, timezone/moeda padrão, timestamps e optimistic locking. Não possui `tenant_id` autorreferente.
-
-### 009 — Empresa
-
-`organization.companies` pertence a exatamente um Tenant e usa chaves/queries tenant-aware, business key única no Tenant e optimistic locking.
-
-Revisão funcional concluída em Production:
-
-```text
-3a3980a88ee39f63985da8358d1d88b6faf0a526
-```
-
-### 010 — Filial
-
-`organization.branches` pertence a uma Empresa no mesmo Tenant e reforça a coerência por FK composta:
-
-```text
-(tenant_id, company_id)
-  -> organization.companies(tenant_id, id)
-```
-
-Contratos principais:
-
-```text
-UNIQUE (tenant_id, company_id, id)
-UNIQUE (tenant_id, company_id, code)
-no máximo uma headquarters por Empresa
-lifecycle DRAFT / ACTIVE / INACTIVE / CLOSED
-ativação exige Tenant e Empresa ACTIVE
-optimistic locking
-repository tenant+company-scoped
-cross-tenant e cross-company guardrails
-```
+### 011 — Usuários concluída
 
 PR técnica:
 
 ```text
-#61 — feat(branch): implement phase 010 tenant/company-aware branch
-merge funcional = e165a42954aea5c211b3812b5f2e0b34a9b24ada
+#64 — feat(user): implement phase 011 global provider-agnostic user
+merge funcional = 4e4c2c7d3e88d1676a1da52da0dc39d1c555467d
 ```
 
 CI:
 
 ```text
-Foundation CI 32679033828 = success
-Moventra CI 32679033865 = success
+Foundation CI 32680722912 = success
+Moventra CI 32680722872 = success
 ```
 
-Migration 0004 aplicada/validada em Neon Staging/Main:
+Neon Staging/Main:
 
 ```text
-checksum = ae678058e2adb0f58e116f2e665e4f7a0f3526034313ce08b69c4e889cb69802
+identity.users = present
+migration 0005 checksum = canonical
+email unique global = validated
+User sem tenant/company/branch = validated
+smoke PENDING -> ACTIVE/version 2 + cleanup = success
 ```
 
 Production final:
 
 ```text
+deployment = dpl_3rvaEkC4PaRTGPCtqc55yijPfcQf
+state = READY
 stable /health = 200
-stable revision = e165a42954aea5c211b3812b5f2e0b34a9b24ada
+stable revision = 4e4c2c7d3e88d1676a1da52da0dc39d1c555467d
 stable /api/database-health = 200 / ready
 runtime errors pós-promoção = none observed
-rollback/restore = validated
 ```
 
 Com isso:
 
 ```text
-010 = CONCLUDED
+011 = CONCLUDED
 ```
 
-## Fase ativa — 011 Usuários
+## Fase ativa — 012 Memberships
 
-A próxima unidade oficial é **011 — Usuários**.
+Membership passa a materializar o vínculo **User ↔ Tenant** sem duplicar User por tenant e sem antecipar autenticação, RBAC ou escopo organizacional de Empresa/Filial.
 
-### Princípio de identidade
-
-A identidade de negócio do usuário deve ser global e provider-agnostic.
+Boundary obrigatório:
 
 ```text
-User = identidade humana/de negócio canônica
-Membership = vínculo User ↔ Tenant/Empresa/Filial (fase 012)
-Auth = vínculo técnico com provider/credentials/subjects (fase 013)
+User = identidade global
+Membership = vínculo User ↔ Tenant
+Auth = provider/subject/credenciais/sessão — fase 013
+RBAC = papéis/permissões — fase 014
+Company/Branch scope assignments = fase 015
 ```
 
-Logo, a fase 011 não deve adicionar `tenant_id`, `company_id` ou `branch_id` ao User, nem armazenar password hash, session, OAuth/OIDC subject ou provider id.
+A 012 deve nascer tenant-aware, com `tenant_id`, `user_id`, lifecycle explícito, optimistic locking, unicidade de um Membership por User/Tenant e queries sempre tenant-scoped.
 
-Escopo esperado:
-
-```text
-identity.users
-UUIDv7
-email canônico/único
-display name
-locale/timezone opcionais
-lifecycle explícito
-timestamps
-optimistic locking
-migration/validation
-domínio/repository/testes
-nenhuma entidade 012+
-```
-
-A especificação executiva está em `docs/implementation/011-usuarios.md`.
+A especificação executiva está em `docs/implementation/012-memberships.md`.
 
 ## Runtime e entrega
-
-A aplicação utiliza Node `22.x`, `pg`/node-postgres e Vercel Build Output API v3.
 
 Cadeia oficial:
 
@@ -203,40 +147,20 @@ CI
 → production evidence
 ```
 
-Gates humanos protegidos não devem ser contornados por deploy manual.
-
-## Convenções e segurança
-
-Fontes canônicas:
-
-- `docs/data/DATA-CONVENTIONS.md`;
-- `docs/architecture/ADR-0002-tenant-isolation.md`;
-- `docs/security/TENANCY-RBAC-AUDIT.md`;
-- `docs/foundation/IMPLEMENTATION-ORDER.md`.
+Gates humanos protegidos não podem ser contornados por deploy manual.
 
 ## Próxima transição
 
 ```text
-010 = CONCLUDED
-011 = ACTIVE / DEFINED
-012 = NOT ACTIVE
+011 = CONCLUDED
+012 = ACTIVE / DEFINED
+013 = NOT ACTIVE
 G2 = NOT APPROVED
 ```
 
-Somente após todos os quality gates de Usuários:
+Somente após todos os quality gates de Memberships:
 
 ```text
-011 = CONCLUDED
-012 — Memberships = ACTIVE
+012 = CONCLUDED
+013 — Auth = ACTIVE / DEFINED
 ```
-
-## Integrações de engenharia
-
-- GitHub: código, branches, pull requests, issues e CI/CD;
-- Neon Postgres: banco PostgreSQL e branches de banco;
-- Atlassian Rovo: gestão/conhecimento em Jira e Confluence;
-- Vercel: deploy de Staging e Production;
-- Google Drive: documentação e artefatos complementares;
-- Sent: SMS, WhatsApp e RCS quando o domínio de comunicação for ativado.
-
-> Plugins e conectores de engenharia não se tornam automaticamente dependências arquiteturais do TMS. Integrações de produto devem permanecer desacopladas por contratos/adapters.
