@@ -4,7 +4,7 @@
 
 `TARGET DESIGN / PARTIALLY IMPLEMENTED`
 
-Este documento descreve o modelo de segurança organizacional das fases 008–017. As fases 008–010 estão concluídas; 011 — Usuários está ativa. Memberships/Auth/RBAC/Escopo/RLS/Auditoria ainda não estão implementados.
+As fases 008–011 estão concluídas. A fase 012 — Memberships está ativa. Auth/RBAC/Escopo/RLS/Auditoria permanecem não implementados.
 
 Estado canônico:
 
@@ -13,18 +13,18 @@ G1 = APPROVED
 008 = CONCLUDED
 009 = CONCLUDED
 010 = CONCLUDED
-011 = ACTIVE / DEFINED
-012–017 = NOT ACTIVE / NOT IMPLEMENTED
+011 = CONCLUDED
+012 = ACTIVE / DEFINED
+013–017 = NOT ACTIVE / NOT IMPLEMENTED
 G2 = NOT APPROVED
 ```
 
-## Hierarquia organizacional implementada
+## Hierarquia e identidade implementadas
 
 ```text
 Tenant → Empresa → Filial
+User = identidade global/provider-agnostic
 ```
-
-O Tenant é a fronteira primária de isolamento SaaS. Empresas e Filiais são escopos organizacionais internos e preservam coerência tenant-aware por constraints/FKs compostas.
 
 Estruturas existentes:
 
@@ -32,36 +32,48 @@ Estruturas existentes:
 organization.tenants
 organization.companies
 organization.branches
-```
-
-## Usuário e identidade — decisão da fase 011
-
-A identidade de negócio do Moventra permanece desacoplada de Tenant e da conta técnica de um provider de autenticação.
-
-A fase 011 deverá materializar:
-
-```text
 identity.users
 ```
+
+## Membership — decisão da fase 012
+
+Membership materializa exclusivamente o vínculo entre um `User` global e um `Tenant`.
 
 Princípios obrigatórios:
 
 ```text
-User é identidade global do SaaS
-User não possui tenant_id/company_id/branch_id
-User não armazena password/session/provider_subject
-User pode futuramente participar de múltiplos Tenants via Membership
+Membership é tenant-scoped
+um User pode participar de múltiplos Tenants
+um User possui no máximo um Membership por Tenant
+Membership não duplica dados do User
+Membership não contém company_id/branch_id nesta fase
+Membership não contém roles/permissões
+Membership não contém provider subject, credential ou session
 ```
 
-A identidade externa futura deverá mapear `provider + provider_subject` para o User canônico sem tornar o provider a PK do domínio. Esse vínculo pertence à fase 013 — Auth.
+A fase 012 deverá materializar:
 
-## Membership — princípio alvo
+```text
+identity.memberships
+```
 
-Usuário e Tenant serão relacionados por Membership explícito na fase 012.
+Contrato mínimo:
 
-O Membership poderá possuir escopo organizacional no Tenant, Empresa ou Filial conforme regras aprovadas. Relações deverão preservar coerência tenant-aware por constraints/FKs e autorização no backend.
+```text
+id UUID / uuidv7()
+tenant_id UUID NOT NULL
+user_id UUID NOT NULL
+UNIQUE (tenant_id, user_id)
+UNIQUE (tenant_id, id)
+status PENDING / ACTIVE / SUSPENDED / REVOKED
+optimistic locking
+```
 
-Não adicionar `tenant_id` diretamente ao User para simular Membership.
+Ativação exige `Tenant.status = ACTIVE` e `User.status = ACTIVE`.
+
+## Auth — princípio alvo
+
+A futura fase 013 mapeará `provider + provider_subject` para o User canônico sem transformar o provider na PK do domínio e sem contaminar Membership com credenciais/sessões.
 
 ## Autorização — princípio alvo
 
@@ -70,69 +82,37 @@ A autorização deverá combinar:
 1. identidade autenticada;
 2. User operacional;
 3. Tenant operacional;
-4. Membership válida;
+4. Membership ACTIVE;
 5. roles/permissões;
 6. escopo organizacional;
-7. regras específicas do recurso/domínio.
+7. regras específicas do domínio.
 
-Nenhuma autorização crítica dependerá somente do frontend ou de UUID fornecido pelo cliente.
+Nenhuma autorização crítica depende somente do frontend ou de UUID fornecido pelo cliente.
 
-## RBAC — princípio alvo
+## RBAC e Escopo Organizacional
 
-Permissões representam ações de negócio atômicas, por exemplo:
+RBAC permanece fase 014. Escopos de Empresa/Filial e assignments correspondentes permanecem fase 015.
 
-```text
-operations.trip.read
-operations.trip.update
-finance.payment.approve
-```
-
-Roles deverão ser atribuídas dentro de escopo organizacional explícito e não poderão conceder acesso cross-tenant por acidente.
+A decisão de manter `company_id`/`branch_id` fora de `identity.memberships` na 012 evita antecipar o modelo de escopo organizacional e permite evolução independente de memberships e autorizações.
 
 ## Isolamento em profundidade
 
-A estratégia definida na ADR-0002 permanece:
+A estratégia da ADR-0002 permanece:
 
-1. contexto de Tenant obrigatório no backend onde o recurso for tenant-scoped;
+1. contexto de Tenant obrigatório para recursos tenant-scoped;
 2. constraints/FKs tenant-aware;
 3. Membership/RBAC e escopo organizacional;
 4. RLS onde aplicável como defesa adicional;
 5. testes cross-tenant automatizados;
 6. auditoria de decisões sensíveis e tentativas negadas.
 
-As fases 009/010 já materializam parte do item 2. RLS não será ativada antes da existência do modelo de contexto/autorização e testes correspondentes.
+## PII
 
-## PII de User
-
-`primary_email` de `identity.users` será PII.
-
-Regras alvo:
-
-- minimização de dados;
-- não registrar e-mail completo desnecessariamente em logs;
-- nenhuma credencial na tabela de User;
-- APIs futuras devem evitar user enumeration;
-- retenção/anonymization deverão respeitar LGPD e integridade histórica;
-- alteração/verificação de e-mail relacionada à autenticação deve ser tratada na fase Auth, sem acoplar a PK do User ao provider.
+`identity.users.primary_email` é PII. Membership referencia o User por UUID e não deve duplicar e-mail ou outros dados pessoais sem justificativa.
 
 ## Auditoria — princípio alvo
 
-A futura Auditoria Central deverá registrar, quando aplicável:
-
-- ator/User;
-- Tenant;
-- Empresa/Filial;
-- ação;
-- entidade;
-- before/after com redaction;
-- request/correlation/transaction IDs;
-- origem;
-- IP/user agent quando pertinente;
-- motivo;
-- resultado;
-- timestamp.
-
-A implementação diferenciará Audit Trail, Security Audit, Operational Event Log e ledgers Financeiro/Fiscal.
+A futura Auditoria Central deverá registrar ator/User, Tenant, Empresa/Filial quando aplicável, ação, entidade, before/after com redaction, correlation IDs, origem, resultado e timestamp.
 
 ## Sequência oficial relacionada
 
@@ -140,8 +120,8 @@ A implementação diferenciará Audit Trail, Security Audit, Operational Event L
 008 — Tenant = CONCLUDED
 009 — Empresa = CONCLUDED
 010 — Filial = CONCLUDED
-011 — Usuários = ACTIVE
-012 — Memberships = NOT ACTIVE
+011 — Usuários = CONCLUDED
+012 — Memberships = ACTIVE
 013 — Auth = NOT ACTIVE
 014 — RBAC = NOT ACTIVE
 015 — Escopo Organizacional = NOT ACTIVE
@@ -149,19 +129,8 @@ A implementação diferenciará Audit Trail, Security Audit, Operational Event L
 017 — Auditoria Central = NOT ACTIVE
 ```
 
-Nenhuma fase posterior deve ser marcada como implementada apenas porque o target design existe.
-
 ## Gate G2
 
 `G2 — Security Ready = NOT APPROVED`.
 
-Continua pendente até existirem e forem testados, no mínimo:
-
-- Users;
-- Memberships;
-- autenticação;
-- RBAC aplicado no backend;
-- escopo organizacional;
-- defesa adicional/RLS onde aplicável;
-- testes cross-tenant e de autorização;
-- auditoria transversal.
+Continua pendente até existirem e forem testados, no mínimo, Memberships, Auth, RBAC aplicado no backend, escopo organizacional, defesa adicional/RLS quando aplicável, testes de autorização/cross-tenant e auditoria transversal.
