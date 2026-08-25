@@ -51,7 +51,6 @@ jobs:
       PGDATABASE: moventra_jobs_ci
       PGUSER: postgres
       PGPASSWORD: moventra-ci-only
-      DATABASE_URL: postgresql://postgres:moventra-ci-only@127.0.0.1:5432/moventra_jobs_ci
       MOVENTRA_ENV: ci
       MESSAGING_PROVIDER: rabbitmq
       MESSAGING_EXCHANGE: moventra.events.jobsci
@@ -69,6 +68,12 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
+
+      - name: Build ephemeral CI database connection
+        run: |
+          set -euo pipefail
+          printf 'DATABASE_URL=postgresql://%s:%s@%s:%s/%s\n' \
+            "$PGUSER" "$PGPASSWORD" "$PGHOST" "$PGPORT" "$PGDATABASE" >> "$GITHUB_ENV"
 
       - name: Install locked runtime dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
