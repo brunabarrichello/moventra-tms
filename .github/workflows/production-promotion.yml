@@ -279,6 +279,14 @@ jobs:
           ref: ${{ needs.preflight.outputs.commit_sha }}
           persist-credentials: false
 
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install locked messaging smoke dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Capture authoritative environment approval
         id: approval
         env:
@@ -328,6 +336,8 @@ jobs:
             release-artifact
 
       - name: Validate production deployment configuration
+        env:
+          MESSAGING_RABBITMQ_URL: ${{ secrets.MESSAGING_RABBITMQ_URL }}
         run: |
           set -euo pipefail
           test -n "$VERCEL_TOKEN" || { echo '::error::production VERCEL_TOKEN is required'; exit 1; }
@@ -335,6 +345,16 @@ jobs:
           test -n "$VERCEL_PROJECT_ID" || { echo '::error::VERCEL_PRODUCTION_PROJECT_ID is required'; exit 1; }
           test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
           test "$VERCEL_NODE_VERSION" = '22.x' || { echo '::error::production Vercel Node policy must be 22.x'; exit 1; }
+          test -n "$MESSAGING_RABBITMQ_URL" || { echo '::error::MESSAGING_RABBITMQ_URL is required in the protected GitHub production environment'; exit 1; }
+
+      - name: Verify production messaging readiness
+        env:
+          MOVENTRA_ENV: production
+          MESSAGING_PROVIDER: rabbitmq
+          MESSAGING_RABBITMQ_URL: ${{ secrets.MESSAGING_RABBITMQ_URL }}
+          MESSAGING_PREFETCH: 1
+          MESSAGING_PUBLISH_CONFIRM_TIMEOUT_MS: 5000
+        run: node scripts/release/smoke-messaging.mjs
 
       - name: Converge production Vercel project
         id: vercel-project
@@ -441,6 +461,7 @@ jobs:
           vercel_node_version=${NODE_VERSION}
           revision_identity=success
           database_readiness=success
+          messaging_readiness=success
           deployment_url=${DEPLOYMENT_URL}
           stable_url=${PRODUCTION_URL}
           workflow_run_id=${GITHUB_RUN_ID}
