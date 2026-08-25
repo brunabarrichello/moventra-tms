@@ -2,6 +2,8 @@ import {
   classifyDatabaseHealthError,
   getDatabaseHealthSnapshot,
 } from '../src/core/database-health.js';
+import { MethodNotAllowedError } from '../src/core/errors/app-error.js';
+import { handleHttpError } from '../src/http/error-mapper.js';
 import { checkDatabaseReadiness } from '../src/infrastructure/database/postgres.js';
 import { observeHttpRequest } from '../src/infrastructure/observability/http.js';
 import { createLogger } from '../src/infrastructure/observability/logger.js';
@@ -17,10 +19,12 @@ export default async function handler(request, response) {
       response.setHeader('cache-control', 'no-store');
 
       if ((request.method ?? 'GET') !== 'GET') {
-        response.setHeader('allow', 'GET');
-        response.status(405).json({
-          status: 'error',
-          code: 'METHOD_NOT_ALLOWED',
+        handleHttpError({
+          error: new MethodNotAllowedError({ message: 'Only GET is supported by database readiness' }),
+          request,
+          response,
+          instance: '/api/database-health',
+          allow: 'GET',
         });
         return;
       }
