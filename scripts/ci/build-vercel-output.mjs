@@ -29,41 +29,71 @@ await writeFile(
 );
 
 async function buildHealthFunction() {
-  await mkdir(path.join(healthFunctionDir, 'src', 'core'), { recursive: true });
-  await copyFile(
-    path.join(root, 'src', 'core', 'health.js'),
-    path.join(healthFunctionDir, 'src', 'core', 'health.js'),
-  );
+  await copyRuntimeModuleTree(healthFunctionDir, {
+    apiFile: 'health.js',
+    includeDatabase: false,
+  });
 
-  const handler = `import { getHealthSnapshot } from './src/core/health.js';\n\nconst BUILD_VERSION = ${JSON.stringify(commitSha)};\n\nexport default function handler(_request, response) {\n  response.setHeader('cache-control', 'no-store');\n  response.status(200).json(getHealthSnapshot(BUILD_VERSION));\n}\n`;
-  await writeFile(path.join(healthFunctionDir, 'index.js'), handler, 'utf8');
+  await writeFile(
+    path.join(healthFunctionDir, 'index.js'),
+    buildImmutableApiWrapper('./api/health.js'),
+    'utf8',
+  );
   await writeFunctionMetadata(healthFunctionDir);
 }
 
 async function buildDatabaseHealthFunction() {
-  const coreDir = path.join(databaseHealthFunctionDir, 'src', 'core');
-  const databaseDir = path.join(databaseHealthFunctionDir, 'src', 'infrastructure', 'database');
-
-  await mkdir(coreDir, { recursive: true });
-  await mkdir(databaseDir, { recursive: true });
-
-  await copyFile(
-    path.join(root, 'src', 'core', 'database-health.js'),
-    path.join(coreDir, 'database-health.js'),
-  );
-  await copyFile(
-    path.join(root, 'src', 'infrastructure', 'database', 'postgres.js'),
-    path.join(databaseDir, 'postgres.js'),
-  );
-
-  await cp(path.join(root, 'node_modules'), path.join(databaseHealthFunctionDir, 'node_modules'), {
-    recursive: true,
+  await copyRuntimeModuleTree(databaseHealthFunctionDir, {
+    apiFile: 'database-health.js',
+    includeDatabase: true,
   });
 
-  const handler = `import { classifyDatabaseHealthError, getDatabaseHealthSnapshot } from './src/core/database-health.js';\nimport { checkDatabaseReadiness } from './src/infrastructure/database/postgres.js';\n\nconst BUILD_VERSION = ${JSON.stringify(commitSha)};\n\nexport default async function handler(request, response) {\n  response.setHeader('cache-control', 'no-store');\n\n  if ((request.method ?? 'GET') !== 'GET') {\n    response.setHeader('allow', 'GET');\n    response.status(405).json({ status: 'error', code: 'METHOD_NOT_ALLOWED' });\n    return;\n  }\n\n  try {\n    const readiness = await checkDatabaseReadiness();\n    const snapshot = getDatabaseHealthSnapshot(readiness, BUILD_VERSION);\n    response.status(snapshot.status === 'ready' ? 200 : 503).json(snapshot);\n  } catch (error) {\n    const reason = classifyDatabaseHealthError(error);\n    console.error('Database readiness probe failed', { name: error?.name, code: error?.code, reason });\n    response.status(503).json(getDatabaseHealthSnapshot({ ok: false }, BUILD_VERSION, reason));\n  }\n}\n`;
-
-  await writeFile(path.join(databaseHealthFunctionDir, 'index.js'), handler, 'utf8');
+  await writeFile(
+    path.join(databaseHealthFunctionDir, 'index.js'),
+    buildImmutableApiWrapper('./api/database-health.js'),
+    'utf8',
+  );
   await writeFunctionMetadata(databaseHealthFunctionDir);
+}
+
+async function copyRuntimeModuleTree(functionDir, { apiFile, includeDatabase }) {
+  const apiDir = path.join(functionDir, 'api');
+  const coreDir = path.join(functionDir, 'src', 'core');
+  const observabilityDir = path.join(functionDir, 'src', 'infrastructure', 'observability');
+
+  await mkdir(apiDir, { recursive: true });
+  await mkdir(coreDir, { recursive: true });
+  await mkdir(path.dirname(observabilityDir), { recursive: true });
+
+  await copyFile(path.join(root, 'api', apiFile), path.join(apiDir, apiFile));
+  await copyFile(path.join(root, 'src', 'core', 'health.js'), path.join(coreDir, 'health.js'));
+  await cp(
+    path.join(root, 'src', 'infrastructure', 'observability'),
+    observabilityDir,
+    { recursive: true },
+  );
+
+  if (includeDatabase) {
+    await copyFile(
+      path.join(root, 'src', 'core', 'database-health.js'),
+      path.join(coreDir, 'database-health.js'),
+    );
+    const databaseDir = path.join(functionDir, 'src', 'infrastructure', 'database');
+    await mkdir(databaseDir, { recursive: true });
+    await copyFile(
+      path.join(root, 'src', 'infrastructure', 'database', 'postgres.js'),
+      path.join(databaseDir, 'postgres.js'),
+    );
+  }
+
+  // OpenTelemetry is part of both observed functions; keep the prebuilt function self-contained.
+  await cp(path.join(root, 'node_modules'), path.join(functionDir, 'node_modules'), {
+    recursive: true,
+  });
+}
+
+function buildImmutableApiWrapper(apiModule) {
+  return `import handler from ${JSON.stringify(apiModule)};\n\nconst BUILD_VERSION = ${JSON.stringify(commitSha)};\nprocess.env.APP_VERSION = BUILD_VERSION;\n\nexport default handler;\n`;
 }
 
 async function writeFunctionMetadata(functionDir) {
