@@ -21,7 +21,7 @@ DECLARE
   mutable_table TEXT;
   protected_table TEXT;
 BEGIN
-  FOREACH schema_name IN ARRAY ARRAY['organization','identity','security','audit'] LOOP
+  FOREACH schema_name IN ARRAY ARRAY['organization','identity','security','audit','configuration'] LOOP
     IF NOT has_schema_privilege(runtime_role, schema_name, 'USAGE') THEN
       RAISE EXCEPTION 'runtime role lacks USAGE on schema %', schema_name;
     END IF;
@@ -45,7 +45,8 @@ BEGIN
     'security.role_permissions',
     'security.membership_roles',
     'security.organizational_scopes',
-    'security.role_assignment_scopes'
+    'security.role_assignment_scopes',
+    'configuration.settings'
   ] LOOP
     IF NOT has_table_privilege(runtime_role, mutable_table, 'SELECT')
        OR NOT has_table_privilege(runtime_role, mutable_table, 'INSERT')
@@ -66,6 +67,24 @@ BEGIN
     RAISE EXCEPTION 'runtime role must not mutate global permission catalog';
   END IF;
 
+  IF NOT has_table_privilege(runtime_role, 'configuration.definitions', 'SELECT') THEN
+    RAISE EXCEPTION 'runtime role must read global configuration definitions';
+  END IF;
+  IF has_table_privilege(runtime_role, 'configuration.definitions', 'INSERT')
+     OR has_table_privilege(runtime_role, 'configuration.definitions', 'UPDATE')
+     OR has_table_privilege(runtime_role, 'configuration.definitions', 'DELETE') THEN
+    RAISE EXCEPTION 'runtime role must not mutate global configuration definitions';
+  END IF;
+
+  IF NOT has_table_privilege(runtime_role, 'configuration.setting_versions', 'SELECT')
+     OR NOT has_table_privilege(runtime_role, 'configuration.setting_versions', 'INSERT') THEN
+    RAISE EXCEPTION 'runtime role must read and append configuration history';
+  END IF;
+  IF has_table_privilege(runtime_role, 'configuration.setting_versions', 'UPDATE')
+     OR has_table_privilege(runtime_role, 'configuration.setting_versions', 'DELETE') THEN
+    RAISE EXCEPTION 'configuration history must remain append-only for runtime';
+  END IF;
+
   IF NOT has_table_privilege(runtime_role, 'audit.audit_events', 'INSERT') THEN
     RAISE EXCEPTION 'runtime role must append audit events';
   END IF;
@@ -83,7 +102,8 @@ BEGIN
     'organization.tenants','organization.companies','organization.branches',
     'identity.memberships','security.roles','security.role_permissions',
     'security.membership_roles','security.organizational_scopes',
-    'security.role_assignment_scopes','audit.audit_events'
+    'security.role_assignment_scopes','audit.audit_events',
+    'configuration.settings','configuration.setting_versions'
   ] LOOP
     IF NOT EXISTS (
       SELECT 1
@@ -100,6 +120,26 @@ END
 $validation$;
 
 BEGIN;
+
+-- Global platform-owned definition is seeded by the administrative validation principal,
+-- never by the runtime application role.
+INSERT INTO configuration.definitions (
+  id, key, owner_domain, name, value_type, default_value, validation_schema,
+  allow_tenant_override, allow_company_override, allow_branch_override,
+  sensitivity, status
+) VALUES (
+  '01990000-0000-7000-8000-000000000200',
+  'validation.runtime.enabled',
+  'validation',
+  'Runtime validation enabled',
+  'BOOLEAN',
+  'false'::jsonb,
+  '{}'::jsonb,
+  TRUE, TRUE, TRUE,
+  'INTERNAL',
+  'ACTIVE'
+);
+
 SET ROLE :"app_role";
 
 -- Two deterministic tenants are created under their own transaction-local RLS contexts.
@@ -139,6 +179,29 @@ UPDATE organization.tenants
    SET display_name = 'CI Runtime A Updated', updated_at = now(), version = version + 1
  WHERE id = '01990000-0000-7000-8000-000000000001';
 
+INSERT INTO configuration.settings (
+  id, tenant_id, configuration_definition_id, scope_type, value, status
+) VALUES (
+  '01990000-0000-7000-8000-000000000201',
+  '01990000-0000-7000-8000-000000000001',
+  '01990000-0000-7000-8000-000000000200',
+  'TENANT',
+  'true'::jsonb,
+  'ACTIVE'
+);
+
+INSERT INTO configuration.setting_versions (
+  tenant_id, setting_id, setting_version, value, status, change_type, reason
+) VALUES (
+  '01990000-0000-7000-8000-000000000001',
+  '01990000-0000-7000-8000-000000000201',
+  1,
+  'true'::jsonb,
+  'ACTIVE',
+  'CREATE',
+  'runtime validation'
+);
+
 DO $rls$
 DECLARE
   visible_count INTEGER;
@@ -160,6 +223,28 @@ BEGIN
       'ACTIVE'
     );
     RAISE EXCEPTION 'cross-tenant membership write unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+
+  SELECT count(*) INTO visible_count
+    FROM configuration.settings
+   WHERE tenant_id = '01990000-0000-7000-8000-000000000002';
+  IF visible_count <> 0 THEN
+    RAISE EXCEPTION 'cross-tenant configuration read was not isolated';
+  END IF;
+
+  BEGIN
+    INSERT INTO configuration.settings (
+      tenant_id, configuration_definition_id, scope_type, value, status
+    ) VALUES (
+      '01990000-0000-7000-8000-000000000002',
+      '01990000-0000-7000-8000-000000000200',
+      'TENANT',
+      'true'::jsonb,
+      'ACTIVE'
+    );
+    RAISE EXCEPTION 'cross-tenant configuration write unexpectedly succeeded';
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
   END;
@@ -188,6 +273,31 @@ BEGIN
   END;
 
   BEGIN
+    INSERT INTO configuration.definitions (
+      key, owner_domain, name, value_type, allow_tenant_override, sensitivity, status
+    ) VALUES (
+      'forbidden.runtime.definition', 'validation', 'Forbidden definition', 'BOOLEAN', TRUE, 'INTERNAL', 'ACTIVE'
+    );
+    RAISE EXCEPTION 'configuration definition mutation unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+
+  BEGIN
+    UPDATE configuration.setting_versions SET reason = 'forbidden';
+    RAISE EXCEPTION 'configuration history UPDATE unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+
+  BEGIN
+    DELETE FROM configuration.setting_versions;
+    RAISE EXCEPTION 'configuration history DELETE unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+
+  BEGIN
     UPDATE audit.audit_events SET reason = 'forbidden';
     RAISE EXCEPTION 'audit UPDATE unexpectedly succeeded';
   EXCEPTION WHEN insufficient_privilege THEN
@@ -209,7 +319,7 @@ BEGIN
   END;
 
   BEGIN
-    EXECUTE 'CREATE TABLE organization.runtime_forbidden(id integer)';
+    EXECUTE 'CREATE TABLE configuration.runtime_forbidden(id integer)';
     RAISE EXCEPTION 'runtime unexpectedly created a table';
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
