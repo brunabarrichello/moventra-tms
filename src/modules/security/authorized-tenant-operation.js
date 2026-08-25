@@ -108,12 +108,18 @@ export class AuthorizedTenantOperationService {
         }));
       });
     } catch (auditError) {
-      Object.defineProperty(originalError, 'auditFailureCode', {
-        value: safeFailureCode(auditError),
-        configurable: true,
-        enumerable: false,
-        writable: false,
-      });
+      if (Object.isExtensible(originalError)) {
+        try {
+          Object.defineProperty(originalError, 'auditFailureCode', {
+            value: safeFailureCode(auditError),
+            configurable: true,
+            enumerable: false,
+            writable: false,
+          });
+        } catch {
+          // The primary business/security failure must never be replaced by audit fallback metadata.
+        }
+      }
     }
   }
 }
@@ -310,7 +316,8 @@ function optionalString(value) {
       'Optional audit text must be a string',
     );
   }
-  return value.trim();
+  const normalized = value.trim();
+  return normalized || null;
 }
 
 function plainObjectOrEmpty(value) {
