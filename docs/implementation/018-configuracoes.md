@@ -2,391 +2,216 @@
 
 ## Estado
 
-`ACTIVE / DEFINED`
+`CONCLUDED`
 
-A fase 018 é a primeira etapa funcional posterior à fundação 001–017 e aos hardenings P0/P1. Nenhuma fase posterior está ativa.
+A fase 018 foi implementada, validada em PostgreSQL real, promovida por cadeia protegida até Production e encerrada com evidência técnica. A próxima fase oficial é **019 — Feature Flags**.
 
-## Objetivo
+## Objetivo concluído
 
-Criar um subsistema empresarial de configurações para o Moventra TMS, com resolução hierárquica e auditável por Tenant, Empresa e Filial, sem transformar regras de negócio em um repositório genérico de chave/valor e sem armazenar secrets fora do boundary de Secrets Management.
+O Moventra TMS possui um subsistema empresarial de configurações com catálogo global tipado, overrides tenant-aware e resolução hierárquica por Tenant, Empresa e Filial, mantendo secrets fora deste domínio.
 
-A configuração deverá ser consumível pelos módulos futuros do TMS sem acoplamento ao frontend, ao provedor de deploy ou ao provedor de autenticação.
-
-## Decisão arquitetural
-
-A fase adota um **catálogo global de definições tipadas** e **valores tenant-scoped com overrides organizacionais**.
-
-```text
-Definition default
-      ↓
-Tenant override
-      ↓
-Company override
-      ↓
-Branch override
-      ↓
-Effective configuration
-```
-
-Precedência de resolução, da mais específica para a menos específica:
+Precedência canônica:
 
 ```text
 BRANCH > COMPANY > TENANT > DEFINITION_DEFAULT
 ```
 
-Ausência de override não é erro: o resolver sobe a hierarquia até encontrar valor aplicável. Configuração inexistente ou definição inativa falha de modo explícito; nunca deve ser silenciosamente convertida em `null` operacional.
-
-## Responsabilidades
+## Modelo implementado
 
 ### `configuration.definitions`
 
-Catálogo global do produto. Não possui `tenant_id`.
+Catálogo global do produto, sem `tenant_id`, governado pela plataforma.
 
 Responsabilidades:
 
-- chave estável e única da configuração;
-- descrição e domínio proprietário;
-- tipo lógico do valor;
-- valor default opcional;
-- regras de validação estruturadas;
-- scopes permitidos para override;
-- classificação de sensibilidade;
-- lifecycle e versão otimista.
+- chave estável e única;
+- domínio proprietário;
+- tipos lógicos `BOOLEAN`, `INTEGER`, `DECIMAL`, `STRING`, `ENUM`, `JSON`, `DURATION`, `TIMEZONE`, `CURRENCY`;
+- default opcional;
+- schema de validação;
+- scopes de override permitidos;
+- sensibilidade `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`;
+- lifecycle `ACTIVE` / `INACTIVE`;
+- optimistic locking.
 
-Definições são governadas pela plataforma e não são CRUD arbitrário disponível ao usuário do Tenant.
+`SECRET` não é suportado. Passwords, tokens, API keys, private keys, `DATABASE_URL` e credenciais permanecem no Secrets Management.
 
 ### `configuration.settings`
 
-Valor atual de uma definição em um scope organizacional específico.
+Valor atual tenant-scoped de uma definição em um scope organizacional.
 
-Responsabilidades:
-
-- `tenant_id` obrigatório;
-- referência à definição global;
-- scope `TENANT`, `COMPANY` ou `BRANCH`;
-- `company_id` / `branch_id` coerentes com o scope;
-- valor validado;
-- status operacional;
-- versão otimista;
-- timestamps e identidade da alteração quando aplicável via Audit.
-
-### `configuration.setting_versions`
-
-Histórico append-only de alterações de um setting.
-
-Responsabilidades:
-
-- preservar versão de domínio, valor anterior/novo e motivo de mudança;
-- permitir investigação e restauração controlada sem reescrever histórico;
-- permanecer tenant-scoped e sujeito a RLS;
-- complementar, não substituir, `audit.audit_events`.
-
-Audit responde **quem/quando/resultado/contexto**; `setting_versions` preserva a evolução específica da configuração.
-
-## Tipos suportados
-
-O catálogo utiliza tipos lógicos, não tipos livres inferidos em runtime:
+Scopes:
 
 ```text
-BOOLEAN
-INTEGER
-DECIMAL
-STRING
-ENUM
-JSON
-DURATION
-TIMEZONE
-CURRENCY
-```
-
-O armazenamento físico pode usar `JSONB` para manter uma coluna homogênea, mas o domínio deve validar estritamente o valor contra `value_type` e contra as regras da definição antes da persistência.
-
-`JSON` não significa payload irrestrito: deve possuir schema/shape e limites de tamanho/profundidade definidos.
-
-## Modelo relacional alvo
-
-### `configuration.definitions`
-
-Campos mínimos:
-
-```text
-id UUID PK DEFAULT uuidv7()
-key TEXT NOT NULL UNIQUE
-owner_domain TEXT NOT NULL
-name TEXT NOT NULL
-description TEXT NULL
-value_type TEXT NOT NULL
-default_value JSONB NULL
-validation_schema JSONB NULL
-allow_tenant_override BOOLEAN NOT NULL
-allow_company_override BOOLEAN NOT NULL
-allow_branch_override BOOLEAN NOT NULL
-sensitivity TEXT NOT NULL
-status TEXT NOT NULL
-version BIGINT NOT NULL
-created_at TIMESTAMPTZ NOT NULL
-updated_at TIMESTAMPTZ NOT NULL
-```
-
-Regras:
-
-- `key` é canônica, lowercase e dot-separated, por exemplo `operations.tracking.eta.enabled`;
-- `owner_domain` indica o módulo responsável e evita um namespace global sem governança;
-- `sensitivity` inicialmente: `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`;
-- `SECRET` não é permitido como valor comum: secrets permanecem no store de secrets;
-- `ACTIVE` e `INACTIVE` são suficientes para lifecycle inicial da definição;
-- definição inativa não aceita novos overrides e não é resolvida para operação normal.
-
-### `configuration.settings`
-
-Campos mínimos:
-
-```text
-id UUID PK DEFAULT uuidv7()
-tenant_id UUID NOT NULL
-configuration_definition_id UUID NOT NULL
-scope_type TEXT NOT NULL
-company_id UUID NULL
-branch_id UUID NULL
-value JSONB NOT NULL
-status TEXT NOT NULL
-version BIGINT NOT NULL
-created_at TIMESTAMPTZ NOT NULL
-updated_at TIMESTAMPTZ NOT NULL
-```
-
-Candidate key tenant-aware:
-
-```text
-UNIQUE (tenant_id, id)
-```
-
-Unicidade por scope deve ser garantida com índices parciais:
-
-```text
-TENANT  → uma linha ativa por tenant + definição
-COMPANY → uma linha ativa por tenant + company + definição
-BRANCH  → uma linha ativa por tenant + company + branch + definição
-```
-
-Coerência:
-
-```text
-TENANT  => company_id IS NULL AND branch_id IS NULL
+TENANT  => company_id IS NULL     AND branch_id IS NULL
 COMPANY => company_id IS NOT NULL AND branch_id IS NULL
 BRANCH  => company_id IS NOT NULL AND branch_id IS NOT NULL
 ```
 
-FKs compostas devem impedir Company/Branch de outro Tenant:
+Invariantes implementados:
 
-```text
-(tenant_id, company_id) → organization.companies
-(tenant_id, company_id, branch_id) → organization.branches
-```
+- `tenant_id` obrigatório;
+- candidate key `UNIQUE (tenant_id, id)`;
+- FKs compostas impedem Company/Branch de outro Tenant;
+- índices parciais garantem uma linha ativa por definição/scope;
+- sem hard delete operacional;
+- `version` implementa optimistic locking.
 
 ### `configuration.setting_versions`
 
-Campos mínimos:
-
-```text
-id UUID PK DEFAULT uuidv7()
-tenant_id UUID NOT NULL
-setting_id UUID NOT NULL
-setting_version BIGINT NOT NULL
-value JSONB NULL
-status TEXT NOT NULL
-change_type TEXT NOT NULL
-reason TEXT NULL
-occurred_at TIMESTAMPTZ NOT NULL
-```
+Histórico tenant-scoped e append-only.
 
 Regras:
 
-- append-only;
 - `UNIQUE (tenant_id, setting_id, setting_version)`;
-- FK `(tenant_id, setting_id)` para `configuration.settings`;
-- UPDATE/DELETE bloqueados no banco;
-- valor poderá ser `NULL` somente para uma revisão que represente remoção lógica/inativação, conforme contrato implementado.
+- FK tenant-aware para `configuration.settings`;
+- runtime possui apenas `SELECT` e `INSERT`;
+- trigger de banco bloqueia `UPDATE`/`DELETE` inclusive fora do boundary normal de runtime;
+- complementa, não substitui, `audit.audit_events`.
 
-## Lifecycle
+## Segurança
 
-### Definition
-
-```text
-ACTIVE → INACTIVE
-INACTIVE → ACTIVE
-```
-
-### Setting
-
-```text
-ACTIVE → INACTIVE
-INACTIVE → ACTIVE
-```
-
-Não haverá hard delete operacional. Remoção de override é modelada como inativação com histórico e Audit; o resolver então volta para o nível menos específico aplicável.
-
-## Resolução efetiva
-
-O resolver recebe obrigatoriamente:
-
-```text
-tenantId
-configurationKey
-companyId? 
-branchId?
-```
-
-Regras:
-
-1. valida Tenant e coerência Company/Branch;
-2. carrega Definition `ACTIVE`;
-3. procura override `BRANCH`, se branch foi informado e scope permitido;
-4. procura override `COMPANY`;
-5. procura override `TENANT`;
-6. usa `default_value`, se definido;
-7. caso nenhum valor exista, retorna erro de configuração ausente.
-
-Resultado deve incluir provenance:
-
-```json
-{
-  "key": "operations.tracking.eta.enabled",
-  "value": true,
-  "source": "BRANCH",
-  "tenantId": "...",
-  "companyId": "...",
-  "branchId": "...",
-  "settingId": "...",
-  "settingVersion": 3,
-  "definitionVersion": 1
-}
-```
-
-Provenance é parte do contrato para diagnóstico e suporte.
-
-## Regras de negócio
-
-- um override só pode ser criado em scope permitido pela Definition;
-- Company/Branch precisam pertencer ao Tenant informado;
-- Branch precisa pertencer à Company informada;
-- valores são validados antes da escrita e também ao carregar defaults versionados;
-- update usa optimistic locking por `version`;
-- toda alteração cria uma nova `setting_versions` na mesma transação;
-- toda alteração crítica usa `AuthorizedTenantOperationService` e gera Audit SUCCESS atomicamente;
-- DENIED/FAILED seguem o contrato P1;
-- configuração de outro Tenant nunca é visível, mesmo quando um UUID válido é conhecido;
-- resolução não aceita `tenant_id`, `company_id` ou `branch_id` do cliente como autorização: são apenas alvo de recurso após o principal ser autenticado/autorizado;
-- settings inativos são ignorados pelo resolver;
-- default global não pode conter dado específico de cliente.
-
-## RBAC e Organizational Scope
-
-Permissões iniciais previstas:
+Permissões RBAC materializadas:
 
 ```text
 configuration.settings.read
 configuration.settings.manage
 ```
 
-Leitura e alteração são avaliadas no backend.
+`configuration.settings` e `configuration.setting_versions` possuem RLS por `security.current_tenant_id()`; `configuration.definitions` permanece global e sem RLS tenant-based.
 
-Scope mínimo esperado:
-
-```text
-TENANT setting  → cobertura Tenant
-COMPANY setting → cobertura da Company alvo
-BRANCH setting  → cobertura da Branch alvo
-```
-
-A Definition é catálogo de plataforma. Alterar Definition por usuário tenant-scoped não faz parte da 018.
-
-## RLS
-
-`configuration.settings` e `configuration.setting_versions` são tenant-scoped e devem possuir RLS usando `security.current_tenant_id()`.
-
-`configuration.definitions` é global e não recebe RLS tenant-based.
-
-A role de runtime precisa somente dos privilégios mínimos necessários. Não deve receber `CREATE` no schema `configuration` nem DELETE nas tabelas operacionais/históricas.
-
-## Auditoria e LGPD
-
-Eventos relevantes:
+A role `moventra_runtime_production` permanece least-privilege e `NOBYPASSRLS`:
 
 ```text
-configuration.setting.created
-configuration.setting.updated
-configuration.setting.activated
-configuration.setting.inactivated
-configuration.setting.restored
+schema configuration: USAGE = true
+schema configuration: CREATE = false
+definitions: SELECT = true, INSERT/UPDATE/DELETE = false
+settings: SELECT/INSERT/UPDATE = true, DELETE = false
+setting_versions: SELECT/INSERT = true, UPDATE/DELETE = false
 ```
 
-Antes/after podem ser registrados no Audit somente quando a `sensitivity` permitir. Valores `CONFIDENTIAL` devem ser minimizados/redigidos conforme contrato do domínio; logs nunca devem imprimir valor integral por padrão.
+Toda autorização crítica continua no backend. RLS é defesa adicional e não substitui Auth, Membership, RBAC ou Organizational Scope.
 
-Configurações não podem ser usadas para armazenar:
+## Regras de negócio implementadas
 
-- passwords;
-- tokens;
-- API keys;
-- private keys;
-- DATABASE_URL;
-- credentials de bancos, gateways ou integrações.
+- override somente em scope permitido pela Definition;
+- Company/Branch precisam pertencer ao Tenant alvo;
+- Branch precisa pertencer à Company informada;
+- definição inativa não aceita novos overrides nem resolução operacional;
+- setting inativo é ignorado e provoca fallback;
+- update usa optimistic locking;
+- alteração gera nova versão de setting na mesma unidade transacional;
+- operações críticas reutilizam `AuthorizedTenantOperationService` e Audit;
+- valores confidenciais são minimizados/redigidos de logs e Audit;
+- PostgreSQL é a fonte de verdade;
+- Tenant/Company/Branch recebidos do cliente são apenas alvo de recurso, nunca prova de autorização.
 
-Esses dados continuam exclusivamente no Secrets Management.
+## Migration canônica
 
-## API alvo
+```text
+db/migrations/0012_configuration.sql
+SHA-256 = 4e31a90321a6480d00e2aa6b0d058c72f737241044c170db03e94eadb2f0eb5c
+```
 
-### Resolver configuração efetiva
+Registrada em `moventra_meta.schema_migrations` como versão 12.
+
+## Evidência de CI e release
+
+Revisão funcional/runtime:
+
+```text
+81b7edf3571aa5e3b37ce81c42ef6f4bf5311359
+```
+
+Execuções:
+
+```text
+Moventra CI          = 32848703847 = success
+Foundation CI        = 32848703867 = success
+Release Gate         = 32848816381 = success
+Rollback Drill       = 32848933076 = success
+Production Promotion = 32849065397 = success
+```
+
+Artefato imutável:
+
+```text
+moventra-tms-81b7edf3571aa5e3b37ce81c42ef6f4bf5311359
+artifact SHA-256 = a78c06d8c973a96c1acef1761df277102effefb1ac464d58cb572553bd5d3ecd
+```
+
+## Evidência Staging
+
+```text
+initial  = dpl_AWavMEE5MZ9UjfbkDkZoi6eJcfRG = READY
+rollback = dpl_HFfsuc3NCLoQh2JmqM6eCMaBiDi4 = READY
+restore  = dpl_B9tJgcps8cmWDwB1X79AFmBLfTF3 = READY
+```
+
+Rollback utilizou a revisão anterior `bb8eb632d36c30618297f4a1069e538a916fe36c` e o restore retornou à revisão funcional 018. `/health` e `/api/database-health` foram validados no fluxo protegido.
+
+## Evidência Production
+
+O environment protegido `production` recebeu aprovação humana externa efetiva com `prevent_self_review=true` e sem bypass.
+
+```text
+Production deployment = dpl_ELC7hjcG2rCCJY2mA4vGWwmuYZdT
+state                 = READY
+revision              = 81b7edf3571aa5e3b37ce81c42ef6f4bf5311359
+```
+
+`/health` retornou HTTP 200 com revision identity exata. `/api/database-health` foi validado no workflow protegido. A verificação pós-promoção não encontrou runtime errors.
+
+## Evidência Neon Main / Production
+
+```text
+project  = shiny-mode-01639948
+branch   = br-morning-glitter-au97suq4
+database = neondb
+PostgreSQL = 18.6
+```
+
+Foram comprovados:
+
+- migration 12 com checksum exato;
+- três tabelas de configuração presentes;
+- duas políticas RLS;
+- duas permissões RBAC ativas;
+- ACL least-privilege convergente;
+- principal de aplicação non-owner/NOBYPASSRLS.
+
+Smoke transacional Production sob `moventra_app_production` comprovou:
+
+```text
+resolver = BRANCH
+optimistic lock = version 1 -> 2
+stale update = sem efeito
+cross-tenant visible settings = 0
+history append-only = bloqueado
+cleanup definitions/settings/history/tenants = 0 resíduos
+```
+
+O contexto RLS canônico usa a GUC transaction-local `moventra.tenant_id` consumida por `security.current_tenant_id()`.
+
+## API alvo preservada
+
+Resolver efetivo:
 
 ```text
 GET /api/v1/configuration/effective/{key}
 ```
 
-Filtros/contexto:
-
-```text
-companyId?
-branchId?
-```
-
-Autorização: `configuration.settings.read` + Organizational Scope.
-
-### Criar/alterar override
+Alterar override:
 
 ```text
 PUT /api/v1/configuration/settings/{key}
 ```
 
-Payload conceitual:
-
-```json
-{
-  "scope": {
-    "type": "BRANCH",
-    "companyId": "...",
-    "branchId": "..."
-  },
-  "value": true,
-  "expectedVersion": 2,
-  "reason": "Habilitar ETA para a filial"
-}
-```
-
-Para criação, `expectedVersion` não é informado; para alteração é obrigatório.
-
-Idempotência deve ser suportada quando a API de escrita for exposta publicamente, usando idempotency key no boundary HTTP sem substituir optimistic locking.
-
-## Cache e consistência
-
-A fonte de verdade é PostgreSQL.
-
-Cache de resolução pode ser adicionado depois da correção funcional inicial, com chave que inclua Tenant + Company + Branch + configuration key. Qualquer cache deve possuir invalidação determinística após commit e nunca cruzar Tenant.
-
-O primeiro release da fase não dependerá de cache para correção ou disponibilidade.
+Quando exposta publicamente, escrita deverá usar idempotency key no boundary HTTP sem substituir optimistic locking.
 
 ## Observabilidade
 
-Métricas/logs devem distinguir, sem expor PII ou valores confidenciais:
+O domínio preserva o contrato para métricas e logs sem expor valor confidencial:
 
 ```text
 configuration_resolution_total
@@ -396,56 +221,27 @@ configuration_write_total{scope,outcome}
 configuration_validation_failure_total
 ```
 
-Logs estruturados podem registrar key, scope, request/correlation IDs e versões, nunca valor sensível por padrão.
-
-## Migração e validação
-
-A implementação deve introduzir migration canônica e validation correspondente, preservando o histórico existente 0001–0011.
-
-Antes de aplicar em Neon:
-
-- CI limpo PostgreSQL 18;
-- migrations idempotentes pelo runner canônico;
-- constraints e índices verificados;
-- runtime role least-privilege atualizada;
-- RLS e cross-tenant smoke executados;
-- Audit e histórico append-only comprovados.
-
-Depois:
-
-```text
-Neon Staging
-→ smoke / cleanup
-→ Staging application release
-→ rollback / restore
-→ gate humano Production
-→ Neon Main + Production conforme ordem segura da release
-```
-
-Qualquer mudança de banco Production precisa ser compatível com o artefato anterior durante o intervalo de rollout ou possuir estratégia expand/contract equivalente.
-
-## Fora do escopo da 018
-
-- armazenamento de secrets;
-- feature flag platform dedicada para rollout experimental;
-- configuração específica de um único módulo de negócio ainda inexistente;
-- UI administrativa completa;
-- sistema de templates de comunicação;
-- billing SaaS;
-- preferências pessoais de User que não sejam configuração organizacional;
-- criação de uma fase posterior por inferência.
-
 ## Critérios de conclusão
 
-- catálogo global tipado materializado;
-- settings tenant/company/branch materializados com constraints de coerência;
-- histórico append-only materializado;
-- resolver de precedência comprovado;
-- RBAC + Organizational Scope + RLS + Audit integrados pelo pipeline P1;
-- runtime PostgreSQL continua least-privilege/NOBYPASSRLS;
-- cross-tenant read/write bloqueados;
-- optimistic locking e concorrência testados;
-- secrets proibidos pelo contrato;
-- CI, Neon Staging/Main, Staging, rollback/restore e Production evidenciados;
-- nenhum dado de smoke permanece;
-- documentação/Issue/Confluence sincronizados.
+- [x] migration canônica aditiva e backward-compatible;
+- [x] validation canônica correspondente;
+- [x] catálogo global tipado materializado;
+- [x] settings Tenant/Empresa/Filial materializados com constraints e índices;
+- [x] histórico append-only materializado e comprovado;
+- [x] resolver `BRANCH > COMPANY > TENANT > DEFAULT` testado;
+- [x] RBAC + Organizational Scope + RLS + Audit integrados;
+- [x] runtime PostgreSQL least-privilege/NOBYPASSRLS;
+- [x] cross-tenant bloqueado em PostgreSQL real;
+- [x] optimistic locking testado;
+- [x] secrets proibidos pelo contrato;
+- [x] CI completo verde;
+- [x] Neon Staging/Main validados;
+- [x] smoke sem resíduos;
+- [x] Staging + rollback/restore evidenciados;
+- [x] Production protegida aprovada externamente;
+- [x] revision identity, health, database readiness e runtime observability verificadas;
+- [x] evidência registrada para sincronização de Issue/Confluence.
+
+## Próxima transição
+
+A fase **018 — Configurações = CONCLUDED**. A fase seguinte da linha oficial é **019 — Feature Flags = ACTIVE / DEFINED**. Nenhuma fase posterior à 019 está ativa.
