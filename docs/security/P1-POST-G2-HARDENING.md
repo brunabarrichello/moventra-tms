@@ -141,7 +141,7 @@ CI verde
 → Production
 ```
 
-Nenhum bypass do environment protegido é autorizado.
+Nenhum bypass do environment protegido é autorizado. O critério de fechamento exigia que **Production somente for promovida após gate humano explícito**; a evidência final comprova que essa condição foi respeitada.
 
 ## Evidência runtime-impacting em Production
 
