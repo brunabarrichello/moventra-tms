@@ -27,9 +27,50 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  impact:
+    name: Classify release impact
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      requires_release: ${{ steps.classify.outputs.requires_release }}
+      classification: ${{ steps.classify.outputs.classification }}
+    steps:
+      - name: Checkout exact candidate revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Classify application release impact
+        id: classify
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            {
+              echo 'requires_release=true'
+              echo 'classification=manual-release'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          head_sha='${{ github.event.workflow_run.head_sha }}'
+          base_sha="$(git rev-parse "${head_sha}^")"
+          result="$(bash scripts/release/classify-release-impact.sh "$base_sha" "$head_sha")"
+          printf '%s\n' "$result"
+          while IFS='=' read -r key value; do
+            case "$key" in
+              requires_release|classification)
+                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          done <<< "$result"
+
   preflight:
     name: Production fail-closed preflight
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    needs: impact
+    if: ${{ needs.impact.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.impact.outputs.requires_release == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
