@@ -59,6 +59,8 @@ async function buildDatabaseHealthFunction() {
 async function copyRuntimeModuleTree(functionDir, { apiFile, includeDatabase }) {
   const apiDir = path.join(functionDir, 'api');
   const coreDir = path.join(functionDir, 'src', 'core');
+  const coreErrorsDir = path.join(coreDir, 'errors');
+  const httpDir = path.join(functionDir, 'src', 'http');
   const observabilityDir = path.join(functionDir, 'src', 'infrastructure', 'observability');
 
   await mkdir(apiDir, { recursive: true });
@@ -67,6 +69,8 @@ async function copyRuntimeModuleTree(functionDir, { apiFile, includeDatabase }) 
 
   await copyFile(path.join(root, 'api', apiFile), path.join(apiDir, apiFile));
   await copyFile(path.join(root, 'src', 'core', 'health.js'), path.join(coreDir, 'health.js'));
+  await cp(path.join(root, 'src', 'core', 'errors'), coreErrorsDir, { recursive: true });
+  await cp(path.join(root, 'src', 'http'), httpDir, { recursive: true });
   await cp(
     path.join(root, 'src', 'infrastructure', 'observability'),
     observabilityDir,
@@ -86,7 +90,7 @@ async function copyRuntimeModuleTree(functionDir, { apiFile, includeDatabase }) 
     );
   }
 
-  // OpenTelemetry is part of both observed functions; keep the prebuilt function self-contained.
+  // Error Handling + OpenTelemetry are part of observed functions; keep prebuilt functions self-contained.
   await cp(path.join(root, 'node_modules'), path.join(functionDir, 'node_modules'), {
     recursive: true,
   });
