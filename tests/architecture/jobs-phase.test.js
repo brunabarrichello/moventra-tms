@@ -26,10 +26,17 @@ test('phase 025 materializes durable provider-neutral Jobs without administrativ
   assert.equal(existsSync(new URL('../../db/migrations/0017_dlq.sql', import.meta.url)), false);
 
   const migration = read('db/migrations/0016_jobs.sql');
+  assert.match(migration, /CREATE TABLE jobs\.jobs[\s\S]*tenant_id UUID NOT NULL/);
+  assert.match(migration, /CREATE TABLE jobs\.system_jobs/);
+  assert.doesNotMatch(
+    migration.slice(migration.indexOf('CREATE TABLE jobs.system_jobs'), migration.indexOf('-- The first system job')),
+    /tenant_id/i,
+  );
   assert.match(migration, /FOR UPDATE SKIP LOCKED/);
   assert.match(migration, /SECURITY DEFINER/);
   assert.match(migration, /REVOKE ALL ON FUNCTION outbox\.claim_system_batch/);
-  assert.match(migration, /ENABLE ROW LEVEL SECURITY/);
+  assert.match(migration, /ALTER TABLE jobs\.jobs ENABLE ROW LEVEL SECURITY/);
+  assert.match(migration, /system\.outbox_dispatch/);
 
   const worker = read('src/modules/jobs/job-worker.js');
   assert.match(worker, /heartbeat/);
@@ -40,8 +47,8 @@ test('phase 025 materializes durable provider-neutral Jobs without administrativ
 
 test('Outbox Dispatcher preserves confirm-before-markPublished invariant', () => {
   const dispatcher = read('src/modules/jobs/outbox-dispatcher-job.js');
-  const publishIndex = dispatcher.indexOf('messagingPublisher.publish');
-  const markIndex = dispatcher.indexOf('outboxService.markPublished');
+  const publishIndex = dispatcher.indexOf('await messagingPublisher.publish');
+  const markIndex = dispatcher.indexOf('await outboxService.markPublished');
   assert.ok(publishIndex >= 0 && markIndex > publishIndex);
   assert.match(dispatcher, /confirmed !== true/);
   assert.match(dispatcher, /mapOutboxEventToMessage/);
