@@ -74,7 +74,7 @@ CREATE TABLE outbox.events (
         AND (published_at IS NULL OR published_at >= occurred_at)
     ),
     CONSTRAINT ck_outbox_events_published_not_claimed CHECK (
-        published_at IS NULL OR (claim_token IS NULL AND claimed_at IS NULL)
+        (published_at IS NULL OR (claim_token IS NULL AND claimed_at IS NULL))
     )
 );
 
