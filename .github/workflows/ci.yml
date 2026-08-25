@@ -41,6 +41,12 @@ jobs:
             "src/server.js"
             "src/core/database-health.js"
             "src/infrastructure/database/postgres.js"
+            "src/infrastructure/observability/telemetry.js"
+            "src/infrastructure/observability/request-context.js"
+            "src/infrastructure/observability/logger.js"
+            "src/infrastructure/observability/metrics.js"
+            "src/infrastructure/observability/tracing.js"
+            "src/infrastructure/observability/http.js"
             "src/modules/organization/tenant/tenant-domain.js"
             "src/modules/organization/tenant/tenant-repository.js"
             "src/modules/organization/company/company-domain.js"
@@ -58,7 +64,14 @@ jobs:
             "src/modules/feature-flags/feature-flag-domain.js"
             "src/modules/feature-flags/feature-flag-repository.js"
             "src/modules/feature-flags/feature-flag-service.js"
+            "api/health.js"
             "api/database-health.js"
+            "tests/unit/observability-request-context.test.js"
+            "tests/unit/observability-logger.test.js"
+            "tests/unit/observability-metrics.test.js"
+            "tests/unit/observability-telemetry.test.js"
+            "tests/unit/observability-http.test.js"
+            "tests/architecture/observability-phase.test.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
             "scripts/ci/build.sh"
@@ -99,6 +112,7 @@ jobs:
             "docs/implementation/012-memberships.md"
             "docs/implementation/018-configuracoes.md"
             "docs/implementation/019-feature-flags.md"
+            "docs/implementation/020-observabilidade-base.md"
           )
 
           for file in "${required_files[@]}"; do
@@ -190,6 +204,12 @@ jobs:
           set -euo pipefail
           npm ls --all
           node --input-type=module -e "await import('./src/infrastructure/database/postgres.js')"
+          OTEL_SDK_DISABLED=true node --input-type=module -e "const o=await import('./src/infrastructure/observability/telemetry.js'); await o.initializeObservability();"
+          node --input-type=module -e "await import('./src/infrastructure/observability/request-context.js')"
+          node --input-type=module -e "await import('./src/infrastructure/observability/logger.js')"
+          node --input-type=module -e "await import('./src/infrastructure/observability/metrics.js')"
+          node --input-type=module -e "await import('./src/infrastructure/observability/tracing.js')"
+          node --input-type=module -e "await import('./src/infrastructure/observability/http.js')"
           node --input-type=module -e "await import('./src/modules/organization/tenant/tenant-repository.js')"
           node --input-type=module -e "await import('./src/modules/organization/company/company-repository.js')"
           node --input-type=module -e "await import('./src/modules/organization/branch/branch-repository.js')"
