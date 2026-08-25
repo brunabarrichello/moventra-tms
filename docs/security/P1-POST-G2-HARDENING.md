@@ -2,13 +2,13 @@
 
 ## Estado
 
-`ACTIVE / IMPLEMENTED IN BRANCH / PRODUCTION NOT CHANGED`
+`CONCLUDED / VERIFIED IN PRODUCTION / DOCS-ONLY BEHAVIOR PROVEN`
 
 Issue canônica: `#85`.
 
-Este trabalho é **hardening/revalidação do G2**. Não cria uma nova fase funcional e **não ativa a fase 018**.
+Este trabalho é **hardening/revalidação do G2**. Não cria uma nova fase funcional. A fase 018 somente é ativada depois da conclusão formal deste P1.
 
-## Objetivos
+## Objetivos concluídos
 
 1. Transformar as primitives já implementadas nas fases 013–017 em um pipeline transacional reutilizável de aplicação.
 2. Impedir que commits exclusivamente documentais provoquem deploy de aplicação, rollback drill ou gate de Production.
@@ -29,7 +29,7 @@ verified provider assertion
 → COMMIT
 ```
 
-O pipeline é implementado por `AuthorizedTenantOperationService` e deve reutilizar os componentes canônicos existentes. Nenhum domínio futuro deve duplicar Auth, Membership, RBAC, Scope, contexto de Tenant ou Audit.
+O pipeline é implementado por `AuthorizedTenantOperationService` e reutiliza os componentes canônicos existentes. Nenhum domínio futuro deve duplicar Auth, Membership, RBAC, Scope, contexto de Tenant ou Audit.
 
 ### Boundary de autenticação
 
@@ -112,7 +112,7 @@ Qualquer mudança fora da allowlist documental é fail-closed como `runtime-impa
 
 `workflow_dispatch` continua sempre release-impacting.
 
-## Comportamento dos workflows
+## Comportamento dos workflows comprovado
 
 Para commit `documentation-only`:
 
@@ -128,9 +128,7 @@ Moventra CI
 → Vercel Production = NÃO alterada
 ```
 
-Os workflows permanecem executáveis/auditáveis; apenas os jobs que mudam runtime são evitados.
-
-Para commit `runtime-impacting`, a cadeia continua obrigatoriamente:
+Para commit `runtime-impacting`, a cadeia permanece obrigatoriamente:
 
 ```text
 CI verde
@@ -145,15 +143,64 @@ CI verde
 
 Nenhum bypass do environment protegido é autorizado.
 
-## Critérios de conclusão
+## Evidência runtime-impacting em Production
 
-O P1 somente pode ser encerrado quando:
+```text
+functional/runtime revision = 0a0ec943cc249e635d94267f386bb638228e11f7
+PR                           = #86
+Moventra CI                  = 32842532484
+Release Gate                 = 32842647879
+Rollback Drill               = 32842739426
+Production Promotion         = 32842852069
+Production deployment        = dpl_3fJQRBCn7WKNtRwsKdVo7nsXmZbY
+Production state             = READY
+```
 
-- CI unit/architecture/integration e PostgreSQL contract estiverem verdes;
-- o pipeline integrado estiver comprovado com role non-owner/NOBYPASSRLS;
-- uma revisão runtime-impacting percorrer Staging + rollback/restore;
-- Production somente for promovida após gate humano explícito;
-- a revisão Production tiver health/readiness e revision identity verificadas;
-- o comportamento docs-only estiver comprovado sem novo deployment de aplicação;
-- Issue #85 e Confluence forem sincronizados;
-- fase 018 continuar `NOT ACTIVE` até a conclusão deste hardening.
+O environment protegido foi aprovado externamente, com `prevent_self_review=true`, por revisor diferente do ator do workflow. Revision identity, `/health`, `/api/database-health` e ausência de runtime errors foram validados.
+
+## Prova real documentation-only
+
+A PR #87 alterou somente `docs/security/P1-PRODUCTION-EVIDENCE.md` e foi incorporada à `main` em:
+
+```text
+docs-only revision = 4d96525ef825eda49fdb7c2199d3e5cc4e96102c
+Moventra CI        = 32843990586 = success
+Release Gate       = 32844092522 = success
+Rollback Drill     = 32844107836 = success
+Production Promo   = 32844120550 = success
+```
+
+Classificação observada:
+
+```text
+requires_release=false
+classification=documentation-only
+changed_file_count=1
+runtime_file_count=0
+documentation_file_count=1
+```
+
+Jobs de alteração de runtime:
+
+```text
+Staging prebuilt deployment                 = skipped
+Provider-neutral prebuilt rollback drill    = skipped
+Production fail-closed preflight            = skipped
+Protected production deployment             = skipped
+```
+
+Após o merge documental, a Vercel registrou **zero novos deployments** tanto no projeto Staging quanto no projeto Production. O deployment Production funcional `dpl_3fJQRBCn7WKNtRwsKdVo7nsXmZbY` permaneceu `READY` e associado aos aliases estáveis.
+
+## Resultado
+
+Todos os critérios de conclusão do P1 foram atendidos:
+
+- CI unit/architecture/integration e PostgreSQL contract verdes;
+- pipeline integrado comprovado com role non-owner/NOBYPASSRLS;
+- revisão runtime-impacting percorreu Staging + rollback/restore;
+- Production promovida somente após gate humano explícito e aprovação externa efetiva;
+- health/readiness e revision identity verificadas;
+- comportamento docs-only comprovado sem novo deployment de aplicação;
+- evidência versionada e pronta para sincronização de Issue/Confluence.
+
+`P1 = CONCLUDED`.
