@@ -65,7 +65,30 @@ async function prepareFixture() {
       [eventId, TENANT_ID, JSON.stringify({ sequence: index + 1 })],
     );
   }
+}
 
+async function validateDisjointConcurrentClaims() {
+  await beginTenant(first);
+  const firstIds = await claim(first, CLAIM_ONE, 2, 60_000);
+  assert.equal(firstIds.length, 2, 'first claimer must claim two events');
+
+  await beginTenant(second);
+  const secondIds = await claim(second, CLAIM_TWO, 2, 60_000);
+  assert.equal(secondIds.length, 2, 'second claimer must claim two different events');
+
+  const overlap = firstIds.filter((id) => secondIds.includes(id));
+  assert.deepEqual(overlap, [], 'SKIP LOCKED claims must be disjoint');
+  assert.deepEqual(
+    new Set([...firstIds, ...secondIds]),
+    new Set(EVENT_IDS),
+    'concurrent claimers must cover the four eligible fixture events exactly once',
+  );
+
+  await first.query('COMMIT');
+  await second.query('COMMIT');
+}
+
+async function validateExpiredClaimAndPublishedExclusion() {
   await admin.query(
     `INSERT INTO outbox.events (
        id, tenant_id, aggregate_type, event_type, schema_version, payload, metadata,
@@ -81,25 +104,7 @@ async function prepareFixture() {
      )`,
     [EXPIRED_EVENT_ID, TENANT_ID, OLD_CLAIM],
   );
-}
 
-async function validateDisjointConcurrentClaims() {
-  await beginTenant(first);
-  const firstIds = await claim(first, CLAIM_ONE, 2, 60_000);
-  assert.equal(firstIds.length, 2, 'first claimer must claim two events');
-
-  await beginTenant(second);
-  const secondIds = await claim(second, CLAIM_TWO, 2, 60_000);
-  assert.equal(secondIds.length, 2, 'second claimer must claim two different events');
-
-  const overlap = firstIds.filter((id) => secondIds.includes(id));
-  assert.deepEqual(overlap, [], 'SKIP LOCKED claims must be disjoint');
-
-  await first.query('COMMIT');
-  await second.query('COMMIT');
-}
-
-async function validateExpiredClaimAndPublishedExclusion() {
   await beginTenant(first);
   const reclaimed = await claim(first, CLAIM_RECLAIM, 1, 60_000);
   assert.deepEqual(reclaimed, [EXPIRED_EVENT_ID], 'expired claim must become eligible again');
@@ -189,7 +194,12 @@ async function validateIdempotentReplayDoesNotDuplicateOutbox() {
   const replayClaim = await claimIdempotency(second);
   assert.equal(replayClaim.rowCount, 0, 'replay must not reacquire a committed idempotency key');
   if (replayClaim.rowCount === 1) {
-    await appendOutbox(second, '01990232-0000-7000-8000-000000000402', 'freight.contracted', { duplicate: true });
+    await appendOutbox(
+      second,
+      '01990232-0000-7000-8000-000000000402',
+      'freight.contracted',
+      { duplicate: true },
+    );
   }
   await second.query('COMMIT');
 
