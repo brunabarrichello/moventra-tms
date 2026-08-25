@@ -1,6 +1,6 @@
 # Continuidade da Fundação — Linha Oficial de Implantação
 
-A linha oficial do Moventra TMS preserva a sequência canônica de implantação. Neste checkpoint, a fundação e segurança 001–017, os hardenings P0/P1 e as fases 018–022 estão concluídos; a fase 023 — Transactional Outbox é a única etapa funcional ativa.
+A linha oficial do Moventra TMS preserva a sequência canônica de implantação. Neste checkpoint, a fundação e segurança 001–017, os hardenings P0/P1 e as fases 018–023 estão concluídos; a fase 024 — Mensageria é a única etapa funcional ativa.
 
 Sequência atual:
 
@@ -41,8 +41,9 @@ Sequência atual:
 | 020 — Observabilidade Base | **CONCLUDED** | OpenTelemetry vendor-neutral, logs estruturados, traces, métricas, correlation IDs, cardinalidade controlada e fail-safe evidenciados em Production |
 | 021 — Error Handling | **CONCLUDED** | erros tipados, códigos estáveis, Problem Details, sanitização, anti-enumeração e retry classification evidenciados em Production |
 | 022 — Idempotência | **CONCLUDED** | chave/fingerprint/stored result tenant-aware, transação PostgreSQL, RLS, concorrência e replay evidenciados em Production |
-| 023 — Transactional Outbox | **ACTIVE / DEFINED** | estado de negócio + Audit + outbox event na mesma transação; provider-neutral |
-| 024+ | **NOT ACTIVE** | preservar ordem oficial |
+| 023 — Transactional Outbox | **CONCLUDED** | estado de negócio + Audit + outbox event na mesma transação, RLS, claim concorrente e replay idempotente evidenciados em Production |
+| 024 — Mensageria | **ACTIVE / DEFINED** | RabbitMQ/serviço equivalente atrás de portas provider-neutral; at-least-once, confirms e ack/nack |
+| 025+ | **NOT ACTIVE** | preservar ordem oficial |
 
 ## Gates macro
 
@@ -51,7 +52,7 @@ G1 — Foundation Ready = APPROVED
 G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-G2 permanece aprovado. A fase 023 deve continuar reutilizando Auth → Membership → RBAC → Organizational Scope → Tenant/RLS → Idempotência → operação → Audit, observabilidade minimizada e Error Handling seguro.
+G2 permanece aprovado. A fase 024 deve reutilizar os contratos consolidados de Auth, Membership, RBAC, Organizational Scope, RLS, Audit, Observability, Error Handling, Idempotência e Transactional Outbox. Mensageria não substitui autorização, não altera a origem confiável do Tenant e não cria exactly-once fim a fim.
 
 ## Revisões de segurança pós-G2
 
@@ -111,9 +112,31 @@ production evidence artifact  = production-deployment-028c9844005ced58806201bce9
 production evidence digest    = 497ed0c5b8904182c3f1b5d70a7f5a0ffd07b7603934d95b4819643e5172aeaa
 ```
 
-A revisão 022 passou pela cadeia completa build-once → Staging → rollback/restore → Production protegida. A aprovação efetiva foi externa ao ator do workflow. Revision identity e database readiness passaram no deployment imutável e no alias estável. Logs de Production confirmaram `serviceVersion=028c9844005ced58806201bce9edce37b4ba2a01`, ambiente `production`, request/correlation IDs e trace/span IDs.
+## Fase 023 — revisão funcional e release
 
-## Banco — estado canônico após 022
+```text
+Issue                         = #103
+PR técnica                    = #105
+functional/runtime revision   = b585df5f9b544f7ed315d1fa3c081dda8c4d0a09
+Foundation CI (main)          = 32890000608
+source CI run                 = 32890000544 = success
+Release Gate / Staging        = 32890129781 = success
+Rollback Drill                = 32890282262 = success
+Production Promotion          = 32890504200 = success
+Production deployment URL     = moventra-arotbh5h6-alebru.vercel.app
+Stable Production alias       = moventra-tms.vercel.app
+Production approval           = approved / alexoaraujo83
+prevent_self_review           = true
+required_reviewer_count       = 2
+artifact_sha256               = dbe15e5b394811e62e645aed1502159f8d1d9cd512c3f4de90c8c070b88cb9c6
+production evidence artifact  = production-deployment-b585df5f9b544f7ed315d1fa3c081dda8c4d0a09
+production evidence digest    = 09bfbdd7cdcccd75b615a2c33cc609f00761eda303741d23991fc5d108530e2e
+migration                     = 0015_outbox.sql
+```
+
+A revisão 023 passou pela cadeia completa build-once → Staging → rollback/restore → Production protegida. A aprovação efetiva foi externa ao ator do workflow. Revision identity e database readiness passaram no deployment imutável e no alias estável. O `outbox.events` permanece provider-neutral e a publicação externa não ocorre dentro da transação PostgreSQL.
+
+## Banco — estado canônico após 023
 
 Provider: Neon PostgreSQL 18.6.
 
@@ -132,12 +155,7 @@ Provider: Neon PostgreSQL 18.6.
 0012_configuration.sql           = present
 0013_feature_flags.sql           = present
 0014_idempotency.sql             = present
-```
-
-Checksum canônico mais recente:
-
-```text
-0014_idempotency.sql = 5a1807d7b45ea49aae1e5da87e629ebedb5de7bd761620fc056d7c46ff86f41c
+0015_outbox.sql                  = present
 ```
 
 Neon:
@@ -147,7 +165,7 @@ staging = br-rapid-math-au6j6xut
 main    = br-morning-glitter-au97suq4
 ```
 
-Em Main, `idempotency.records` está com RLS habilitado. `moventra_runtime_production` possui `USAGE` no schema e `SELECT/INSERT/UPDATE` na tabela, sem `CREATE`, `DELETE` ou `BYPASSRLS`; `moventra_app_production` herda a role de runtime.
+`idempotency.records` e `outbox.events` são tenant-scoped e protegidos por RLS. O runtime segue non-owner/NOBYPASSRLS. Para Outbox, o runtime possui somente os privilégios necessários a leitura, append e atualização das colunas operacionais de claim/publicação, sem `DELETE` ou DDL.
 
 ## Boundary consolidado
 
@@ -165,7 +183,16 @@ Observability = OpenTelemetry + structured logging + tracing + metrics
 Error Handling = taxonomia tipada + códigos estáveis + Problem Details
 Idempotency = claim/fingerprint/stored result transacional e tenant-aware
 Transactional Outbox = registro atômico da intenção de publicação, sem broker específico
+Messaging = porta provider-neutral para broker, entrega at-least-once, confirms e ack/nack
 ```
+
+## Regras específicas da fase 024
+
+A implementação de referência será RabbitMQ/AMQP 0-9-1, isolada atrás de ports internos. Domínios não podem importar SDK/provider. Publisher confirms, mensagens persistentes, manual ack/nack, prefetch, envelope versionado, retry classification e observabilidade de baixa cardinalidade são obrigatórios.
+
+A fase 025 — Jobs permanece fora do escopo: não criar scheduler, loop recorrente de dispatcher ou framework central de jobs. A fase 026 — DLQ permanece fora do escopo administrativo: topology técnica de dead-letter pode ser suportada, mas reprocessamento, UI e governança operacional pertencem à 026.
+
+A conclusão `EVIDENCED / CONCLUDED` da 024 exige broker RabbitMQ/serviço equivalente real, segregado por ambiente, acessível por Staging e Production com TLS e credenciais de menor privilégio. Broker efêmero é aceitável apenas para CI.
 
 ## Regra de revision identity
 
@@ -173,4 +200,4 @@ A revisão funcional/runtime que conclui uma fase é registrada separadamente de
 
 ## Próxima transição oficial
 
-A fase **022 — Idempotência = CONCLUDED**. A fase **023 — Transactional Outbox = ACTIVE / DEFINED**, conforme `docs/implementation/023-outbox.md` e Issue #103. A fase 024 — Mensageria e todas as posteriores permanecem inativas até a conclusão formal da 023.
+A fase **023 — Transactional Outbox = CONCLUDED**. A fase **024 — Mensageria = ACTIVE / DEFINED**, conforme `docs/implementation/024-mensageria.md` e Issue #106. A fase 025 — Jobs e todas as posteriores permanecem inativas até a conclusão formal da 024.
