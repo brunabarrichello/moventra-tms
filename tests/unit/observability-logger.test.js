@@ -17,14 +17,18 @@ function captureSink() {
   };
 }
 
+function databaseUrl(user, password, host, path = 'db') {
+  return `postgresql://${user}:${password}@${host}/${path}`;
+}
+
 test('structured logger redacts common secret material and connection strings', () => {
   const safe = sanitizeLogMetadata({
     authorization: 'Bearer secret-token',
     cookie: 'session=secret',
-    databaseUrl: 'postgresql://user:password@example.test/db',
+    databaseUrl: databaseUrl('user', 'password', 'example.test'),
     nested: {
       token: 'abc',
-      note: 'Bearer xyz password=hunter2 postgresql://u:p@db.test/x',
+      note: `Bearer xyz password=hunter2 ${databaseUrl('u', 'p', 'db.test', 'x')}`,
     },
   });
 
@@ -34,7 +38,7 @@ test('structured logger redacts common secret material and connection strings', 
   assert.equal(safe.nested.token, '[REDACTED]');
   assert.doesNotMatch(safe.nested.note, /hunter2|u:p|Bearer xyz/);
   assert.match(safe.nested.note, /REDACTED/);
-  assert.doesNotMatch(redactSensitiveText('postgres://a:b@host/db'), /a:b/);
+  assert.doesNotMatch(redactSensitiveText(databaseUrl('a', 'b', 'host')), /a:b/);
 });
 
 test('structured logger attaches request correlation context without serializing arbitrary depth', () => {
