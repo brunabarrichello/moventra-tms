@@ -28,6 +28,9 @@ export const ERROR_CODES = Object.freeze({
   INFRASTRUCTURE_FAILURE: 'INFRASTRUCTURE.FAILURE',
   INTERNAL_UNEXPECTED: 'INTERNAL.UNEXPECTED',
   HTTP_METHOD_NOT_ALLOWED: 'HTTP.METHOD_NOT_ALLOWED',
+  IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY.KEY_REQUIRED',
+  IDEMPOTENCY_REQUEST_MISMATCH: 'IDEMPOTENCY.REQUEST_MISMATCH',
+  IDEMPOTENCY_RESULT_UNAVAILABLE: 'IDEMPOTENCY.RESULT_UNAVAILABLE',
 });
 
 export const ERROR_DEFINITIONS = Object.freeze({
@@ -100,6 +103,21 @@ export const ERROR_DEFINITIONS = Object.freeze({
     category: ERROR_CATEGORIES.VALIDATION,
     title: 'Método não permitido',
     publicMessage: 'O método HTTP não é permitido para este recurso.',
+  }),
+  [ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED]: Object.freeze({
+    category: ERROR_CATEGORIES.VALIDATION,
+    title: 'Chave de idempotência necessária',
+    publicMessage: 'Uma Idempotency-Key válida é necessária para esta operação.',
+  }),
+  [ERROR_CODES.IDEMPOTENCY_REQUEST_MISMATCH]: Object.freeze({
+    category: ERROR_CATEGORIES.CONFLICT,
+    title: 'Conflito de idempotência',
+    publicMessage: 'A Idempotency-Key já foi utilizada para uma intenção de requisição diferente.',
+  }),
+  [ERROR_CODES.IDEMPOTENCY_RESULT_UNAVAILABLE]: Object.freeze({
+    category: ERROR_CATEGORIES.INFRASTRUCTURE,
+    title: 'Resultado idempotente indisponível',
+    publicMessage: 'O resultado idempotente não está disponível para replay seguro.',
   }),
 });
 

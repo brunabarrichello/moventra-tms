@@ -99,7 +99,7 @@ test('SQL migrations obey machine-checkable data conventions', async () => {
         );
       }
 
-      const timestampMatch = /^([a-z][a-z0-9_]*_at)\s+(.+)$/i.exec(line);
+      const timestampMatch = /^([a-z][a-z0-9_]*_at)\s+([a-z][a-z0-9_]*(?:\([^)]*\))?)(?:\s|,|$)/i.exec(line);
       if (timestampMatch) {
         assert.match(
           timestampMatch[2],

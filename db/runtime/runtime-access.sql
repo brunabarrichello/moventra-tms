@@ -1,5 +1,5 @@
 -- Moventra TMS — PostgreSQL runtime access contract
--- P0 hardening after G2 audit, extended through phase 019 Feature Flags.
+-- P0 hardening after G2 audit, extended through phase 022 Idempotency.
 -- Apply with psql -v runtime_role=<NOLOGIN authorization role> -f db/runtime/runtime-access.sql
 -- The runtime role name is deliberately supplied by the environment; no secret is stored here.
 
@@ -11,8 +11,8 @@
 \endif
 
 -- Runtime may resolve objects but may never create objects in application schemas.
-GRANT USAGE ON SCHEMA organization, identity, security, audit, configuration, feature_flags TO :"runtime_role";
-REVOKE CREATE ON SCHEMA organization, identity, security, audit, configuration, feature_flags FROM :"runtime_role";
+GRANT USAGE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency TO :"runtime_role";
+REVOKE CREATE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency FROM :"runtime_role";
 
 -- Migration metadata is an administrative boundary and is never visible to runtime.
 REVOKE ALL PRIVILEGES ON SCHEMA moventra_meta FROM :"runtime_role";
@@ -40,7 +40,8 @@ REVOKE ALL PRIVILEGES ON
   feature_flags.flags,
   feature_flags.environment_policies,
   feature_flags.rules,
-  feature_flags.rule_versions
+  feature_flags.rule_versions,
+  idempotency.records
 FROM :"runtime_role";
 
 -- Organization lifecycle repositories use reads plus append/update with optimistic locking.
@@ -63,7 +64,7 @@ GRANT SELECT ON configuration.definitions TO :"runtime_role";
 GRANT SELECT ON feature_flags.flags TO :"runtime_role";
 GRANT SELECT ON feature_flags.environment_policies TO :"runtime_role";
 
--- Tenant-owned authorization/configuration/feature-flag state is mutable but never hard-deleted by runtime.
+-- Tenant-owned authorization/configuration/feature-flag/idempotency state is mutable but never hard-deleted by runtime.
 GRANT SELECT, INSERT, UPDATE ON
   security.roles,
   security.role_permissions,
@@ -71,7 +72,8 @@ GRANT SELECT, INSERT, UPDATE ON
   security.organizational_scopes,
   security.role_assignment_scopes,
   configuration.settings,
-  feature_flags.rules
+  feature_flags.rules,
+  idempotency.records
 TO :"runtime_role";
 
 -- Domain histories are append-only. Runtime may read tenant-scoped history and append new versions.
@@ -85,7 +87,7 @@ GRANT SELECT (id, occurred_at) ON audit.audit_events TO :"runtime_role";
 -- RLS tenant resolution is explicit; backend authorization remains mandatory.
 GRANT EXECUTE ON FUNCTION security.current_tenant_id() TO :"runtime_role";
 
--- Explicit negative boundary: runtime performs no hard delete on current domain/security/configuration/feature-flag/audit tables.
+-- Explicit negative boundary: runtime performs no hard delete on current domain/security/configuration/feature-flag/idempotency/audit tables.
 REVOKE DELETE ON
   organization.tenants,
   organization.companies,
@@ -106,7 +108,8 @@ REVOKE DELETE ON
   feature_flags.flags,
   feature_flags.environment_policies,
   feature_flags.rules,
-  feature_flags.rule_versions
+  feature_flags.rule_versions,
+  idempotency.records
 FROM :"runtime_role";
 
 -- Platform-owned catalogs and append-only trails must not be mutated beyond their narrow contract.

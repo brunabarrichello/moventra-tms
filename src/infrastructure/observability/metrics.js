@@ -22,6 +22,8 @@ const FEATURE_FLAG_REASONS = new Set([
   'unknown',
 ]);
 const FEATURE_FLAG_KEY = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_-]*){1,7}$/;
+const IDEMPOTENCY_OPERATION_KEY = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_-]*){1,7}$/;
+const IDEMPOTENCY_OUTCOMES = new Set(['executed', 'replayed', 'mismatch', 'failed']);
 const RUNTIME_ENVIRONMENTS = new Set(['development', 'preview', 'staging', 'production']);
 
 let instruments;
@@ -90,6 +92,21 @@ export function recordFeatureFlagRuleWrite({ targetType, outcome }) {
   }
 }
 
+export function recordIdempotencyOperation({ operationKey, outcome, durationMs }) {
+  try {
+    const current = getInstruments();
+    const attributes = {
+      operation: normalizeIdempotencyOperationKey(operationKey),
+      outcome: normalizeIdempotencyOutcome(outcome),
+      environment: runtimeEnvironment(),
+    };
+    current.idempotencyRequests.add(1, attributes);
+    current.idempotencyDuration.record(normalizeDuration(durationMs), attributes);
+  } catch {
+    // Idempotency correctness must never depend on telemetry.
+  }
+}
+
 export function normalizeHttpMetricAttributes({ method, route, statusCode, outcome }) {
   const normalizedStatus = Number.isInteger(Number(statusCode)) ? Number(statusCode) : 0;
   return Object.freeze({
@@ -128,6 +145,13 @@ export function normalizeFeatureFlagReason(value) {
   return FEATURE_FLAG_REASONS.has(candidate) ? candidate : 'unknown';
 }
 
+export function normalizeIdempotencyOperationKey(value) {
+  const candidate = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return IDEMPOTENCY_OPERATION_KEY.test(candidate) && candidate.length <= 160
+    ? candidate
+    : 'unknown';
+}
+
 export function resetMetricInstrumentsForTest() {
   instruments = undefined;
 }
@@ -147,6 +171,8 @@ function getInstruments() {
     featureFlagEvaluationErrors: meter.createCounter('feature_flag_evaluation_error_total'),
     featureFlagRuleWrites: meter.createCounter('feature_flag_rule_write_total'),
     featureFlagRolloutBuckets: meter.createCounter('feature_flag_rollout_bucket_total'),
+    idempotencyRequests: meter.createCounter('idempotency_requests_total'),
+    idempotencyDuration: meter.createHistogram('idempotency_duration_ms', { unit: 'ms' }),
   });
   return instruments;
 }
@@ -174,6 +200,11 @@ function normalizeFeatureFlagSource(value) {
 function normalizeFeatureFlagTarget(value) {
   const candidate = typeof value === 'string' ? value.trim().toUpperCase() : 'UNKNOWN';
   return FEATURE_FLAG_TARGETS.has(candidate) ? candidate : 'UNKNOWN';
+}
+
+function normalizeIdempotencyOutcome(value) {
+  const candidate = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return IDEMPOTENCY_OUTCOMES.has(candidate) ? candidate : 'failed';
 }
 
 function normalizeDuration(value) {

@@ -47,12 +47,14 @@ test('phase 021 uses allowlisted PostgreSQL translation and packages runtime mod
   assert.match(builder, /src.*http/);
 });
 
-test('phase 021 does not create persistence or activate Idempotency 022', () => {
-  const doc = read('docs/implementation/021-error-handling.md');
+test('phase 021 remains migration-free while phase 022 owns idempotency persistence', () => {
+  const doc021 = read('docs/implementation/021-error-handling.md');
+  const migration022 = read('db/migrations/0014_idempotency.sql');
   const migrationsDirectory = new URL('../../db/migrations/', import.meta.url);
 
   assert.equal(existsSync(new URL('0014_error_handling.sql', migrationsDirectory)), false);
-  assert.equal(existsSync(new URL('0014_idempotency.sql', migrationsDirectory)), false);
-  assert.match(doc, /não requer migration por padrão/i);
-  assert.match(doc, /022 — Idempotência.*NOT ACTIVE/i);
+  assert.equal(existsSync(new URL('0014_idempotency.sql', migrationsDirectory)), true);
+  assert.match(doc021, /não criou migration PostgreSQL/i);
+  assert.match(doc021, /022 — Idempotência.*ACTIVE \/ DEFINED/is);
+  assert.match(migration022, /Phase 022 — Idempot/i);
 });
