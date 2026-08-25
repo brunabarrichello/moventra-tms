@@ -44,7 +44,9 @@ export function resetOutboxMetricInstrumentsForTest() {
 }
 
 function getInstruments() {
-  if (instruments) return instruments;
+  if (instruments) {
+    return instruments;
+  }
   const meter = metrics.getMeter('moventra.outbox');
   instruments = Object.freeze({
     operations: meter.createCounter('outbox_operations_total'),
