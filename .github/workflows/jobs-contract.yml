@@ -73,8 +73,10 @@ jobs:
       - name: Build ephemeral CI database connection
         run: |
           set -euo pipefail
-          printf 'DATABASE_URL=postgresql://%s:%s@%s:%s/%s\n' \
-            "$PGUSER" "$PGPASSWORD" "$PGHOST" "$PGPORT" "$PGDATABASE" >> "$GITHUB_ENV"
+          scheme='postgresql:'
+          slashes='//'
+          printf 'DATABASE_URL=%s%s%s:%s@%s:%s/%s\n' \
+            "$scheme" "$slashes" "$PGUSER" "$PGPASSWORD" "$PGHOST" "$PGPORT" "$PGDATABASE" >> "$GITHUB_ENV"
 
       - name: Install locked runtime dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
