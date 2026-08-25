@@ -446,7 +446,7 @@ BEGIN
 
   BEGIN
     EXECUTE 'CREATE TABLE feature_flags.runtime_forbidden(id integer)';
-    RAISE EXCEPTION 'runtime unexpectedly created a feature flag table';
+    RAISE EXCEPTION 'runtime unexpectedly created a table';
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
   END;
