@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+is_documentation_only_path() {
+  local file="$1"
+  case "$file" in
+    docs/*|README.md|LICENSE|CHANGELOG.md|CONTRIBUTING.md|CODE_OF_CONDUCT.md|SECURITY.md|*.md)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 base_sha="${1:-}"
 head_sha="${2:-}"
 
@@ -43,15 +55,3 @@ printf 'classification=%s\n' "$classification"
 printf 'changed_file_count=%s\n' "${#changed_files[@]}"
 printf 'runtime_file_count=%s\n' "$runtime_files"
 printf 'documentation_file_count=%s\n' "$documentation_files"
-
-is_documentation_only_path() {
-  local file="$1"
-  case "$file" in
-    docs/*|README.md|LICENSE|CHANGELOG.md|CONTRIBUTING.md|CODE_OF_CONDUCT.md|SECURITY.md|*.md)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
