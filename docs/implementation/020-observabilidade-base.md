@@ -2,9 +2,9 @@
 
 ## Estado
 
-`ACTIVE / DEFINED`
+`CONCLUDED`
 
-A fase 020 é a única etapa funcional ativa após a conclusão formal da 019 — Feature Flags. A fase 021 — Error Handling e todas as posteriores permanecem `NOT ACTIVE`.
+A fase 020 foi formalmente concluída após implementação, CI, Staging, rollback/restore, aprovação externa do environment protegido `production`, promoção do mesmo artefato imutável e validação de runtime em Production. A fase 021 — Error Handling é a única etapa funcional ativa; todas as posteriores permanecem `NOT ACTIVE`.
 
 ## Objetivo
 
@@ -290,7 +290,7 @@ Eventos `DENIED` e `FAILED` podem gerar logs/metrics de segurança com campos mi
 
 A fase 020 instrumenta erros existentes, mas **não cria o catálogo/contrato completo de Error Handling da fase 021**.
 
-Permitido agora:
+Permitido na 020:
 
 ```text
 normalizar Error para telemetria
@@ -300,7 +300,7 @@ incrementar métricas
 log estruturado sanitizado
 ```
 
-Fora da fase 020:
+Fora da fase 020 e transferido para a 021:
 
 ```text
 novo envelope HTTP universal de erro
@@ -371,7 +371,7 @@ Não definir SLO contratual externo sem dados históricos e decisão de produto/
 
 ## Observability facade interna
 
-Abstrações recomendadas:
+Abstrações implementadas/recomendadas:
 
 ```text
 src/infrastructure/observability/telemetry.js
@@ -418,7 +418,7 @@ Arquiteturais:
 - nenhum token/DSN hardcoded;
 - nenhuma métrica usa tenant/user/request/entity UUID como label;
 - observabilidade não substitui Audit;
-- fase 021 não é antecipada;
+- fase 021 não é antecipada pela implementação da 020;
 - CI exige artefatos da fase 020.
 
 Runtime:
@@ -440,7 +440,7 @@ Não adicionar vendor agent proprietário como requisito de execução.
 
 ## CI/CD
 
-Atualizar `.github/workflows/ci.yml` para exigir os artefatos da fase 020 e importar/inicializar o módulo observacional no job de runtime dependencies.
+`.github/workflows/ci.yml` exige os artefatos da fase 020 e importa/inicializa o módulo observacional no job de runtime dependencies.
 
 A release continua usando:
 
@@ -510,6 +510,27 @@ Se durante a implementação surgir requisito real de persistência relacional, 
 - Production health/runtime evidence sem regressão;
 - documentação, Issue e Confluence sincronizados.
 
+## Evidência de conclusão
+
+```text
+Issue                         = #95
+PR técnica                    = #96
+functional/runtime revision   = 256e87991d73cea1dd4a385488708409cb22b0b2
+Foundation CI (PR)            = 32876048411 = success
+Moventra CI (PR)              = 32876048425 = success
+source CI run                 = 32876294034
+rollback run                  = 32876698516
+Production Promotion          = 32876872400 = success
+Production deployment         = dpl_2poo2Y8TnDaie3MM4NA2KzbXwBMu = READY
+Production approval           = approved / alexoaraujo83
+prevent_self_review           = true
+artifact_sha256               = a12994c179bde36eb5690c12a24b72fdcbf4ad92aa28f24ebffeb589132d6f91
+production evidence artifact  = production-deployment-256e87991d73cea1dd4a385488708409cb22b0b2
+production evidence digest    = 5158078122a094b155e1e69667a6623e05aadb77f94c5470013eb661dfebd485
+```
+
+A promoção protegida confirmou o mesmo artefato imutável usado no rollback. O deployment ficou `READY`, com alias estável `moventra-tms.vercel.app`. `/health` e `/api/database-health` retornaram 200 tanto no deployment imutável quanto no alias estável. Logs de Production confirmaram `serviceVersion=256e87991d73cea1dd4a385488708409cb22b0b2`, `environment=production`, `requestId`, `correlationId`, `traceId`, `spanId` e `outcome=success`.
+
 ## Próxima fase
 
-A fase **021 — Error Handling** permanece `NOT ACTIVE` até a conclusão formal da 020.
+A fase **021 — Error Handling** está `ACTIVE / DEFINED`. A fase **022 — Idempotência** permanece `NOT ACTIVE` até a conclusão formal da 021.
