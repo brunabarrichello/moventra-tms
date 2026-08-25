@@ -1,7 +1,7 @@
 import { trace } from '@opentelemetry/api';
 import { getRequestContext } from './request-context.js';
 
-const SENSITIVE_KEY = /(authorization|cookie|token|password|passwd|secret|api[_-]?key|database[_-]?url|connection[_-]?string|dsn|otel_exporter_otlp_headers)/i;
+const SENSITIVE_KEY = /(authorization|cookie|token|password|passwd|secret|api[_-]?key|database[_-]?url|connection[_-]?string|dsn|broker[_-]?url|messaging[_-]?.*url|rabbitmq[_-]?.*url|otel_exporter_otlp_headers)/i;
 const MAX_STRING_LENGTH = 2_000;
 const MAX_ARRAY_ITEMS = 20;
 const MAX_OBJECT_KEYS = 50;
@@ -82,6 +82,7 @@ export function redactSensitiveText(value) {
 
   return value
     .replace(/postgres(?:ql)?:\/\/[^\s]+/gi, '[REDACTED_DATABASE_URL]')
+    .replace(/amqps?:\/\/[^\s]+/gi, '[REDACTED_MESSAGING_URL]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
     .replace(/\b(password|passwd|token|secret|api[_-]?key)=([^\s&,;]+)/gi, '$1=[REDACTED]');
 }
