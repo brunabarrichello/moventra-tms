@@ -99,10 +99,18 @@ function emitLog(sink, level, component, message, metadata) {
     message: redactSensitiveText(normalizeMessage(message)).slice(0, MAX_STRING_LENGTH),
   };
 
-  if (requestContext?.requestId) record.requestId = requestContext.requestId;
-  if (requestContext?.correlationId) record.correlationId = requestContext.correlationId;
-  if (spanContext?.traceId) record.traceId = spanContext.traceId;
-  if (spanContext?.spanId) record.spanId = spanContext.spanId;
+  if (requestContext?.requestId) {
+    record.requestId = requestContext.requestId;
+  }
+  if (requestContext?.correlationId) {
+    record.correlationId = requestContext.correlationId;
+  }
+  if (spanContext?.traceId) {
+    record.traceId = spanContext.traceId;
+  }
+  if (spanContext?.spanId) {
+    record.spanId = spanContext.spanId;
+  }
 
   const safeMetadata = sanitizeLogMetadata(metadata);
   if (safeMetadata && typeof safeMetadata === 'object' && !Array.isArray(safeMetadata)) {
@@ -138,7 +146,10 @@ function runtimeVersion() {
 }
 
 function runtimeEnvironment() {
-  const candidate = process.env.MOVENTRA_ENV?.trim() || process.env.VERCEL_ENV?.trim() || process.env.NODE_ENV?.trim();
+  const candidate = process.env.MOVENTRA_ENV?.trim()
+    || process.env.VERCEL_TARGET_ENV?.trim()
+    || process.env.VERCEL_ENV?.trim()
+    || process.env.NODE_ENV?.trim();
   return candidate || 'development';
 }
 
