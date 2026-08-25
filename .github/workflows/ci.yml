@@ -55,6 +55,9 @@ jobs:
             "src/modules/configuration/configuration-domain.js"
             "src/modules/configuration/configuration-repository.js"
             "src/modules/configuration/configuration-service.js"
+            "src/modules/feature-flags/feature-flag-domain.js"
+            "src/modules/feature-flags/feature-flag-repository.js"
+            "src/modules/feature-flags/feature-flag-service.js"
             "api/database-health.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
@@ -72,6 +75,7 @@ jobs:
             "db/migrations/0005_user.sql"
             "db/migrations/0006_membership.sql"
             "db/migrations/0012_configuration.sql"
+            "db/migrations/0013_feature_flags.sql"
             "db/validation/0001_foundation_validation.sql"
             "db/validation/0002_tenant_validation.sql"
             "db/validation/0003_company_validation.sql"
@@ -79,6 +83,7 @@ jobs:
             "db/validation/0005_user_validation.sql"
             "db/validation/0006_membership_validation.sql"
             "db/validation/0012_configuration_validation.sql"
+            "db/validation/0013_feature_flags_validation.sql"
             ".github/workflows/release-gate.yml"
             ".github/workflows/rollback-drill.yml"
             ".github/workflows/production-promotion.yml"
@@ -93,6 +98,7 @@ jobs:
             "docs/implementation/011-usuarios.md"
             "docs/implementation/012-memberships.md"
             "docs/implementation/018-configuracoes.md"
+            "docs/implementation/019-feature-flags.md"
           )
 
           for file in "${required_files[@]}"; do
@@ -192,6 +198,8 @@ jobs:
           node --input-type=module -e "await import('./src/modules/security/authorized-tenant-operation.js')"
           node --input-type=module -e "await import('./src/modules/configuration/configuration-repository.js')"
           node --input-type=module -e "await import('./src/modules/configuration/configuration-service.js')"
+          node --input-type=module -e "await import('./src/modules/feature-flags/feature-flag-repository.js')"
+          node --input-type=module -e "await import('./src/modules/feature-flags/feature-flag-service.js')"
 
   database-contract:
     name: PostgreSQL migration contract

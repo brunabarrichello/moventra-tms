@@ -21,7 +21,7 @@ DECLARE
   mutable_table TEXT;
   protected_table TEXT;
 BEGIN
-  FOREACH schema_name IN ARRAY ARRAY['organization','identity','security','audit','configuration'] LOOP
+  FOREACH schema_name IN ARRAY ARRAY['organization','identity','security','audit','configuration','feature_flags'] LOOP
     IF NOT has_schema_privilege(runtime_role, schema_name, 'USAGE') THEN
       RAISE EXCEPTION 'runtime role lacks USAGE on schema %', schema_name;
     END IF;
@@ -46,7 +46,8 @@ BEGIN
     'security.membership_roles',
     'security.organizational_scopes',
     'security.role_assignment_scopes',
-    'configuration.settings'
+    'configuration.settings',
+    'feature_flags.rules'
   ] LOOP
     IF NOT has_table_privilege(runtime_role, mutable_table, 'SELECT')
        OR NOT has_table_privilege(runtime_role, mutable_table, 'INSERT')
@@ -76,6 +77,19 @@ BEGIN
     RAISE EXCEPTION 'runtime role must not mutate global configuration definitions';
   END IF;
 
+  IF NOT has_table_privilege(runtime_role, 'feature_flags.flags', 'SELECT')
+     OR NOT has_table_privilege(runtime_role, 'feature_flags.environment_policies', 'SELECT') THEN
+    RAISE EXCEPTION 'runtime role must read global feature flag catalogs';
+  END IF;
+  IF has_table_privilege(runtime_role, 'feature_flags.flags', 'INSERT')
+     OR has_table_privilege(runtime_role, 'feature_flags.flags', 'UPDATE')
+     OR has_table_privilege(runtime_role, 'feature_flags.flags', 'DELETE')
+     OR has_table_privilege(runtime_role, 'feature_flags.environment_policies', 'INSERT')
+     OR has_table_privilege(runtime_role, 'feature_flags.environment_policies', 'UPDATE')
+     OR has_table_privilege(runtime_role, 'feature_flags.environment_policies', 'DELETE') THEN
+    RAISE EXCEPTION 'runtime role must not mutate global feature flag catalogs';
+  END IF;
+
   IF NOT has_table_privilege(runtime_role, 'configuration.setting_versions', 'SELECT')
      OR NOT has_table_privilege(runtime_role, 'configuration.setting_versions', 'INSERT') THEN
     RAISE EXCEPTION 'runtime role must read and append configuration history';
@@ -83,6 +97,15 @@ BEGIN
   IF has_table_privilege(runtime_role, 'configuration.setting_versions', 'UPDATE')
      OR has_table_privilege(runtime_role, 'configuration.setting_versions', 'DELETE') THEN
     RAISE EXCEPTION 'configuration history must remain append-only for runtime';
+  END IF;
+
+  IF NOT has_table_privilege(runtime_role, 'feature_flags.rule_versions', 'SELECT')
+     OR NOT has_table_privilege(runtime_role, 'feature_flags.rule_versions', 'INSERT') THEN
+    RAISE EXCEPTION 'runtime role must read and append feature flag history';
+  END IF;
+  IF has_table_privilege(runtime_role, 'feature_flags.rule_versions', 'UPDATE')
+     OR has_table_privilege(runtime_role, 'feature_flags.rule_versions', 'DELETE') THEN
+    RAISE EXCEPTION 'feature flag history must remain append-only for runtime';
   END IF;
 
   IF NOT has_table_privilege(runtime_role, 'audit.audit_events', 'INSERT') THEN
@@ -103,7 +126,8 @@ BEGIN
     'identity.memberships','security.roles','security.role_permissions',
     'security.membership_roles','security.organizational_scopes',
     'security.role_assignment_scopes','audit.audit_events',
-    'configuration.settings','configuration.setting_versions'
+    'configuration.settings','configuration.setting_versions',
+    'feature_flags.rules','feature_flags.rule_versions'
   ] LOOP
     IF NOT EXISTS (
       SELECT 1
@@ -121,7 +145,7 @@ $validation$;
 
 BEGIN;
 
--- Global platform-owned definition is seeded by the administrative validation principal,
+-- Global platform-owned catalogs are seeded by the administrative validation principal,
 -- never by the runtime application role.
 INSERT INTO configuration.definitions (
   id, key, owner_domain, name, value_type, default_value, validation_schema,
@@ -137,6 +161,29 @@ INSERT INTO configuration.definitions (
   '{}'::jsonb,
   TRUE, TRUE, TRUE,
   'INTERNAL',
+  'ACTIVE'
+);
+
+INSERT INTO feature_flags.flags (
+  id, key, name, description, default_enabled, status, hash_version
+) VALUES (
+  '01990000-0000-7000-8000-000000000300',
+  'validation.runtime.feature_flag',
+  'Runtime validation feature flag',
+  'Synthetic platform flag for runtime ACL validation',
+  FALSE,
+  'ACTIVE',
+  1
+);
+
+INSERT INTO feature_flags.environment_policies (
+  id, flag_id, environment, enabled, rollout_basis_points, status
+) VALUES (
+  '01990000-0000-7000-8000-000000000301',
+  '01990000-0000-7000-8000-000000000300',
+  'staging',
+  TRUE,
+  10000,
   'ACTIVE'
 );
 
@@ -202,6 +249,32 @@ INSERT INTO configuration.setting_versions (
   'runtime validation'
 );
 
+INSERT INTO feature_flags.rules (
+  id, tenant_id, flag_id, environment, target_type, enabled, rollout_basis_points, status
+) VALUES (
+  '01990000-0000-7000-8000-000000000302',
+  '01990000-0000-7000-8000-000000000001',
+  '01990000-0000-7000-8000-000000000300',
+  'staging',
+  'TENANT',
+  TRUE,
+  10000,
+  'ACTIVE'
+);
+
+INSERT INTO feature_flags.rule_versions (
+  tenant_id, rule_id, rule_version, enabled, rollout_basis_points, status, change_type, reason
+) VALUES (
+  '01990000-0000-7000-8000-000000000001',
+  '01990000-0000-7000-8000-000000000302',
+  1,
+  TRUE,
+  10000,
+  'ACTIVE',
+  'CREATE',
+  'runtime validation'
+);
+
 DO $rls$
 DECLARE
   visible_count INTEGER;
@@ -248,6 +321,30 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
   END;
+
+  SELECT count(*) INTO visible_count
+    FROM feature_flags.rules
+   WHERE tenant_id = '01990000-0000-7000-8000-000000000002';
+  IF visible_count <> 0 THEN
+    RAISE EXCEPTION 'cross-tenant feature flag read was not isolated';
+  END IF;
+
+  BEGIN
+    INSERT INTO feature_flags.rules (
+      tenant_id, flag_id, environment, target_type, enabled, rollout_basis_points, status
+    ) VALUES (
+      '01990000-0000-7000-8000-000000000002',
+      '01990000-0000-7000-8000-000000000300',
+      'staging',
+      'TENANT',
+      TRUE,
+      10000,
+      'ACTIVE'
+    );
+    RAISE EXCEPTION 'cross-tenant feature flag write unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
 END
 $rls$;
 
@@ -284,6 +381,21 @@ BEGIN
   END;
 
   BEGIN
+    INSERT INTO feature_flags.flags (key, name, default_enabled, status, hash_version)
+    VALUES ('forbidden.runtime.flag', 'Forbidden runtime flag', FALSE, 'ACTIVE', 1);
+    RAISE EXCEPTION 'feature flag catalog mutation unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+
+  BEGIN
+    UPDATE feature_flags.environment_policies SET enabled = FALSE;
+    RAISE EXCEPTION 'feature flag environment policy mutation unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+
+  BEGIN
     UPDATE configuration.setting_versions SET reason = 'forbidden';
     RAISE EXCEPTION 'configuration history UPDATE unexpectedly succeeded';
   EXCEPTION WHEN insufficient_privilege THEN
@@ -293,6 +405,20 @@ BEGIN
   BEGIN
     DELETE FROM configuration.setting_versions;
     RAISE EXCEPTION 'configuration history DELETE unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+
+  BEGIN
+    UPDATE feature_flags.rule_versions SET reason = 'forbidden';
+    RAISE EXCEPTION 'feature flag history UPDATE unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+
+  BEGIN
+    DELETE FROM feature_flags.rule_versions;
+    RAISE EXCEPTION 'feature flag history DELETE unexpectedly succeeded';
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
   END;
@@ -319,7 +445,7 @@ BEGIN
   END;
 
   BEGIN
-    EXECUTE 'CREATE TABLE configuration.runtime_forbidden(id integer)';
+    EXECUTE 'CREATE TABLE feature_flags.runtime_forbidden(id integer)';
     RAISE EXCEPTION 'runtime unexpectedly created a table';
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
