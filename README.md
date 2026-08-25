@@ -31,12 +31,16 @@ O Moventra TMS é uma plataforma SaaS empresarial multi-tenant, multiempresa e m
 015 — Escopo Organizacional = CONCLUDED
 016 — RLS / Defesa adicional = CONCLUDED
 017 — Auditoria Central = CONCLUDED
+018 — Configurações = ACTIVE / DEFINED
+
+P0 pós-G2 — Runtime PostgreSQL least privilege = CONCLUDED
+P1 pós-G2 — Pipeline integrado + release impact = CONCLUDED
 
 G1 — Foundation Ready = APPROVED
-G2 — Security Ready = APPROVED
+G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`.
+A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`. A fase 018 está especificada em `docs/implementation/018-configuracoes.md`.
 
 ## Fundação organizacional e de segurança
 
@@ -85,27 +89,37 @@ Checksums canônicos de 0006–0011:
 0011_audit.sql                = 5f982ae3894d48833f27d447d24d932ddb99c3a3d2e6cb13eb823d9d67c86fa9
 ```
 
-Neon Staging e Main foram validados em PostgreSQL 18.6. Main possui as migrations 0001–0011; a fundação de segurança contém 10 policies `tenant_isolation_*`, contexto transacional `security.current_tenant_id()` e Audit Trail com `tenant_id NOT NULL`, RLS e bloqueio de UPDATE/DELETE.
+Neon Staging e Main foram validados em PostgreSQL 18.6.
 
-## Promoção final do batch 012–017
+## Hardening pós-G2
 
-As fases 012–017 foram executadas tecnicamente em lote com **uma única promoção de aplicação Production ao final da 017**, conforme governança aprovada.
+P0 comprovou privilégios PostgreSQL de runtime com principal non-owner/NOBYPASSRLS.
+
+P1 incorporou em Production o pipeline reutilizável:
 
 ```text
-functional/runtime revision = 6b80fe7903b5ba742041508cb7465ff529215139
-Production deployment        = dpl_EHVA4pRhCchcn6Nrn43uTefpUuue
-state                        = READY
-target                       = production
-/health                      = 200 × 2
-/api/database-health         = 200 × 2
-runtime errors               = none observed
+verified assertion
+→ ExternalIdentity/User/Membership
+→ RBAC
+→ Organizational Scope
+→ Tenant transaction/RLS
+→ operação
+→ Audit
 ```
 
-Antes da promoção, Staging validou o artefato final e executou rollback/restore com sucesso. A promoção Production passou pelo environment protegido e reutilizou o artefato imutável da revisão funcional final, sem bypass.
+Revisão funcional P1:
+
+```text
+revision              = 0a0ec943cc249e635d94267f386bb638228e11f7
+Production deployment = dpl_3fJQRBCn7WKNtRwsKdVo7nsXmZbY
+state                 = READY
+```
+
+A revisão documental de prova `4d96525ef825eda49fdb7c2199d3e5cc4e96102c` foi classificada `documentation-only`; Staging, rollback/restore e Production foram pulados e não houve novo deployment Vercel.
 
 ## Runtime e entrega
 
-Cadeia oficial:
+Cadeia oficial para mudanças runtime-impacting:
 
 ```text
 CI
@@ -120,10 +134,8 @@ CI
 → production evidence
 ```
 
-Gates humanos protegidos não podem ser contornados por deploy manual.
+Gates humanos protegidos não podem ser contornados por deploy manual. Revisões exclusivamente documentais percorrem a classificação auditável, mas não alteram runtime.
 
 ## Continuidade
 
-A sequência fundacional oficial **001–017 está concluída** e `G2 — Security Ready` está aprovado. Nenhuma fase posterior é ativada automaticamente sem definição canônica explícita.
-
-Revisões exclusivamente documentais posteriores à revisão funcional `6b80fe7903b5ba742041508cb7465ff529215139` não reabrem o gate funcional nem exigem nova promoção Production da aplicação.
+A fundação 001–017 e os hardenings P0/P1 estão concluídos. A próxima etapa oficial explicitamente ativada é **018 — Configurações**; nenhuma etapa posterior está ativa.
