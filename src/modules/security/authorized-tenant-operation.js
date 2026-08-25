@@ -1,5 +1,7 @@
 import { normalizeTenantId, withTenantDatabaseTransaction } from '../../infrastructure/database/tenant-context.js';
 import { PostgresAuditRepository } from '../audit/audit-repository.js';
+import { IdempotencyService } from '../idempotency/idempotency-service.js';
+import { PostgresIdempotencyRepository } from '../idempotency/idempotency-repository.js';
 import { AuthIdentityResolver } from '../identity/auth/auth-identity-resolver.js';
 import { PostgresExternalIdentityRepository } from '../identity/auth/external-identity-repository.js';
 import { PostgresMembershipRepository } from '../identity/membership/membership-repository.js';
@@ -15,6 +17,7 @@ export class AuthorizedTenantOperationService {
   constructor({
     transaction = withTenantDatabaseTransaction,
     componentsFactory = createSecurityComponents,
+    idempotencyFactory = createIdempotencyService,
   } = {}) {
     if (typeof transaction !== 'function') {
       throw new TypeError('Authorized tenant operation transaction must be a function');
@@ -22,9 +25,13 @@ export class AuthorizedTenantOperationService {
     if (typeof componentsFactory !== 'function') {
       throw new TypeError('Authorized tenant operation componentsFactory must be a function');
     }
+    if (typeof idempotencyFactory !== 'function') {
+      throw new TypeError('Authorized tenant operation idempotencyFactory must be a function');
+    }
 
     this.transaction = transaction;
     this.componentsFactory = componentsFactory;
+    this.idempotencyFactory = idempotencyFactory;
   }
 
   async execute(input, operation) {
@@ -68,7 +75,7 @@ export class AuthorizedTenantOperationService {
           );
         }
 
-        const result = await operation(Object.freeze({
+        const operationContext = Object.freeze({
           tenantId,
           user: principal.user,
           membership: principal.membership,
@@ -76,7 +83,43 @@ export class AuthorizedTenantOperationService {
           permission: request.permission,
           scope: request.scope,
           query,
-        }));
+        });
+
+        if (request.idempotency) {
+          const idempotency = validateIdempotencyService(this.idempotencyFactory(query));
+          const idempotentResult = await idempotency.execute({
+            tenantId,
+            operationKey: request.idempotency.operationKey,
+            idempotencyKey: request.idempotency.key,
+            fingerprintInput: request.idempotency.fingerprintInput,
+            responseStatus: request.idempotency.responseStatus,
+            responseMediaType: request.idempotency.responseMediaType,
+            responseHeaders: request.idempotency.responseHeaders,
+            execute: () => operation(operationContext),
+          });
+
+          if (!idempotentResult.replayed) {
+            await components.audit.append(buildAuditEvent({
+              request,
+              principal,
+              outcome: 'SUCCESS',
+              reason: null,
+            }));
+          }
+
+          return Object.freeze({
+            value: idempotentResult.response.body,
+            idempotency: Object.freeze({
+              outcome: idempotentResult.outcome,
+              replayed: idempotentResult.replayed,
+              status: idempotentResult.response.status,
+              mediaType: idempotentResult.response.mediaType,
+              headers: idempotentResult.response.headers,
+            }),
+          });
+        }
+
+        const result = await operation(operationContext);
 
         await components.audit.append(buildAuditEvent({
           request,
@@ -142,6 +185,12 @@ export function createSecurityComponents(query) {
   });
 }
 
+export function createIdempotencyService(query) {
+  return new IdempotencyService({
+    repository: new PostgresIdempotencyRepository({ query }),
+  });
+}
+
 function normalizeAuthorizedOperation(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw authorizedOperationError(
@@ -158,6 +207,7 @@ function normalizeAuthorizedOperation(input) {
   ).toLowerCase();
   const scope = normalizeScopeTarget(input.scope);
   const audit = normalizeAuditDescriptor(input.audit);
+  const idempotency = normalizeIdempotencyDescriptor(input.idempotency);
 
   return Object.freeze({
     tenantId: normalizeTenantId(input.tenantId),
@@ -165,6 +215,7 @@ function normalizeAuthorizedOperation(input) {
     permission,
     scope: Object.freeze(scope),
     audit,
+    idempotency,
   });
 }
 
@@ -228,6 +279,27 @@ function normalizeAuditDescriptor(value) {
   });
 }
 
+function normalizeIdempotencyDescriptor(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw authorizedOperationError(
+      'MVT_IDEMPOTENCY_REQUEST_INVALID',
+      'Idempotency descriptor must be an object',
+    );
+  }
+
+  return Object.freeze({
+    key: value.key,
+    operationKey: value.operationKey,
+    fingerprintInput: value.fingerprintInput ?? null,
+    responseStatus: value.responseStatus ?? 200,
+    responseMediaType: value.responseMediaType ?? 'application/json',
+    responseHeaders: plainObjectOrEmpty(value.responseHeaders),
+  });
+}
+
 function buildAuditEvent({ request, principal, outcome, reason }) {
   return {
     tenantId: request.tenantId,
@@ -277,13 +349,20 @@ function validateComponents(components) {
   return components;
 }
 
+function validateIdempotencyService(service) {
+  if (!service || typeof service.execute !== 'function') {
+    throw new TypeError('Authorized tenant operation idempotency service is incomplete');
+  }
+  return service;
+}
+
 function isDeniedError(error) {
   const code = safeFailureCode(error);
   return DENIED_CODE_PREFIXES.some((prefix) => code.startsWith(prefix));
 }
 
 function safeFailureCode(error) {
-  if (typeof error?.code === 'string' && /^[A-Z0-9_]{3,160}$/.test(error.code)) {
+  if (typeof error?.code === 'string' && /^[A-Z0-9_.]{3,160}$/.test(error.code)) {
     return error.code;
   }
   return 'MVT_SECURITY_PIPELINE_FAILED';
