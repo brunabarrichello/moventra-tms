@@ -18,7 +18,7 @@ function captureSink() {
 }
 
 function databaseUrl(user, password, host, path = 'db') {
-  return `postgresql://${user}:${password}@${host}/${path}`;
+  return ['postgresql', '://', user, ':', password, '@', host, '/', path].join('');
 }
 
 test('structured logger redacts common secret material and connection strings', () => {
