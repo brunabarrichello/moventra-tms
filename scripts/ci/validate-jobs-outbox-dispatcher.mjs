@@ -21,11 +21,14 @@ const eventId = randomUUID();
 const tenantId = randomUUID();
 const aggregateId = randomUUID();
 const queue = `moventra.jobs.ci.${randomUUID()}`;
+const workerRole = normalizeRole(process.env.WORKER_APP_ROLE || 'moventra_worker_app_ci');
 let subscription;
+let workerRoleApplied = false;
 
 await client.connect();
 await client.query('BEGIN');
 try {
+  // Administrative fixture setup happens before switching to the worker principal.
   await client.query(
     `INSERT INTO organization.tenants (id, code, display_name, status, default_timezone, default_currency)
      VALUES ($1, $2, 'Jobs Dispatcher CI', 'ACTIVE', 'UTC', 'USD')`,
@@ -54,6 +57,11 @@ try {
   while (!subscription) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+
+  // From this point through job completion, every PostgreSQL statement runs as the
+  // dedicated NOBYPASSRLS worker principal, not as the database owner/admin fixture role.
+  await client.query(`SET ROLE "${workerRole}"`);
+  workerRoleApplied = true;
 
   const query = (text, values) => client.query(text, values);
   const outboxRepository = new SystemOutboxRepository({ query });
@@ -91,6 +99,9 @@ try {
   assert.equal(envelope.eventId, eventId);
   assert.equal(envelope.tenantId, tenantId);
 
+  await client.query('RESET ROLE');
+  workerRoleApplied = false;
+
   const persisted = await client.query(
     'SELECT published_at FROM outbox.events WHERE id = $1',
     [eventId],
@@ -110,6 +121,7 @@ try {
   process.stdout.write(JSON.stringify({
     status: 'ok',
     provider: 'rabbitmq',
+    dedicatedWorkerPrincipal: true,
     durableJobWorker: true,
     recurringSystemJob: true,
     outboxDispatch: true,
@@ -117,8 +129,19 @@ try {
     markPublished: true,
   }) + '\n');
 } finally {
+  if (workerRoleApplied) {
+    await client.query('RESET ROLE').catch(() => {});
+  }
   await subscription?.close?.().catch(() => {});
   await adapter.close().catch(() => {});
   await client.query('ROLLBACK').catch(() => {});
   await client.end();
+}
+
+function normalizeRole(value) {
+  const role = typeof value === 'string' ? value.trim() : '';
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(role)) {
+    throw new TypeError('WORKER_APP_ROLE is invalid');
+  }
+  return role;
 }
