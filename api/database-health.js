@@ -3,34 +3,47 @@ import {
   getDatabaseHealthSnapshot,
 } from '../src/core/database-health.js';
 import { checkDatabaseReadiness } from '../src/infrastructure/database/postgres.js';
+import { observeHttpRequest } from '../src/infrastructure/observability/http.js';
+import { createLogger } from '../src/infrastructure/observability/logger.js';
+
+const databaseHealthLogger = createLogger('database-health');
 
 export default async function handler(request, response) {
-  response.setHeader('cache-control', 'no-store');
+  return observeHttpRequest({
+    request,
+    response,
+    route: '/api/database-health',
+    handler: async () => {
+      response.setHeader('cache-control', 'no-store');
 
-  if ((request.method ?? 'GET') !== 'GET') {
-    response.setHeader('allow', 'GET');
-    response.status(405).json({
-      status: 'error',
-      code: 'METHOD_NOT_ALLOWED',
-    });
-    return;
-  }
+      if ((request.method ?? 'GET') !== 'GET') {
+        response.setHeader('allow', 'GET');
+        response.status(405).json({
+          status: 'error',
+          code: 'METHOD_NOT_ALLOWED',
+        });
+        return;
+      }
 
-  const version = process.env.APP_VERSION?.trim() || process.env.VERCEL_GIT_COMMIT_SHA?.trim() || undefined;
+      const version = process.env.APP_VERSION?.trim()
+        || process.env.VERCEL_GIT_COMMIT_SHA?.trim()
+        || undefined;
 
-  try {
-    const readiness = await checkDatabaseReadiness();
-    const snapshot = getDatabaseHealthSnapshot(readiness, version);
-    response.status(snapshot.status === 'ready' ? 200 : 503).json(snapshot);
-  } catch (error) {
-    const reason = classifyDatabaseHealthError(error);
+      try {
+        const readiness = await checkDatabaseReadiness();
+        const snapshot = getDatabaseHealthSnapshot(readiness, version);
+        response.status(snapshot.status === 'ready' ? 200 : 503).json(snapshot);
+      } catch (error) {
+        const reason = classifyDatabaseHealthError(error);
 
-    console.error('Database readiness probe failed', {
-      name: error?.name,
-      code: error?.code,
-      reason,
-    });
+        databaseHealthLogger.warn('Database readiness probe failed', {
+          event: 'database.readiness.failed',
+          reason,
+          error,
+        });
 
-    response.status(503).json(getDatabaseHealthSnapshot({ ok: false }, version, reason));
-  }
+        response.status(503).json(getDatabaseHealthSnapshot({ ok: false }, version, reason));
+      }
+    },
+  });
 }

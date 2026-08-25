@@ -1,11 +1,25 @@
 import { attachDatabasePool } from '@vercel/functions';
 import pg from 'pg';
+import { createLogger } from '../observability/logger.js';
+import { traceDatabaseOperation } from '../observability/tracing.js';
 
 const { Pool } = pg;
 
 const DEFAULT_POOL_MAX = 5;
 const DEFAULT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 5_000;
+const SAFE_DATABASE_OPERATIONS = new Set([
+  'select',
+  'insert',
+  'update',
+  'delete',
+  'with',
+  'begin',
+  'commit',
+  'rollback',
+  'set',
+]);
+const databaseLogger = createLogger('postgresql');
 
 let pool;
 let attachedToVercel = false;
@@ -42,9 +56,9 @@ export function getDatabasePool() {
   }
 
   pool.on('error', (error) => {
-    console.error('Unexpected idle PostgreSQL client error', {
-      name: error.name,
-      code: error.code,
+    databaseLogger.error('Unexpected idle PostgreSQL client error', {
+      event: 'database.pool.idle_client_error',
+      error,
     });
   });
 
@@ -53,7 +67,8 @@ export function getDatabasePool() {
 
 export async function queryDatabase(text, values = []) {
   validateQuery(text, values);
-  return getDatabasePool().query(text, values);
+  const operation = databaseOperationName(text);
+  return traceDatabaseOperation(operation, () => getDatabasePool().query(text, values));
 }
 
 export async function withDatabaseTransaction(callback) {
@@ -61,26 +76,28 @@ export async function withDatabaseTransaction(callback) {
     throw new TypeError('Transaction callback must be a function');
   }
 
-  const client = await getDatabasePool().connect();
+  return traceDatabaseOperation('transaction', async () => {
+    const client = await getDatabasePool().connect();
 
-  try {
-    await client.query('BEGIN');
-    const result = await callback(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
     try {
-      await client.query('ROLLBACK');
-    } catch (rollbackError) {
-      console.error('PostgreSQL rollback failed', {
-        name: rollbackError.name,
-        code: rollbackError.code,
-      });
+      await client.query('BEGIN');
+      const result = await callback(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        databaseLogger.error('PostgreSQL rollback failed', {
+          event: 'database.transaction.rollback_failed',
+          error: rollbackError,
+        });
+      }
+      throw error;
+    } finally {
+      client.release();
     }
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function checkDatabaseReadiness() {
@@ -105,6 +122,14 @@ export async function closeDatabasePool() {
   pool = undefined;
   attachedToVercel = false;
   await activePool.end();
+}
+
+export function databaseOperationName(text) {
+  if (typeof text !== 'string') {
+    return 'query';
+  }
+  const firstToken = text.trim().match(/^([A-Za-z]+)/)?.[1]?.toLowerCase();
+  return SAFE_DATABASE_OPERATIONS.has(firstToken) ? firstToken : 'query';
 }
 
 function requireDatabaseUrl() {
