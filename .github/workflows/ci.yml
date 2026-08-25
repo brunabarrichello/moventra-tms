@@ -64,6 +64,9 @@ jobs:
             "src/modules/feature-flags/feature-flag-domain.js"
             "src/modules/feature-flags/feature-flag-repository.js"
             "src/modules/feature-flags/feature-flag-service.js"
+            "src/modules/idempotency/fingerprint.js"
+            "src/modules/idempotency/idempotency-repository.js"
+            "src/modules/idempotency/idempotency-service.js"
             "api/health.js"
             "api/database-health.js"
             "tests/unit/observability-request-context.test.js"
@@ -71,16 +74,24 @@ jobs:
             "tests/unit/observability-metrics.test.js"
             "tests/unit/observability-telemetry.test.js"
             "tests/unit/observability-http.test.js"
+            "tests/unit/idempotency-fingerprint.test.js"
+            "tests/unit/idempotency-repository.test.js"
+            "tests/unit/idempotency-service.test.js"
+            "tests/unit/authorized-tenant-idempotency.test.js"
             "tests/architecture/observability-phase.test.js"
+            "tests/architecture/idempotency-phase.test.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
             "scripts/ci/build.sh"
             "scripts/ci/build-vercel-output.mjs"
+            "scripts/ci/runtime-access-contract.sh"
             "scripts/db/migrate.mjs"
             "scripts/db/validate-security-pipeline.mjs"
+            "scripts/db/validate-idempotency-concurrency.mjs"
             "scripts/release/classify-release-impact.sh"
             "db/runtime/runtime-access.sql"
             "db/runtime/runtime-access-validation.sql"
+            "db/runtime/idempotency-runtime-access-validation.sql"
             "db/migrations/0001_foundation.sql"
             "db/migrations/0002_tenant.sql"
             "db/migrations/0003_company.sql"
@@ -89,6 +100,7 @@ jobs:
             "db/migrations/0006_membership.sql"
             "db/migrations/0012_configuration.sql"
             "db/migrations/0013_feature_flags.sql"
+            "db/migrations/0014_idempotency.sql"
             "db/validation/0001_foundation_validation.sql"
             "db/validation/0002_tenant_validation.sql"
             "db/validation/0003_company_validation.sql"
@@ -97,6 +109,7 @@ jobs:
             "db/validation/0006_membership_validation.sql"
             "db/validation/0012_configuration_validation.sql"
             "db/validation/0013_feature_flags_validation.sql"
+            "db/validation/0014_idempotency_validation.sql"
             ".github/workflows/release-gate.yml"
             ".github/workflows/rollback-drill.yml"
             ".github/workflows/production-promotion.yml"
@@ -113,13 +126,15 @@ jobs:
             "docs/implementation/018-configuracoes.md"
             "docs/implementation/019-feature-flags.md"
             "docs/implementation/020-observabilidade-base.md"
+            "docs/implementation/021-error-handling.md"
+            "docs/implementation/022-idempotencia.md"
           )
 
           for file in "${required_files[@]}"; do
             test -f "$file" || { echo "::error file=$file::Mandatory platform file is missing"; exit 1; }
           done
 
-          for hook in scripts/ci/lint.sh scripts/ci/test.sh scripts/ci/build.sh; do
+          for hook in scripts/ci/lint.sh scripts/ci/test.sh scripts/ci/build.sh scripts/ci/runtime-access-contract.sh; do
             test -x "$hook" || { echo "::error file=$hook::CI hook must be executable"; exit 1; }
           done
 
@@ -155,7 +170,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dcba9c38 # v6.5.0
         with:
           node-version: 22
           package-manager-cache: false
@@ -220,6 +235,9 @@ jobs:
           node --input-type=module -e "await import('./src/modules/configuration/configuration-service.js')"
           node --input-type=module -e "await import('./src/modules/feature-flags/feature-flag-repository.js')"
           node --input-type=module -e "await import('./src/modules/feature-flags/feature-flag-service.js')"
+          node --input-type=module -e "await import('./src/modules/idempotency/fingerprint.js')"
+          node --input-type=module -e "await import('./src/modules/idempotency/idempotency-repository.js')"
+          node --input-type=module -e "await import('./src/modules/idempotency/idempotency-service.js')"
 
   database-contract:
     name: PostgreSQL migration contract
@@ -275,6 +293,10 @@ jobs:
             echo "Validating ${validation}"
             psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f "$validation"
           done
+      - name: Validate PostgreSQL runtime least privilege
+        run: bash scripts/ci/runtime-access-contract.sh
+      - name: Validate idempotency concurrency and rollback
+        run: node scripts/db/validate-idempotency-concurrency.mjs
       - name: Validate integrated Auth-RBAC-Scope-RLS-Audit pipeline
         run: node scripts/db/validate-security-pipeline.mjs
 
