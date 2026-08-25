@@ -85,5 +85,9 @@ test('evaluation precedence is explicit USER then BRANCH then COMPANY then TENAN
   assert.match(repository, /buildEvaluationCandidates/);
   assert.match(repository, /ENVIRONMENT_POLICY/);
   assert.match(repository, /FLAG_DEFAULT/);
-  assert.match(repository, /targetType === FEATURE_FLAG_TARGET\.USER/);
+  assert.match(repository, /type: 'USER'/);
+  assert.match(repository, /type: 'BRANCH'/);
+  assert.match(repository, /type: 'COMPANY'/);
+  assert.match(repository, /type: 'TENANT'/);
+  assert.match(repository, /type: 'PLAN'/);
 });
