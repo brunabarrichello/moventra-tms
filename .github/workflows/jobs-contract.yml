@@ -51,6 +51,7 @@ jobs:
       PGDATABASE: moventra_jobs_ci
       PGUSER: postgres
       PGPASSWORD: moventra-ci-only
+      WORKER_APP_ROLE: moventra_worker_app_ci
       MOVENTRA_ENV: ci
       MESSAGING_PROVIDER: rabbitmq
       MESSAGING_EXCHANGE: moventra.events.jobsci
@@ -87,11 +88,12 @@ jobs:
       - name: Apply complete migration history
         run: node scripts/db/migrate.mjs
 
-      - name: Validate Jobs schema and runtime least privilege
+      - name: Validate Jobs schema and separated principals
         run: |
           set -euo pipefail
           psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0016_jobs_validation.sql
           bash scripts/ci/runtime-access-contract.sh
+          bash scripts/ci/worker-access-contract.sh
 
       - name: Validate Jobs unit and architecture contracts
         run: >-
@@ -101,7 +103,7 @@ jobs:
           tests/unit/outbox-dispatcher-job.test.js
           tests/architecture/jobs-phase.test.js
 
-      - name: Validate real Outbox to RabbitMQ dispatch
+      - name: Validate real Outbox to RabbitMQ dispatch under worker principal
         run: |
           set -euo pipefail
           export MESSAGING_RABBITMQ_URL="amqp://${RABBITMQ_CI_USER}:${RABBITMQ_CI_PASSWORD}@127.0.0.1:5672/"
@@ -119,7 +121,8 @@ jobs:
           workflow_run_id=${GITHUB_RUN_ID}
           workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
           postgres_contract=executed
-          runtime_least_privilege=executed
+          application_runtime_least_privilege=executed
+          dedicated_worker_least_privilege=executed
           jobs_concurrency=executed
           rabbitmq_outbox_dispatch=executed
           EOF
