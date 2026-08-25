@@ -37,4 +37,11 @@ psql -X --no-psqlrc -v ON_ERROR_STOP=1 \
   -v app_role="$APP_ROLE" \
   -f db/runtime/idempotency-runtime-access-validation.sql
 
-echo "Runtime PostgreSQL access contract passed for synthetic non-owner principal ${APP_ROLE}."
+psql -X --no-psqlrc -v ON_ERROR_STOP=1 \
+  -v runtime_role="$RUNTIME_ROLE" \
+  -v app_role="$APP_ROLE" \
+  -f db/runtime/outbox-runtime-access-validation.sql
+
+node scripts/db/validate-outbox-concurrency.mjs
+
+echo "Runtime PostgreSQL access contract passed for synthetic non-owner principal ${APP_ROLE}, including Transactional Outbox."

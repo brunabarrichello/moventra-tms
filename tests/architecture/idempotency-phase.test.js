@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 022 remains materialized after conclusion while Outbox 023 is defined but not yet implemented', () => {
+test('phase 022 remains materialized after conclusion while Outbox 023 is the active implementation phase', () => {
   for (const path of [
     'db/migrations/0014_idempotency.sql',
     'db/validation/0014_idempotency_validation.sql',
@@ -16,12 +16,14 @@ test('phase 022 remains materialized after conclusion while Outbox 023 is define
     'src/modules/idempotency/idempotency-service.js',
     'docs/implementation/022-idempotencia.md',
     'docs/implementation/023-outbox.md',
+    'db/migrations/0015_outbox.sql',
+    'src/modules/outbox/outbox-service.js',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
   }
 
-  assert.equal(existsSync(new URL('../../db/migrations/0015_outbox.sql', import.meta.url)), false);
-  assert.equal(existsSync(new URL('../../src/modules/outbox/', import.meta.url)), false);
+  assert.equal(existsSync(new URL('../../db/migrations/0016_messaging.sql', import.meta.url)), false);
+  assert.equal(existsSync(new URL('../../src/modules/messaging/', import.meta.url)), false);
 
   const idempotencyDoc = read('docs/implementation/022-idempotencia.md');
   assert.match(idempotencyDoc, /^# 022 — Idempotência/m);

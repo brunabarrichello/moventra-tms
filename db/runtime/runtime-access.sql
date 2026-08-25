@@ -1,5 +1,5 @@
 -- Moventra TMS — PostgreSQL runtime access contract
--- P0 hardening after G2 audit, extended through phase 022 Idempotency.
+-- P0 hardening after G2 audit, extended through phase 023 Transactional Outbox.
 -- Apply with psql -v runtime_role=<NOLOGIN authorization role> -f db/runtime/runtime-access.sql
 -- The runtime role name is deliberately supplied by the environment; no secret is stored here.
 
@@ -11,8 +11,8 @@
 \endif
 
 -- Runtime may resolve objects but may never create objects in application schemas.
-GRANT USAGE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency TO :"runtime_role";
-REVOKE CREATE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency FROM :"runtime_role";
+GRANT USAGE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox TO :"runtime_role";
+REVOKE CREATE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox FROM :"runtime_role";
 
 -- Migration metadata is an administrative boundary and is never visible to runtime.
 REVOKE ALL PRIVILEGES ON SCHEMA moventra_meta FROM :"runtime_role";
@@ -41,7 +41,8 @@ REVOKE ALL PRIVILEGES ON
   feature_flags.environment_policies,
   feature_flags.rules,
   feature_flags.rule_versions,
-  idempotency.records
+  idempotency.records,
+  outbox.events
 FROM :"runtime_role";
 
 -- Organization lifecycle repositories use reads plus append/update with optimistic locking.
@@ -76,6 +77,12 @@ GRANT SELECT, INSERT, UPDATE ON
   idempotency.records
 TO :"runtime_role";
 
+-- Transactional Outbox append is allowed, while operational mutation is column-scoped.
+-- Payload, metadata, tenant, aggregate identity and event contract columns are immutable to runtime after INSERT.
+GRANT SELECT, INSERT ON outbox.events TO :"runtime_role";
+GRANT UPDATE (attempt_count, last_attempt_at, claim_token, claimed_at, published_at)
+  ON outbox.events TO :"runtime_role";
+
 -- Domain histories are append-only. Runtime may read tenant-scoped history and append new versions.
 GRANT SELECT, INSERT ON configuration.setting_versions TO :"runtime_role";
 GRANT SELECT, INSERT ON feature_flags.rule_versions TO :"runtime_role";
@@ -87,7 +94,7 @@ GRANT SELECT (id, occurred_at) ON audit.audit_events TO :"runtime_role";
 -- RLS tenant resolution is explicit; backend authorization remains mandatory.
 GRANT EXECUTE ON FUNCTION security.current_tenant_id() TO :"runtime_role";
 
--- Explicit negative boundary: runtime performs no hard delete on current domain/security/configuration/feature-flag/idempotency/audit tables.
+-- Explicit negative boundary: runtime performs no hard delete on current application/audit/outbox tables.
 REVOKE DELETE ON
   organization.tenants,
   organization.companies,
@@ -109,7 +116,8 @@ REVOKE DELETE ON
   feature_flags.environment_policies,
   feature_flags.rules,
   feature_flags.rule_versions,
-  idempotency.records
+  idempotency.records,
+  outbox.events
 FROM :"runtime_role";
 
 -- Platform-owned catalogs and append-only trails must not be mutated beyond their narrow contract.
