@@ -1,4 +1,4 @@
--- Moventra TMS — Phase 025 Durable Jobs runtime access validation
+-- Moventra TMS — Phase 025 application runtime Jobs access validation
 -- Requires psql variables runtime_role and app_role.
 \set ON_ERROR_STOP on
 \if :{?runtime_role}
@@ -25,7 +25,7 @@ BEGIN
     RAISE EXCEPTION 'runtime role must not CREATE in jobs schema';
   END IF;
 
-  -- Tenant-scoped jobs: authorized application workflows may schedule; RLS isolates ownership.
+  -- Tenant-scoped jobs are available only through normal tenant RLS.
   IF NOT has_table_privilege(runtime_role, 'jobs.jobs', 'SELECT')
      OR NOT has_table_privilege(runtime_role, 'jobs.jobs', 'INSERT') THEN
     RAISE EXCEPTION 'runtime role lacks SELECT/INSERT on tenant jobs';
@@ -37,9 +37,8 @@ BEGIN
   IF NOT has_column_privilege(runtime_role, 'jobs.jobs', 'status', 'UPDATE')
      OR NOT has_column_privilege(runtime_role, 'jobs.jobs', 'lease_token', 'UPDATE')
      OR NOT has_column_privilege(runtime_role, 'jobs.jobs', 'lease_expires_at', 'UPDATE')
-     OR NOT has_column_privilege(runtime_role, 'jobs.jobs', 'last_error_code', 'UPDATE')
      OR NOT has_column_privilege(runtime_role, 'jobs.jobs', 'updated_at', 'UPDATE') THEN
-    RAISE EXCEPTION 'runtime role lacks tenant job lifecycle UPDATE columns';
+    RAISE EXCEPTION 'runtime role lacks tenant job lifecycle columns';
   END IF;
   IF has_column_privilege(runtime_role, 'jobs.jobs', 'tenant_id', 'UPDATE')
      OR has_column_privilege(runtime_role, 'jobs.jobs', 'job_type', 'UPDATE')
@@ -49,33 +48,16 @@ BEGIN
     RAISE EXCEPTION 'runtime role can mutate immutable tenant job contract columns';
   END IF;
 
-  -- System jobs: schedules are migration-owned. Runtime executes lifecycle only.
-  IF NOT has_table_privilege(runtime_role, 'jobs.system_jobs', 'SELECT') THEN
-    RAISE EXCEPTION 'runtime role lacks SELECT on system jobs';
-  END IF;
-  IF has_table_privilege(runtime_role, 'jobs.system_jobs', 'INSERT')
+  -- P0 boundary: normal HTTP/application runtime cannot inspect or execute platform system jobs.
+  IF has_table_privilege(runtime_role, 'jobs.system_jobs', 'SELECT')
+     OR has_table_privilege(runtime_role, 'jobs.system_jobs', 'INSERT')
      OR has_table_privilege(runtime_role, 'jobs.system_jobs', 'UPDATE')
      OR has_table_privilege(runtime_role, 'jobs.system_jobs', 'DELETE') THEN
-    RAISE EXCEPTION 'runtime role has broad system job mutation privileges';
+    RAISE EXCEPTION 'application runtime must not access system jobs';
   END IF;
-  IF NOT has_column_privilege(runtime_role, 'jobs.system_jobs', 'status', 'UPDATE')
-     OR NOT has_column_privilege(runtime_role, 'jobs.system_jobs', 'lease_token', 'UPDATE')
-     OR NOT has_column_privilege(runtime_role, 'jobs.system_jobs', 'lease_expires_at', 'UPDATE')
-     OR NOT has_column_privilege(runtime_role, 'jobs.system_jobs', 'last_error_code', 'UPDATE')
-     OR NOT has_column_privilege(runtime_role, 'jobs.system_jobs', 'updated_at', 'UPDATE') THEN
-    RAISE EXCEPTION 'runtime role lacks system job lifecycle UPDATE columns';
-  END IF;
-  IF has_column_privilege(runtime_role, 'jobs.system_jobs', 'job_type', 'UPDATE')
-     OR has_column_privilege(runtime_role, 'jobs.system_jobs', 'payload', 'UPDATE')
-     OR has_column_privilege(runtime_role, 'jobs.system_jobs', 'metadata', 'UPDATE')
-     OR has_column_privilege(runtime_role, 'jobs.system_jobs', 'schedule_key', 'UPDATE')
-     OR has_column_privilege(runtime_role, 'jobs.system_jobs', 'recurrence_interval_ms', 'UPDATE') THEN
-    RAISE EXCEPTION 'runtime role can redefine a migration-owned system schedule';
-  END IF;
-
-  IF NOT has_function_privilege(runtime_role, 'outbox.claim_system_batch(integer,bigint,uuid)', 'EXECUTE')
-     OR NOT has_function_privilege(runtime_role, 'outbox.mark_system_published(uuid,uuid)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'runtime role lacks narrow system Outbox dispatcher capabilities';
+  IF has_function_privilege(runtime_role, 'outbox.claim_system_batch(integer,bigint,uuid)', 'EXECUTE')
+     OR has_function_privilege(runtime_role, 'outbox.mark_system_published(uuid,uuid)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'application runtime must not hold cross-tenant Outbox dispatcher capability';
   END IF;
 
   IF NOT EXISTS (
@@ -101,36 +83,23 @@ INSERT INTO organization.tenants (
 
 SET ROLE :"app_role";
 
--- The seeded global system schedule can be read/executed but cannot be created by runtime.
-DO $system_acl$
-DECLARE
-  system_count INTEGER;
+DO $system_boundary$
 BEGIN
-  SELECT count(*) INTO system_count
-    FROM jobs.system_jobs
-   WHERE job_type = 'system.outbox_dispatch';
-  IF system_count <> 1 THEN
-    RAISE EXCEPTION 'seeded system outbox job is not visible to runtime';
-  END IF;
-
   BEGIN
-    INSERT INTO jobs.system_jobs (job_type, payload, metadata)
-    VALUES ('system.unauthorized_runtime_schedule', '{}'::jsonb, '{}'::jsonb);
-    RAISE EXCEPTION 'runtime created a system job';
+    SELECT 1 FROM jobs.system_jobs LIMIT 1;
+    RAISE EXCEPTION 'application runtime read system jobs';
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
   END;
 
   BEGIN
-    UPDATE jobs.system_jobs
-       SET payload = '{"changed":true}'::jsonb
-     WHERE job_type = 'system.outbox_dispatch';
-    RAISE EXCEPTION 'runtime changed immutable system job payload';
+    PERFORM * FROM outbox.claim_system_batch(1, 1000, '01990251-0000-7000-8000-000000000099');
+    RAISE EXCEPTION 'application runtime invoked system Outbox claim';
   EXCEPTION WHEN insufficient_privilege THEN
     NULL;
   END;
 END
-$system_acl$;
+$system_boundary$;
 
 SELECT set_config('moventra.tenant_id', '01990251-0000-7000-8000-000000000001', true);
 
