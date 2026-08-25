@@ -43,7 +43,8 @@ REVOKE ALL PRIVILEGES ON
   feature_flags.rule_versions,
   idempotency.records,
   outbox.events,
-  jobs.jobs
+  jobs.jobs,
+  jobs.system_jobs
 FROM :"runtime_role";
 
 -- Organization lifecycle repositories use reads plus append/update with optimistic locking.
@@ -84,8 +85,8 @@ GRANT SELECT, INSERT ON outbox.events TO :"runtime_role";
 GRANT UPDATE (attempt_count, last_attempt_at, claim_token, claimed_at, published_at)
   ON outbox.events TO :"runtime_role";
 
--- Jobs may be scheduled/read by runtime, while mutation is restricted to lifecycle/lease columns.
--- Tenant/scope/type/payload/metadata/schedule identity remain immutable after INSERT.
+-- Tenant jobs are RLS-protected and may be scheduled by authorized application workflows.
+-- tenant_id, type, payload, metadata and schedule identity remain immutable after INSERT.
 GRANT SELECT, INSERT ON jobs.jobs TO :"runtime_role";
 GRANT UPDATE (
   status,
@@ -102,6 +103,25 @@ GRANT UPDATE (
   cancelled_at,
   updated_at
 ) ON jobs.jobs TO :"runtime_role";
+
+-- System jobs are technical/global and migration-owned. Runtime may execute their lifecycle
+-- but cannot create, delete or redefine system schedules/contracts.
+GRANT SELECT ON jobs.system_jobs TO :"runtime_role";
+GRANT UPDATE (
+  status,
+  available_at,
+  attempt_count,
+  lease_token,
+  leased_at,
+  lease_expires_at,
+  last_heartbeat_at,
+  last_error_code,
+  last_error_class,
+  last_completed_at,
+  completed_at,
+  updated_at
+) ON jobs.system_jobs TO :"runtime_role";
+REVOKE INSERT, DELETE ON jobs.system_jobs FROM :"runtime_role";
 
 -- Cross-tenant Outbox dispatch is exposed only through narrow SECURITY DEFINER capabilities.
 GRANT EXECUTE ON FUNCTION outbox.claim_system_batch(INTEGER, BIGINT, UUID) TO :"runtime_role";
@@ -142,7 +162,8 @@ REVOKE DELETE ON
   feature_flags.rule_versions,
   idempotency.records,
   outbox.events,
-  jobs.jobs
+  jobs.jobs,
+  jobs.system_jobs
 FROM :"runtime_role";
 
 -- Platform-owned catalogs and append-only trails must not be mutated beyond their narrow contract.
