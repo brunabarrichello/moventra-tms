@@ -1,0 +1,91 @@
+-- Moventra TMS — PostgreSQL runtime access contract
+-- P0 hardening after G2 audit.
+-- Apply with psql -v runtime_role=<NOLOGIN authorization role> -f db/runtime/runtime-access.sql
+-- The runtime role name is deliberately supplied by the environment; no secret is stored here.
+
+\set ON_ERROR_STOP on
+\if :{?runtime_role}
+\else
+  \echo 'runtime_role psql variable is required'
+  \quit 3
+\endif
+
+-- Runtime may resolve objects but may never create objects in application schemas.
+GRANT USAGE ON SCHEMA organization, identity, security, audit TO :"runtime_role";
+REVOKE CREATE ON SCHEMA organization, identity, security, audit FROM :"runtime_role";
+
+-- Migration metadata is an administrative boundary and is never visible to runtime.
+REVOKE ALL PRIVILEGES ON SCHEMA moventra_meta FROM :"runtime_role";
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA moventra_meta FROM :"runtime_role";
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA moventra_meta FROM :"runtime_role";
+
+-- Reset current application-table ACLs first so reruns converge instead of accumulating grants.
+REVOKE ALL PRIVILEGES ON
+  organization.tenants,
+  organization.companies,
+  organization.branches,
+  identity.users,
+  identity.memberships,
+  identity.external_identities,
+  security.permissions,
+  security.roles,
+  security.role_permissions,
+  security.membership_roles,
+  security.organizational_scopes,
+  security.role_assignment_scopes,
+  audit.audit_events
+FROM :"runtime_role";
+
+-- Organization lifecycle repositories use reads plus append/update with optimistic locking.
+GRANT SELECT, INSERT, UPDATE ON
+  organization.tenants,
+  organization.companies,
+  organization.branches
+TO :"runtime_role";
+
+-- Global identity and tenant memberships are mutable through application workflows.
+GRANT SELECT, INSERT, UPDATE ON
+  identity.users,
+  identity.memberships,
+  identity.external_identities
+TO :"runtime_role";
+
+-- Permission codes are a platform-owned global catalog. Normal application runtime is read-only.
+GRANT SELECT ON security.permissions TO :"runtime_role";
+
+-- Tenant-owned authorization configuration is mutable but never hard-deleted by runtime.
+GRANT SELECT, INSERT, UPDATE ON
+  security.roles,
+  security.role_permissions,
+  security.membership_roles,
+  security.organizational_scopes,
+  security.role_assignment_scopes
+TO :"runtime_role";
+
+-- Central audit is append-only. SELECT is column-limited to satisfy INSERT ... RETURNING id, occurred_at.
+GRANT INSERT ON audit.audit_events TO :"runtime_role";
+GRANT SELECT (id, occurred_at) ON audit.audit_events TO :"runtime_role";
+
+-- RLS tenant resolution is explicit; backend authorization remains mandatory.
+GRANT EXECUTE ON FUNCTION security.current_tenant_id() TO :"runtime_role";
+
+-- Explicit negative boundary: runtime performs no hard delete on current domain/security/audit tables.
+REVOKE DELETE ON
+  organization.tenants,
+  organization.companies,
+  organization.branches,
+  identity.users,
+  identity.memberships,
+  identity.external_identities,
+  security.permissions,
+  security.roles,
+  security.role_permissions,
+  security.membership_roles,
+  security.organizational_scopes,
+  security.role_assignment_scopes,
+  audit.audit_events
+FROM :"runtime_role";
+
+-- The permission catalog and audit trail must not be mutated beyond their narrow contract.
+REVOKE INSERT, UPDATE ON security.permissions FROM :"runtime_role";
+REVOKE UPDATE ON audit.audit_events FROM :"runtime_role";
