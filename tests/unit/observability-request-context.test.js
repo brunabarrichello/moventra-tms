@@ -53,7 +53,9 @@ test('AsyncLocalStorage keeps concurrent request contexts isolated', async () =>
     },
   );
 
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   assert.deepEqual(barrier.sort(), ['a', 'b']);
   release();
 
