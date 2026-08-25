@@ -129,7 +129,9 @@ function mapEvent(row) {
 }
 
 function normalizeDate(value) {
-  if (value === null || value === undefined) return null;
+  if (value === null || value === undefined) {
+    return null;
+  }
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) {
     throw repositoryError('MVT_OUTBOX_RECORD_INVALID', 'Outbox event timestamp is invalid');
