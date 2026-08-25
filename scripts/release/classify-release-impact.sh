@@ -30,7 +30,7 @@ git cat-file -e "${head_sha}^{commit}" 2>/dev/null || {
   exit 3
 }
 
-mapfile -t changed_files < <(git diff --name-only --diff-filter=ACMRTUXB "$base_sha" "$head_sha")
+mapfile -t changed_files < <(git diff --name-only --diff-filter=ACDMRTUXB "$base_sha" "$head_sha")
 
 requires_release=false
 runtime_files=0
