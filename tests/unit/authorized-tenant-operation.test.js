@@ -46,7 +46,9 @@ function harness({ permissionError = null, scoped = true, auditError = null } = 
     authorization: {
       requirePermission: async () => {
         calls.permission += 1;
-        if (permissionError) throw permissionError;
+        if (permissionError) {
+          throw permissionError;
+        }
         return true;
       },
     },
@@ -58,7 +60,9 @@ function harness({ permissionError = null, scoped = true, auditError = null } = 
     },
     audit: {
       append: async (event) => {
-        if (auditError) throw auditError;
+        if (auditError) {
+          throw auditError;
+        }
         audits.push(event);
         return { id: '01990000-0000-7000-8000-000000000900' };
       },
