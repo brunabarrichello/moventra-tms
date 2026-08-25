@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   normalizeFeatureFlagReason,
   normalizeHttpMetricAttributes,
+  normalizeIdempotencyOperationKey,
   normalizeRouteTemplate,
 } from '../../src/infrastructure/observability/metrics.js';
 
@@ -65,4 +66,11 @@ test('feature flag evaluation error reasons are an allowlisted low-cardinality s
   assert.equal(normalizeFeatureFlagReason('flag_not_found'), 'flag_not_found');
   assert.equal(normalizeFeatureFlagReason('database_error'), 'database_error');
   assert.equal(normalizeFeatureFlagReason('tenant-01990190-uuid-specific-error'), 'unknown');
+});
+
+test('idempotency metric operation labels accept only controlled namespaced keys', () => {
+  assert.equal(normalizeIdempotencyOperationKey('freight.contract.create'), 'freight.contract.create');
+  assert.equal(normalizeIdempotencyOperationKey('Freight.Contract.Create'), 'freight.contract.create');
+  assert.equal(normalizeIdempotencyOperationKey('tenant-01990220-uuid-specific-operation'), 'unknown');
+  assert.equal(normalizeIdempotencyOperationKey('free form'), 'unknown');
 });
