@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 022 materializes tenant-scoped idempotency without anticipating Outbox 023', () => {
+test('phase 022 remains materialized after conclusion while Outbox 023 is defined but not yet implemented', () => {
   for (const path of [
     'db/migrations/0014_idempotency.sql',
     'db/validation/0014_idempotency_validation.sql',
@@ -15,6 +15,7 @@ test('phase 022 materializes tenant-scoped idempotency without anticipating Outb
     'src/modules/idempotency/idempotency-repository.js',
     'src/modules/idempotency/idempotency-service.js',
     'docs/implementation/022-idempotencia.md',
+    'docs/implementation/023-outbox.md',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
   }
@@ -22,11 +23,16 @@ test('phase 022 materializes tenant-scoped idempotency without anticipating Outb
   assert.equal(existsSync(new URL('../../db/migrations/0015_outbox.sql', import.meta.url)), false);
   assert.equal(existsSync(new URL('../../src/modules/outbox/', import.meta.url)), false);
 
-  const doc = read('docs/implementation/022-idempotencia.md');
-  assert.match(doc, /^# 022 — Idempotência/m);
-  assert.match(doc, /## Estado\s+`ACTIVE \/ DEFINED`/i);
-  assert.match(doc, /023 — Transactional Outbox.*NOT ACTIVE/is);
-  assert.match(doc, /não promete exactly-once para efeitos externos/i);
+  const idempotencyDoc = read('docs/implementation/022-idempotencia.md');
+  assert.match(idempotencyDoc, /^# 022 — Idempotência/m);
+  assert.match(idempotencyDoc, /## Estado\s+`CONCLUDED`/i);
+  assert.match(idempotencyDoc, /023 — Transactional Outbox = ACTIVE \/ DEFINED/i);
+  assert.match(idempotencyDoc, /não promete exactly-once para efeitos externos/i);
+
+  const outboxDoc = read('docs/implementation/023-outbox.md');
+  assert.match(outboxDoc, /^# 023 — Transactional Outbox/m);
+  assert.match(outboxDoc, /## Estado\s+`ACTIVE \/ DEFINED`/i);
+  assert.match(outboxDoc, /024 — Mensageria.*NOT ACTIVE/is);
 });
 
 test('idempotency persistence has tenant uniqueness, RLS, expiry and no plaintext client key column', () => {
