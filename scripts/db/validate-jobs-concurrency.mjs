@@ -9,7 +9,17 @@ const client = new Client({ connectionString: process.env.DATABASE_URL || undefi
 await client.connect();
 await client.query('BEGIN');
 try {
-  const repository = new PostgresJobRepository({ query: (text, values) => client.query(text, values) });
+  // Keep the migration-owned recurring dispatcher out of this isolated concurrency sample.
+  await client.query(
+    `UPDATE jobs.system_jobs
+        SET status = 'succeeded', completed_at = clock_timestamp(), updated_at = clock_timestamp()
+      WHERE job_type = 'system.outbox_dispatch'`,
+  );
+
+  const repository = new PostgresJobRepository({
+    query: (text, values) => client.query(text, values),
+    scope: 'system',
+  });
   for (let index = 0; index < 12; index += 1) {
     await repository.enqueue({
       tenantId: null,
@@ -40,7 +50,7 @@ try {
   const completed = await repository.completeSuccess({ jobId: target.id, leaseToken: target.leaseToken });
   assert.equal(completed.status, 'succeeded');
 
-  const retryTarget = (a[1] ?? b[1]);
+  const retryTarget = a[1] ?? b[1];
   assert.ok(retryTarget);
   const retry = await repository.completeFailure({
     jobId: retryTarget.id,
