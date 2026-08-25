@@ -44,9 +44,13 @@ test('Vercel Build Output API artifact embeds immutable revision identity and ob
 
     const bundledHealthApi = await readFile(path.join(healthFunctionDir, 'api', 'health.js'), 'utf8');
     assert.match(bundledHealthApi, /observeHttpRequest/);
+    assert.match(bundledHealthApi, /handleHttpError/);
     await access(
       path.join(healthFunctionDir, 'src', 'infrastructure', 'observability', 'telemetry.js'),
     );
+    await access(path.join(healthFunctionDir, 'src', 'core', 'errors', 'app-error.js'));
+    await access(path.join(healthFunctionDir, 'src', 'http', 'error-mapper.js'));
+    await access(path.join(healthFunctionDir, 'src', 'http', 'problem-details.js'));
     await access(path.join(healthFunctionDir, 'node_modules', '@opentelemetry', 'api', 'package.json'));
 
     const databaseFunctionDir = path.join(outputRoot, 'functions', 'api', 'database-health.func');
@@ -68,6 +72,7 @@ test('Vercel Build Output API artifact embeds immutable revision identity and ob
     assert.match(bundledDatabaseApi, /checkDatabaseReadiness/);
     assert.match(bundledDatabaseApi, /classifyDatabaseHealthError/);
     assert.match(bundledDatabaseApi, /observeHttpRequest/);
+    assert.match(bundledDatabaseApi, /handleHttpError/);
     assert.doesNotMatch(bundledDatabaseApi, /databaseName|serverVersionNum/);
 
     const bundledCore = await readFile(
@@ -85,6 +90,8 @@ test('Vercel Build Output API artifact embeds immutable revision identity and ob
     assert.match(bundledPostgres, /traceDatabaseOperation/);
     assert.doesNotMatch(bundledPostgres, /db\.statement/);
 
+    await access(path.join(databaseFunctionDir, 'src', 'core', 'errors', 'error-normalizer.js'));
+    await access(path.join(databaseFunctionDir, 'src', 'http', 'problem-details.js'));
     await access(path.join(databaseFunctionDir, 'node_modules', 'pg', 'package.json'));
     await access(path.join(databaseFunctionDir, 'node_modules', '@vercel', 'functions', 'package.json'));
     await access(
