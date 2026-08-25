@@ -35,8 +35,9 @@ O Moventra TMS é uma plataforma SaaS empresarial multi-tenant, multiempresa e m
 019 — Feature Flags = CONCLUDED
 020 — Observabilidade Base = CONCLUDED
 021 — Error Handling = CONCLUDED
-022 — Idempotência = ACTIVE / DEFINED
-023+ = NOT ACTIVE
+022 — Idempotência = CONCLUDED
+023 — Transactional Outbox = ACTIVE / DEFINED
+024+ = NOT ACTIVE
 
 P0 pós-G2 — Runtime PostgreSQL least privilege = CONCLUDED
 P1 pós-G2 — Pipeline integrado + release impact = CONCLUDED
@@ -45,7 +46,7 @@ G1 — Foundation Ready = APPROVED
 G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`. Configurações está documentada em `docs/implementation/018-configuracoes.md`; Feature Flags em `docs/implementation/019-feature-flags.md`; Observabilidade Base em `docs/implementation/020-observabilidade-base.md`; Error Handling em `docs/implementation/021-error-handling.md`; Idempotência em `docs/implementation/022-idempotencia.md`.
+A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`. As fases 018–023 estão documentadas em `docs/implementation/018-configuracoes.md`, `019-feature-flags.md`, `020-observabilidade-base.md`, `021-error-handling.md`, `022-idempotencia.md` e `023-outbox.md`.
 
 ## Fundação organizacional e de segurança
 
@@ -65,9 +66,11 @@ Configuration = catálogo tipado + overrides hierárquicos
 Feature Flags = rollout determinístico + targeting tenant-aware
 Observability = OpenTelemetry + structured logs + traces + metrics + request/correlation context
 Error Handling = erros tipados + códigos estáveis + Problem Details + normalização segura
+Idempotency = Idempotency-Key hash + request fingerprint + stored result transacional
+Outbox = evento a publicar registrado atomicamente com a mutação de negócio
 ```
 
-`identity.users`, `identity.external_identities`, `security.permissions` e catálogos globais de plataforma permanecem globais ao SaaS. Vínculos, regras e grants organizacionais são tenant-scoped quando pertencem a um Tenant. UUID vindo do cliente nunca é prova de autorização. Feature Flag nunca substitui autenticação, RBAC, escopo organizacional, RLS ou regra de negócio. Observabilidade não substitui Audit e deve respeitar minimização/LGPD. Error Handling não expõe stack, SQL, DSN, tokens, cookies ou identificadores cross-tenant não autorizados.
+`identity.users`, `identity.external_identities`, `security.permissions` e catálogos globais de plataforma permanecem globais ao SaaS. Vínculos, regras e grants organizacionais são tenant-scoped quando pertencem a um Tenant. UUID vindo do cliente nunca é prova de autorização. Feature Flag nunca substitui autenticação, RBAC, escopo organizacional, RLS ou regra de negócio. Observabilidade não substitui Audit e deve respeitar minimização/LGPD. Error Handling não expõe stack, SQL, DSN, tokens, cookies ou identificadores cross-tenant não autorizados. Idempotência não significa exactly-once de efeitos externos; Transactional Outbox elimina a janela entre commit do negócio e intenção de publicação, sem substituir idempotência do consumidor.
 
 ## Banco e migrations vigentes
 
@@ -87,51 +90,18 @@ db/migrations/0010_rls.sql
 db/migrations/0011_audit.sql
 db/migrations/0012_configuration.sql
 db/migrations/0013_feature_flags.sql
+db/migrations/0014_idempotency.sql
 ```
 
-Checksum funcional mais recente:
+Checksum funcional mais recente aplicado em Neon Staging e Main:
 
 ```text
-0013_feature_flags.sql = 2a22ee5ca00b0f3b7515d8a4f82ca37c3e0c7b4286c73348da7e91dde18ccb19
+0014_idempotency.sql = 5a1807d7b45ea49aae1e5da87e629ebedb5de7bd761620fc056d7c46ff86f41c
 ```
 
-As fases 020 e 021 não criaram migrations PostgreSQL: telemetria de alta frequência permanece fora do OLTP e o catálogo de erros permanece em código. Neon Staging e Main foram validados em PostgreSQL 18.6.
-
-## Fase 018 — Configurações
-
-Revisão funcional:
-
-```text
-revision              = 81b7edf3571aa5e3b37ce81c42ef6f4bf5311359
-Production deployment = dpl_ELC7hjcG2rCCJY2mA4vGWwmuYZdT
-state                 = READY
-```
-
-O domínio materializa:
-
-```text
-configuration.definitions      = catálogo global tipado
-configuration.settings         = overrides Tenant/Empresa/Filial
-configuration.setting_versions = histórico append-only tenant-scoped
-```
-
-Precedência efetiva: `BRANCH > COMPANY > TENANT > DEFINITION_DEFAULT`. RLS, RBAC, Organizational Scope, Audit, optimistic locking e runtime least privilege foram evidenciados em PostgreSQL real e Production.
-
-## Fase 019 — Feature Flags
-
-Revisão funcional:
-
-```text
-revision              = 1dd64edb27be2edb8d22187b1997a315952cff08
-Production deployment = dpl_7ZMu3BuqtAFfRbPfVpmn2uUt5KcV
-state                 = READY
-```
-
-O domínio materializa catálogo global de flags, políticas por ambiente, regras tenant-scoped para Tenant/Empresa/Filial/User/Plan e histórico append-only. O rollout percentual usa bucket determinístico versionado, com precedência `USER > BRANCH > COMPANY > TENANT > PLAN > ENVIRONMENT > DEFAULT`. RLS, RBAC, Organizational Scope, Audit, optimistic locking, runtime least privilege e isolamento cross-tenant foram evidenciados em PostgreSQL real e Production.
+As fases 020 e 021 não criaram migrations PostgreSQL. A fase 022 criou o schema `idempotency` e `idempotency.records`, com RLS e runtime least privilege sem `DELETE`/DDL.
 
 ## Fase 020 — Observabilidade Base
-
-Revisão funcional/runtime:
 
 ```text
 revision                    = 256e87991d73cea1dd4a385488708409cb22b0b2
@@ -143,14 +113,9 @@ Production state            = READY
 Production approval         = approved / alexoaraujo83
 prevent_self_review         = true
 artifact_sha256             = a12994c179bde36eb5690c12a24b72fdcbf4ad92aa28f24ebffeb589132d6f91
-production evidence artifact= production-deployment-256e87991d73cea1dd4a385488708409cb22b0b2
 ```
 
-A fase implementa OpenTelemetry vendor-neutral, OTLP opcional, `AsyncLocalStorage` para request/correlation context, W3C Trace Context, logs JSON estruturados e redigidos, traces HTTP/PostgreSQL seguros, métricas de baixa cardinalidade e hooks de Feature Flags. A indisponibilidade de exporter não altera liveness/readiness.
-
 ## Fase 021 — Error Handling
-
-Revisão funcional/runtime:
 
 ```text
 Issue                         = #98
@@ -165,35 +130,38 @@ Production state              = READY
 Production approval           = approved / alexoaraujo83
 prevent_self_review           = true
 artifact_sha256               = e352490006a3b4dbacb7aef758279e9cd00dd71bc9cb6c9650347d459cfc1106
-production evidence artifact  = production-deployment-e23cff77cd1af4b590fd3bf9ceac98e1cca4e5dc
-production evidence digest    = e7aa9f4503279828ef91baf3c8519ebd77a41fd67feed2da00c3a386e236abfc
 ```
 
-A fase implementa taxonomia transversal de erros independente de HTTP, códigos públicos estáveis, Problem Details `application/problem+json`, normalização segura de erros inesperados/PostgreSQL, allowlist de constraints, classificação de retry, anti-enumeração cross-tenant e integração com request/correlation/trace da fase 020. O mesmo artefato imutável passou por Staging, rollback/restore e Production protegida. `/health` e `/api/database-health` passaram no deployment e no alias estável com a revisão exata esperada.
+## Fase 022 — Idempotência
 
-## Hardening pós-G2
-
-P0 comprovou privilégios PostgreSQL de runtime com principal non-owner/NOBYPASSRLS.
-
-P1 incorporou em Production o pipeline reutilizável:
+Revisão funcional/runtime e evidências oficiais:
 
 ```text
-verified assertion
-→ ExternalIdentity/User/Membership
-→ RBAC
-→ Organizational Scope
-→ Tenant transaction/RLS
-→ operação
-→ Audit
+Issue                         = #101
+PR técnica                    = #102
+revision                      = 028c9844005ced58806201bce9edce37b4ba2a01
+Foundation CI (PR)            = 32884603521 = success
+Moventra CI (PR)              = 32884603500 = success
+Moventra CI (main)            = 32885005759 = success
+Release Gate / Staging        = 32885144772 = success
+Rollback Drill                = 32885320734 = success
+Production Promotion          = 32885547785 = success
+Production deployment         = dpl_8cVxgkFEaaQHh5spQiomrPgt14aK
+Production URL                = moventra-31craqkfb-alebru.vercel.app
+Production state              = READY
+Production approval           = approved / alexoaraujo83
+prevent_self_review           = true
+required_reviewer_count       = 2
+artifact_sha256               = 495b6fc6cd29a558330bcc43bd4d8840cd9f4bd119728ca0850572ff94e3cbc8
+production evidence artifact  = production-deployment-028c9844005ced58806201bce9edce37b4ba2a01
+production evidence digest    = 497ed0c5b8904182c3f1b5d70a7f5a0ffd07b7603934d95b4819643e5172aeaa
+migration                     = 0014_idempotency.sql
+migration checksum            = 5a1807d7b45ea49aae1e5da87e629ebedb5de7bd761620fc056d7c46ff86f41c
 ```
 
-Revisão funcional P1:
+A fase implementa `IdempotencyService`, fingerprint canônico/versionado, hash versionado da `Idempotency-Key`, stored result seguro, concorrência baseada em constraint/transação PostgreSQL, RLS tenant-aware, integração com Error Handling/Observabilidade e reutilização do pipeline autorizado. O runtime PostgreSQL de Production possui `USAGE` no schema e `SELECT/INSERT/UPDATE` em `idempotency.records`, sem `CREATE`, `DELETE` ou `BYPASSRLS`. Replay não duplica a mutação nem o Audit original.
 
-```text
-revision              = 0a0ec943cc249e635d94267f386bb638228e11f7
-Production deployment = dpl_3fJQRBCn7WKNtRwsKdVo7nsXmZbY
-state                 = READY
-```
+O mesmo artefato imutável passou por Staging, rollback/restore e Production protegida. `/health` e `/api/database-health` retornaram 200 para a revisão `028c9844005ced58806201bce9edce37b4ba2a01`, com logs estruturados contendo request/correlation/trace context. A migration `0014` foi aplicada em Neon Main sob o gate aprovado e verificada com checksum canônico.
 
 ## Runtime e entrega
 
@@ -216,4 +184,4 @@ Gates humanos protegidos não podem ser contornados por deploy manual. Revisões
 
 ## Continuidade
 
-A fundação 001–017, os hardenings P0/P1 e as fases 018–021 estão concluídos. A próxima etapa oficial é **022 — Idempotência = ACTIVE / DEFINED**. A fase 023 — Outbox e todas as posteriores permanecem inativas até a conclusão formal da 022.
+A fundação 001–017, os hardenings P0/P1 e as fases 018–022 estão concluídos. A próxima etapa oficial é **023 — Transactional Outbox = ACTIVE / DEFINED**, rastreada pela Issue #103. A fase 024 — Mensageria e todas as posteriores permanecem inativas até a conclusão formal da 023.
