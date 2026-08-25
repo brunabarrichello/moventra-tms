@@ -1,12 +1,10 @@
-# P1 — Evidência de Production e checkpoint de prova docs-only
+# P1 — Evidência final de Production e comportamento docs-only
 
 ## Estado
 
-`PRODUCTION VERIFIED / DOCS-ONLY PROOF PENDING`
+`CONCLUDED / PRODUCTION VERIFIED / DOCS-ONLY PROVEN`
 
 Issue canônica: `#85`.
-
-Este documento registra a promoção funcional P1 antes da prova operacional final de que uma revisão exclusivamente documental não altera Staging/Production.
 
 ## Revisão funcional P1
 
@@ -82,16 +80,68 @@ Moventra CI
 
 Todos os jobs acima concluíram com `success`.
 
-## Próximo critério antes do encerramento P1
+## Prova documentation-only
 
-O único critério operacional ainda pendente neste checkpoint é provar com uma revisão real **documentation-only** que:
+A própria evolução deste documento foi usada como prova operacional controlada. A PR #87 alterou somente documentação e foi incorporada à `main` em:
 
 ```text
-Release Gate impact = documentation-only
-Staging deployment = skipped
-Rollback Drill deploy/restore = skipped
-Production preflight/deployment = skipped
-Vercel Staging/Production = sem novo deployment causado pelo commit documental
+documentation-only revision = 4d96525ef825eda49fdb7c2199d3e5cc4e96102c
+Foundation CI               = 32843990500 = success
+Moventra CI                 = 32843990586 = success
+Release Gate                = 32844092522 = success
+Rollback Drill              = 32844107836 = success
+Production Promotion        = 32844120550 = success
 ```
 
-A fase 018 permanece `NOT ACTIVE` até essa prova e a sincronização final da Issue #85 e do Confluence.
+O classificador observou:
+
+```text
+requires_release=false
+classification=documentation-only
+changed_file_count=1
+runtime_file_count=0
+documentation_file_count=1
+```
+
+Os jobs que alterariam runtime foram efetivamente pulados:
+
+```text
+Staging prebuilt deployment              = skipped
+Provider-neutral prebuilt rollback drill = skipped
+Production fail-closed preflight         = skipped
+Protected production deployment          = skipped
+```
+
+### Prova no provedor de runtime
+
+Consulta à Vercel após o timestamp do merge documental confirmou:
+
+```text
+Staging deployments novos    = 0
+Production deployments novos = 0
+```
+
+O deployment Production funcional anterior permaneceu:
+
+```text
+id      = dpl_3fJQRBCn7WKNtRwsKdVo7nsXmZbY
+state   = READY
+target  = production
+aliases = moventra-tms.vercel.app, moventra-tms-alebru.vercel.app
+```
+
+Portanto, a revisão documental avançou `main` sem alterar o artefato executado em Staging ou Production e sem solicitar novo gate humano Production.
+
+## Conclusão
+
+A evidência final comprova simultaneamente:
+
+- caminho runtime-impacting completo e protegido;
+- artifact/revision identity;
+- health e database readiness;
+- ausência de runtime errors observados após promoção;
+- aprovação externa efetiva sem self-review;
+- classificação fail-closed de impacto;
+- `documentation-only` sem deploy, rollback/restore ou Production gate.
+
+`P1 = CONCLUDED`.

@@ -2,7 +2,7 @@
 
 A fundação do Moventra TMS segue esta sequência canônica:
 
-**Governança → Arquitetura → Ambientes → CI/CD → Secrets → Banco base → Convenções → Tenant → Empresa → Filial → Usuários → Memberships → Auth → RBAC → Escopo Organizacional → RLS/Defesa adicional → Auditoria**
+**Governança → Arquitetura → Ambientes → CI/CD → Secrets → Banco base → Convenções → Tenant → Empresa → Filial → Usuários → Memberships → Auth → RBAC → Escopo Organizacional → RLS/Defesa adicional → Auditoria → Configurações**
 
 ## Semântica de estado
 
@@ -34,43 +34,29 @@ A fundação do Moventra TMS segue esta sequência canônica:
 | 015 — Escopo Organizacional | **CONCLUDED** | escopos Tenant/Empresa/Filial e assignments tenant-aware materializados |
 | 016 — RLS / Defesa adicional | **CONCLUDED** | contexto transacional e RLS aplicados às estruturas tenant-scoped |
 | 017 — Auditoria Central | **CONCLUDED** | audit trail tenant-scoped, append-only, RLS e redaction/minimização validados |
+| 018 — Configurações | **ACTIVE / DEFINED** | resolução hierárquica Tenant → Empresa → Filial, definições tipadas, overrides tenant-aware, RLS/RBAC/Audit e proteção de secrets definidos em `docs/implementation/018-configuracoes.md` |
 
 ## Gates macro
 
 ```text
 G1 — Foundation Ready = APPROVED
-G2 — Security Ready = APPROVED
+G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-`G2` foi aprovado após conclusão conjunta das fases 012–017, com autorização backend, isolamento tenant-aware, RLS como defesa adicional, auditoria central, CI verde, Neon Staging/Main validados e promoção Production protegida sem bypass.
+`G2` permanece aprovado. O P0 comprovou acesso PostgreSQL least-privilege por principal non-owner/NOBYPASSRLS. O P1 pós-G2 integrou e provou o pipeline Auth → Membership → RBAC → Organizational Scope → Tenant/RLS → operação → Audit e classificou impacto de release para que alterações exclusivamente documentais não promovam runtime.
 
-## Revisão funcional final do batch 012–017
+## Revisões de segurança pós-G2
 
 ```text
-functional/runtime revision = 6b80fe7903b5ba742041508cb7465ff529215139
-Production deployment        = dpl_EHVA4pRhCchcn6Nrn43uTefpUuue
-Production state             = READY
-target                       = production
-/health                      = 200 × 2
-/api/database-health         = 200 × 2
-runtime errors               = none observed
+P0 runtime least privilege revision = 8c17e8c2c101c6e5c3bda3c5870e86a9136d43a8
+P1 functional/runtime revision      = 0a0ec943cc249e635d94267f386bb638228e11f7
+P1 Production deployment            = dpl_3fJQRBCn7WKNtRwsKdVo7nsXmZbY
+P1 docs-only proof revision         = 4d96525ef825eda49fdb7c2199d3e5cc4e96102c
 ```
 
-A revision identity é ancorada pela cadeia imutável:
+A revisão docs-only foi classificada com `requires_release=false`; Staging, rollback/restore, preflight e Production deployment foram pulados e nenhuma nova implantação Vercel foi criada.
 
-```text
-Moventra CI
-→ immutable prebuilt artifact
-→ Release Gate / Staging
-→ Rollback Drill / restore exato
-→ protected Production approval
-→ Production Promotion
-→ mesma revisão funcional
-```
-
-O endpoint direto do deployment é protegido por Vercel SSO; a disponibilidade e readiness foram comprovadas pelos runtime logs do deployment exato e a identidade da revisão pela cadeia de artefato imutável e preflight fail-closed.
-
-## Banco — estado canônico após 017
+## Banco — estado canônico antes da 018
 
 Provider: Neon PostgreSQL 18.6.
 
@@ -110,8 +96,6 @@ staging = br-rapid-math-au6j6xut
 main    = br-morning-glitter-au97suq4
 ```
 
-Main foi validada com migrations 0007–0011 em ordem, função `security.current_tenant_id()`, 10 policies `tenant_isolation_*`, `audit.audit_events.tenant_id NOT NULL`, trigger append-only e RLS. Smoke transacional de auditoria confirmou bloqueio de UPDATE/DELETE e rollback/cleanup sem resíduos.
-
 ## Boundary de segurança consolidado
 
 ```text
@@ -132,4 +116,4 @@ A revisão funcional/runtime que conclui uma fase é registrada separadamente de
 
 ## Próxima transição oficial
 
-A sequência fundacional canônica **001–017 está concluída**. Nenhuma fase 018 é ativada por inferência. A próxima etapa somente poderá ser iniciada após definição e ativação canônica explícita no projeto.
+A sequência fundacional 001–017 e os hardenings pós-G2 P0/P1 estão concluídos. A **018 — Configurações** está explicitamente definida e ativada como próxima etapa oficial. Nenhuma etapa posterior à 018 está ativa.
