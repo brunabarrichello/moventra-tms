@@ -1,3 +1,8 @@
+import {
+  recordFeatureFlagEvaluation,
+  recordFeatureFlagEvaluationError,
+  recordFeatureFlagRuleWrite,
+} from '../../infrastructure/observability/metrics.js';
 import { AuthorizedTenantOperationService } from '../security/authorized-tenant-operation.js';
 import {
   FEATURE_FLAG_STATUS,
@@ -42,13 +47,34 @@ export class FeatureFlagEvaluator {
     const planKey = normalizeTrustedPlanValue(planValue);
     const repository = this.repositoryFactory(context.query);
 
-    return repository.evaluate(context.tenantId, key, {
-      environment,
-      userId: context.user.id,
-      companyId: context.scope.companyId,
-      branchId: context.scope.branchId,
-      planKey,
-    });
+    try {
+      const result = await repository.evaluate(context.tenantId, key, {
+        environment,
+        userId: context.user.id,
+        companyId: context.scope.companyId,
+        branchId: context.scope.branchId,
+        planKey,
+      });
+      recordFeatureFlagEvaluation({
+        flagKey: key,
+        source: result?.source ?? 'UNKNOWN',
+        outcome: 'success',
+        enabled: result?.enabled === true,
+      });
+      return result;
+    } catch (error) {
+      recordFeatureFlagEvaluationError({
+        flagKey: key,
+        reason: featureFlagEvaluationFailureReason(error),
+      });
+      recordFeatureFlagEvaluation({
+        flagKey: key,
+        source: 'UNKNOWN',
+        outcome: 'failure',
+        enabled: false,
+      });
+      throw error;
+    }
   }
 }
 
@@ -66,7 +92,7 @@ export class FeatureFlagAdministrationService {
     const target = normalizeFeatureFlagTarget(input.target);
     const isUpdate = input.expectedVersion !== null && input.expectedVersion !== undefined;
 
-    return this.security.execute(
+    return withRuleWriteMetric(target.type, () => this.security.execute(
       {
         tenantId: request.tenantId,
         verifiedAssertion: request.verifiedAssertion,
@@ -99,7 +125,7 @@ export class FeatureFlagAdministrationService {
           reason: input.reason,
         });
       },
-    );
+    ));
   }
 
   async transitionRuleStatus(input) {
@@ -113,7 +139,7 @@ export class FeatureFlagAdministrationService {
       ? 'feature_flag.rule.activated'
       : 'feature_flag.rule.inactivated';
 
-    return this.security.execute(
+    return withRuleWriteMetric(target.type, () => this.security.execute(
       {
         tenantId: request.tenantId,
         verifiedAssertion: request.verifiedAssertion,
@@ -141,14 +167,14 @@ export class FeatureFlagAdministrationService {
           reason: input.reason,
         });
       },
-    );
+    ));
   }
 
   async restoreRuleVersion(input) {
     const request = normalizeAdministrationRequest(input);
     const target = normalizeFeatureFlagTarget(input.target);
 
-    return this.security.execute(
+    return withRuleWriteMetric(target.type, () => this.security.execute(
       {
         tenantId: request.tenantId,
         verifiedAssertion: request.verifiedAssertion,
@@ -176,8 +202,47 @@ export class FeatureFlagAdministrationService {
           reason: input.reason,
         });
       },
-    );
+    ));
   }
+}
+
+async function withRuleWriteMetric(targetType, callback) {
+  try {
+    const result = await callback();
+    recordFeatureFlagRuleWrite({ targetType, outcome: 'success' });
+    return result;
+  } catch (error) {
+    recordFeatureFlagRuleWrite({
+      targetType,
+      outcome: isAuthorizationDenied(error) ? 'denied' : 'failure',
+    });
+    throw error;
+  }
+}
+
+function featureFlagEvaluationFailureReason(error) {
+  const code = String(error?.code ?? '').toUpperCase();
+  if (code.includes('NOT_FOUND')) {
+    return 'flag_not_found';
+  }
+  if (code.includes('INACTIVE')) {
+    return 'flag_inactive';
+  }
+  if (code.includes('CONTEXT') || code.includes('REQUEST_INVALID')) {
+    return 'context_invalid';
+  }
+  if (isAuthorizationDenied(error)) {
+    return 'authorization_denied';
+  }
+  if (code.startsWith('MVT_DB_') || /^[0-9A-Z]{5}$/.test(code)) {
+    return 'database_error';
+  }
+  return 'evaluation_failed';
+}
+
+function isAuthorizationDenied(error) {
+  const code = String(error?.code ?? '').toUpperCase();
+  return code.includes('DENIED') || code.includes('FORBIDDEN') || code.includes('UNAUTHORIZED');
 }
 
 function normalizeAuthorizedContext(value) {
