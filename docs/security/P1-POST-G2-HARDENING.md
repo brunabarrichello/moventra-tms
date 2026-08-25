@@ -6,7 +6,7 @@
 
 Issue canônica: `#85`.
 
-Este trabalho é **hardening/revalidação do G2**. Não cria uma nova fase funcional. A fase 018 somente é ativada depois da conclusão formal deste P1.
+Este trabalho é **hardening/revalidação do G2**. Não cria uma nova fase funcional e, por si só, **não ativa a fase 018**. A ativação da 018 é uma transição de governança separada, executada somente após a conclusão formal deste P1.
 
 ## Objetivos concluídos
 
