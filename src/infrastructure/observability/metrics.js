@@ -12,7 +12,17 @@ const FEATURE_FLAG_SOURCES = new Set([
   'UNKNOWN',
 ]);
 const FEATURE_FLAG_TARGETS = new Set(['USER', 'BRANCH', 'COMPANY', 'TENANT', 'PLAN', 'UNKNOWN']);
+const FEATURE_FLAG_REASONS = new Set([
+  'flag_not_found',
+  'flag_inactive',
+  'context_invalid',
+  'authorization_denied',
+  'database_error',
+  'evaluation_failed',
+  'unknown',
+]);
 const FEATURE_FLAG_KEY = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_-]*){1,7}$/;
+const RUNTIME_ENVIRONMENTS = new Set(['development', 'preview', 'staging', 'production']);
 
 let instruments;
 
@@ -33,7 +43,7 @@ export function recordHttpRequest({ method, route, statusCode, durationMs, outco
 export function recordObservabilityExportError(signal) {
   try {
     getInstruments().exportErrors.add(1, {
-      signal: ['traces', 'metrics'].includes(signal) ? signal : 'unknown',
+      signal: ['traces', 'metrics', 'initialization', 'shutdown'].includes(signal) ? signal : 'unknown',
     });
   } catch {
     // Metrics must never change request behavior.
@@ -42,10 +52,15 @@ export function recordObservabilityExportError(signal) {
 
 export function recordFeatureFlagEvaluation({ flagKey, source, outcome, enabled }) {
   try {
-    getInstruments().featureFlagEvaluations.add(1, {
-      flag: normalizeFeatureFlagKeyLabel(flagKey),
+    const current = getInstruments();
+    const normalizedFlag = normalizeFeatureFlagKeyLabel(flagKey);
+    current.featureFlagEvaluations.add(1, {
+      flag: normalizedFlag,
       source: normalizeFeatureFlagSource(source),
       outcome: normalizeOutcome(outcome),
+    });
+    current.featureFlagRolloutBuckets.add(1, {
+      flag: normalizedFlag,
       enabled: enabled === true ? 'true' : 'false',
     });
   } catch {
@@ -57,7 +72,7 @@ export function recordFeatureFlagEvaluationError({ flagKey, reason }) {
   try {
     getInstruments().featureFlagEvaluationErrors.add(1, {
       flag: normalizeFeatureFlagKeyLabel(flagKey),
-      reason: normalizeControlledLabel(reason, 'unknown'),
+      reason: normalizeFeatureFlagReason(reason),
     });
   } catch {
     // Feature flag behavior must not depend on telemetry.
@@ -108,6 +123,11 @@ export function normalizeRouteTemplate(value) {
   return 'unknown';
 }
 
+export function normalizeFeatureFlagReason(value) {
+  const candidate = typeof value === 'string' ? value.trim().toLowerCase() : 'unknown';
+  return FEATURE_FLAG_REASONS.has(candidate) ? candidate : 'unknown';
+}
+
 export function resetMetricInstrumentsForTest() {
   instruments = undefined;
 }
@@ -126,6 +146,7 @@ function getInstruments() {
     featureFlagEvaluations: meter.createCounter('feature_flag_evaluation_total'),
     featureFlagEvaluationErrors: meter.createCounter('feature_flag_evaluation_error_total'),
     featureFlagRuleWrites: meter.createCounter('feature_flag_rule_write_total'),
+    featureFlagRolloutBuckets: meter.createCounter('feature_flag_rollout_bucket_total'),
   });
   return instruments;
 }
@@ -155,20 +176,17 @@ function normalizeFeatureFlagTarget(value) {
   return FEATURE_FLAG_TARGETS.has(candidate) ? candidate : 'UNKNOWN';
 }
 
-function normalizeControlledLabel(value, fallback) {
-  if (typeof value !== 'string') {
-    return fallback;
-  }
-  const candidate = value.trim().toLowerCase();
-  return /^[a-z][a-z0-9_.-]{0,79}$/.test(candidate) ? candidate : fallback;
-}
-
 function normalizeDuration(value) {
   const duration = Number(value);
   return Number.isFinite(duration) && duration >= 0 ? duration : 0;
 }
 
 function runtimeEnvironment() {
-  const candidate = process.env.MOVENTRA_ENV?.trim() || process.env.VERCEL_ENV?.trim() || process.env.NODE_ENV?.trim();
-  return candidate || 'development';
+  const candidate = process.env.MOVENTRA_ENV?.trim()
+    || process.env.VERCEL_TARGET_ENV?.trim()
+    || process.env.VERCEL_ENV?.trim()
+    || process.env.NODE_ENV?.trim()
+    || 'development';
+  const normalized = candidate.toLowerCase();
+  return RUNTIME_ENVIRONMENTS.has(normalized) ? normalized : 'development';
 }
