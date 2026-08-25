@@ -33,8 +33,9 @@ O Moventra TMS é uma plataforma SaaS empresarial multi-tenant, multiempresa e m
 017 — Auditoria Central = CONCLUDED
 018 — Configurações = CONCLUDED
 019 — Feature Flags = CONCLUDED
-020 — Observabilidade Base = ACTIVE / DEFINED
-021+ = NOT ACTIVE
+020 — Observabilidade Base = CONCLUDED
+021 — Error Handling = ACTIVE / DEFINED
+022+ = NOT ACTIVE
 
 P0 pós-G2 — Runtime PostgreSQL least privilege = CONCLUDED
 P1 pós-G2 — Pipeline integrado + release impact = CONCLUDED
@@ -43,7 +44,7 @@ G1 — Foundation Ready = APPROVED
 G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`. Configurações está documentada em `docs/implementation/018-configuracoes.md`; Feature Flags em `docs/implementation/019-feature-flags.md`; Observabilidade Base em `docs/implementation/020-observabilidade-base.md`.
+A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`. Configurações está documentada em `docs/implementation/018-configuracoes.md`; Feature Flags em `docs/implementation/019-feature-flags.md`; Observabilidade Base em `docs/implementation/020-observabilidade-base.md`; Error Handling em `docs/implementation/021-error-handling.md`.
 
 ## Fundação organizacional e de segurança
 
@@ -61,9 +62,10 @@ RLS = defesa adicional por Tenant transaction-local
 Audit Trail = tenant-scoped + append-only + redaction/minimização
 Configuration = catálogo tipado + overrides hierárquicos
 Feature Flags = rollout determinístico + targeting tenant-aware
+Observability = OpenTelemetry + structured logs + traces + metrics + request/correlation context
 ```
 
-`identity.users`, `identity.external_identities`, `security.permissions` e catálogos globais de plataforma permanecem globais ao SaaS. Vínculos, regras e grants organizacionais são tenant-scoped quando pertencem a um Tenant. UUID vindo do cliente nunca é prova de autorização. Feature Flag nunca substitui autenticação, RBAC, escopo organizacional, RLS ou regra de negócio.
+`identity.users`, `identity.external_identities`, `security.permissions` e catálogos globais de plataforma permanecem globais ao SaaS. Vínculos, regras e grants organizacionais são tenant-scoped quando pertencem a um Tenant. UUID vindo do cliente nunca é prova de autorização. Feature Flag nunca substitui autenticação, RBAC, escopo organizacional, RLS ou regra de negócio. Observabilidade não substitui Audit e deve respeitar minimização/LGPD.
 
 ## Banco e migrations vigentes
 
@@ -90,6 +92,8 @@ Checksum funcional mais recente:
 ```text
 0013_feature_flags.sql = 2a22ee5ca00b0f3b7515d8a4f82ca37c3e0c7b4286c73348da7e91dde18ccb19
 ```
+
+A fase 020 não criou migration PostgreSQL: logs, traces e métricas de alta frequência permanecem fora do OLTP transacional.
 
 Neon Staging e Main foram validados em PostgreSQL 18.6.
 
@@ -124,6 +128,27 @@ state                 = READY
 ```
 
 O domínio materializa catálogo global de flags, políticas por ambiente, regras tenant-scoped para Tenant/Empresa/Filial/User/Plan e histórico append-only. O rollout percentual usa bucket determinístico versionado, com precedência `USER > BRANCH > COMPANY > TENANT > PLAN > ENVIRONMENT > DEFAULT`. RLS, RBAC, Organizational Scope, Audit, optimistic locking, runtime least privilege e isolamento cross-tenant foram evidenciados em PostgreSQL real e Production.
+
+## Fase 020 — Observabilidade Base
+
+Revisão funcional/runtime:
+
+```text
+revision                    = 256e87991d73cea1dd4a385488708409cb22b0b2
+PR                          = #96
+Issue                       = #95
+Production Promotion        = 32876872400 = success
+Production deployment       = dpl_2poo2Y8TnDaie3MM4NA2KzbXwBMu
+Production state            = READY
+Production approval         = approved / alexoaraujo83
+prevent_self_review         = true
+artifact_sha256             = a12994c179bde36eb5690c12a24b72fdcbf4ad92aa28f24ebffeb589132d6f91
+production evidence artifact= production-deployment-256e87991d73cea1dd4a385488708409cb22b0b2
+```
+
+A fase implementa OpenTelemetry vendor-neutral, OTLP opcional, `AsyncLocalStorage` para request/correlation context, W3C Trace Context, logs JSON estruturados e redigidos, traces HTTP/PostgreSQL seguros, métricas de baixa cardinalidade e hooks de Feature Flags. A indisponibilidade de exporter não altera liveness/readiness.
+
+Em Production, `/health` e `/api/database-health` retornaram 200 na revisão esperada. Os logs runtime observaram `serviceVersion=256e87991d73cea1dd4a385488708409cb22b0b2`, `environment=production`, request/correlation IDs, trace/span IDs e `outcome=success`, sem regressão do contrato de health/readiness.
 
 ## Hardening pós-G2
 
@@ -170,4 +195,4 @@ Gates humanos protegidos não podem ser contornados por deploy manual. Revisões
 
 ## Continuidade
 
-A fundação 001–017, os hardenings P0/P1 e as fases 018–019 estão concluídos. A próxima etapa oficial explicitamente ativada é **020 — Observabilidade Base**; a 021 e todas as posteriores permanecem inativas.
+A fundação 001–017, os hardenings P0/P1 e as fases 018–020 estão concluídos. A próxima etapa oficial explicitamente ativada é **021 — Error Handling**; a 022 e todas as posteriores permanecem inativas.

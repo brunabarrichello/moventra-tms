@@ -1,6 +1,6 @@
 # Continuidade da Fundação — Linha Oficial de Implantação
 
-A linha oficial do Moventra TMS preserva a sequência canônica de implantação. Neste checkpoint, a fundação e segurança 001–017, os hardenings P0/P1 e as fases 018–019 estão concluídos; a fase 020 — Observabilidade Base é a única etapa funcional ativa.
+A linha oficial do Moventra TMS preserva a sequência canônica de implantação. Neste checkpoint, a fundação e segurança 001–017, os hardenings P0/P1 e as fases 018–020 estão concluídos; a fase 021 — Error Handling é a única etapa funcional ativa.
 
 Sequência atual:
 
@@ -38,8 +38,8 @@ Sequência atual:
 | 017 — Auditoria Central | **CONCLUDED** | audit trail append-only, tenant-scoped e redigido |
 | 018 — Configurações | **CONCLUDED** | catálogo tipado + overrides Tenant/Empresa/Filial + histórico + RLS/RBAC/Audit evidenciados em Production |
 | 019 — Feature Flags | **CONCLUDED** | rollout determinístico e tenant-aware evidenciado em Production, sem substituir autorização |
-| 020 — Observabilidade Base | **ACTIVE / DEFINED** | OpenTelemetry vendor-neutral, logs estruturados, traces, métricas, correlation IDs, cardinalidade controlada e fail-safe operacional |
-| 021 — Error Handling | **NOT ACTIVE** | depende da conclusão formal da 020 |
+| 020 — Observabilidade Base | **CONCLUDED** | OpenTelemetry vendor-neutral, logs estruturados, traces, métricas, correlation IDs, cardinalidade controlada e fail-safe evidenciados em Production |
+| 021 — Error Handling | **ACTIVE / DEFINED** | contrato de erros empresariais, Problem Details, mapeamento domínio→HTTP, sanitização e retry classification |
 | 022+ | **NOT ACTIVE** | preservar ordem oficial |
 
 ## Gates macro
@@ -49,7 +49,7 @@ G1 — Foundation Ready = APPROVED
 G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-G2 permanece aprovado. A ativação da 020 não altera o gate de segurança já evidenciado; novos artefatos devem continuar reutilizando Auth → Membership → RBAC → Organizational Scope → Tenant/RLS → operação → Audit e aplicar minimização de dados também em telemetria.
+G2 permanece aprovado. A ativação da 021 não altera o gate de segurança já evidenciado; novos artefatos devem continuar reutilizando Auth → Membership → RBAC → Organizational Scope → Tenant/RLS → operação → Audit, manter observabilidade minimizada e não expor dados sensíveis em erros.
 
 ## Revisões de segurança pós-G2
 
@@ -90,7 +90,30 @@ can_admins_bypass            = false
 
 O environment protegido `production` foi aprovado externamente sem bypass. Revision identity, application health, database readiness, runtime observability, Neon Main e isolamento cross-tenant foram validados.
 
-## Banco — estado canônico após 019
+## Fase 020 — revisão funcional e release
+
+```text
+Issue                         = #95
+PR técnica                    = #96
+functional/runtime revision   = 256e87991d73cea1dd4a385488708409cb22b0b2
+Foundation CI (PR)            = 32876048411 = success
+Moventra CI (PR)              = 32876048425 = success
+source CI run                 = 32876294034
+rollback run                  = 32876698516
+Production Promotion          = 32876872400 = success
+Production deployment         = dpl_2poo2Y8TnDaie3MM4NA2KzbXwBMu = READY
+Production approval           = approved / alexoaraujo83
+prevent_self_review           = true
+artifact_sha256               = a12994c179bde36eb5690c12a24b72fdcbf4ad92aa28f24ebffeb589132d6f91
+production evidence artifact  = production-deployment-256e87991d73cea1dd4a385488708409cb22b0b2
+production evidence digest    = 5158078122a094b155e1e69667a6623e05aadb77f94c5470013eb661dfebd485
+```
+
+A promoção utilizou o mesmo artefato imutável comprovado no rollback. `/health` e `/api/database-health` passaram no deployment imutável e no alias estável. Logs de Production confirmaram `serviceVersion=256e87991d73cea1dd4a385488708409cb22b0b2`, `environment=production`, request/correlation IDs, trace/span IDs e `outcome=success`, sem regressão de health/readiness.
+
+A fase 020 não criou migration de telemetria e não armazenou logs, traces ou métricas no PostgreSQL transacional.
+
+## Banco — estado canônico após 020
 
 Provider: Neon PostgreSQL 18.6.
 
@@ -148,9 +171,10 @@ Configuration Definition = catálogo global tipado
 Configuration Setting = override tenant/company/branch tenant-scoped
 Feature Flag Catalog = catálogo global de rollout
 Feature Flag Rule = targeting tenant-scoped com coorte determinística
+Observability = OpenTelemetry vendor-neutral + structured logging + tracing + metrics + request/correlation context
 ```
 
-Entidades globais não recebem RLS tenant-based apenas por serem globais. Toda autorização crítica continua no backend; RLS e Feature Flags não substituem Membership/RBAC/escopo.
+Entidades globais não recebem RLS tenant-based apenas por serem globais. Toda autorização crítica continua no backend; RLS, Feature Flags e Observabilidade não substituem Membership/RBAC/escopo/Audit.
 
 ## Regra de revision identity
 
@@ -158,4 +182,4 @@ A revisão funcional/runtime que conclui uma fase é registrada separadamente de
 
 ## Próxima transição oficial
 
-A fase **019 — Feature Flags = CONCLUDED**. A fase **020 — Observabilidade Base = ACTIVE / DEFINED**, conforme `docs/implementation/020-observabilidade-base.md`. A 021 e todas as posteriores permanecem inativas até a conclusão formal da 020.
+A fase **020 — Observabilidade Base = CONCLUDED**. A fase **021 — Error Handling = ACTIVE / DEFINED**, conforme `docs/implementation/021-error-handling.md`. A 022 e todas as posteriores permanecem inativas até a conclusão formal da 021.
