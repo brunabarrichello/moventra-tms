@@ -36,8 +36,9 @@ O Moventra TMS é uma plataforma SaaS empresarial multi-tenant, multiempresa e m
 020 — Observabilidade Base = CONCLUDED
 021 — Error Handling = CONCLUDED
 022 — Idempotência = CONCLUDED
-023 — Transactional Outbox = ACTIVE / DEFINED
-024+ = NOT ACTIVE
+023 — Transactional Outbox = CONCLUDED
+024 — Mensageria = ACTIVE / DEFINED
+025+ = NOT ACTIVE
 
 P0 pós-G2 — Runtime PostgreSQL least privilege = CONCLUDED
 P1 pós-G2 — Pipeline integrado + release impact = CONCLUDED
@@ -46,9 +47,9 @@ G1 — Foundation Ready = APPROVED
 G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`. As fases 018–023 estão documentadas em `docs/implementation/018-configuracoes.md`, `019-feature-flags.md`, `020-observabilidade-base.md`, `021-error-handling.md`, `022-idempotencia.md` e `023-outbox.md`.
+A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`. As fases 018–024 estão documentadas em `docs/implementation/018-configuracoes.md`, `019-feature-flags.md`, `020-observabilidade-base.md`, `021-error-handling.md`, `022-idempotencia.md`, `023-outbox.md` e `024-mensageria.md`.
 
-## Fundação organizacional e de segurança
+## Fundação organizacional, segurança e confiabilidade
 
 ```text
 Tenant
@@ -68,9 +69,10 @@ Observability = OpenTelemetry + structured logs + traces + metrics + request/cor
 Error Handling = erros tipados + códigos estáveis + Problem Details + normalização segura
 Idempotency = Idempotency-Key hash + request fingerprint + stored result transacional
 Outbox = evento a publicar registrado atomicamente com a mutação de negócio
+Messaging = portas provider-neutral + broker adapter, at-least-once, confirms e ack/nack
 ```
 
-`identity.users`, `identity.external_identities`, `security.permissions` e catálogos globais de plataforma permanecem globais ao SaaS. Vínculos, regras e grants organizacionais são tenant-scoped quando pertencem a um Tenant. UUID vindo do cliente nunca é prova de autorização. Feature Flag nunca substitui autenticação, RBAC, escopo organizacional, RLS ou regra de negócio. Observabilidade não substitui Audit e deve respeitar minimização/LGPD. Error Handling não expõe stack, SQL, DSN, tokens, cookies ou identificadores cross-tenant não autorizados. Idempotência não significa exactly-once de efeitos externos; Transactional Outbox elimina a janela entre commit do negócio e intenção de publicação, sem substituir idempotência do consumidor.
+`identity.users`, `identity.external_identities`, `security.permissions` e catálogos globais de plataforma permanecem globais ao SaaS. Vínculos, regras e grants organizacionais são tenant-scoped quando pertencem a um Tenant. UUID vindo do cliente nunca é prova de autorização. Feature Flag nunca substitui autenticação, RBAC, escopo organizacional, RLS ou regra de negócio. Observabilidade não substitui Audit e deve respeitar minimização/LGPD. Error Handling não expõe stack, SQL, DSN, tokens, cookies ou identificadores cross-tenant não autorizados. Idempotência não significa exactly-once de efeitos externos; Transactional Outbox elimina a janela entre commit do negócio e intenção de publicação; Mensageria assume entrega at-least-once e consumers idempotentes.
 
 ## Banco e migrations vigentes
 
@@ -91,15 +93,10 @@ db/migrations/0011_audit.sql
 db/migrations/0012_configuration.sql
 db/migrations/0013_feature_flags.sql
 db/migrations/0014_idempotency.sql
+db/migrations/0015_outbox.sql
 ```
 
-Checksum funcional mais recente aplicado em Neon Staging e Main:
-
-```text
-0014_idempotency.sql = 5a1807d7b45ea49aae1e5da87e629ebedb5de7bd761620fc056d7c46ff86f41c
-```
-
-As fases 020 e 021 não criaram migrations PostgreSQL. A fase 022 criou o schema `idempotency` e `idempotency.records`, com RLS e runtime least privilege sem `DELETE`/DDL.
+As fases 020 e 021 não criaram migrations PostgreSQL. A fase 022 criou o schema `idempotency`; a fase 023 criou o schema `outbox` e `outbox.events`, ambos com isolamento tenant-aware e least privilege. A fase 024, por decisão inicial, não exige nova migration PostgreSQL: a intenção transacional continua em `outbox.events` e o broker fornece a fila externa.
 
 ## Fase 020 — Observabilidade Base
 
@@ -134,8 +131,6 @@ artifact_sha256               = e352490006a3b4dbacb7aef758279e9cd00dd71bc9cb6c96
 
 ## Fase 022 — Idempotência
 
-Revisão funcional/runtime e evidências oficiais:
-
 ```text
 Issue                         = #101
 PR técnica                    = #102
@@ -159,9 +154,38 @@ migration                     = 0014_idempotency.sql
 migration checksum            = 5a1807d7b45ea49aae1e5da87e629ebedb5de7bd761620fc056d7c46ff86f41c
 ```
 
-A fase implementa `IdempotencyService`, fingerprint canônico/versionado, hash versionado da `Idempotency-Key`, stored result seguro, concorrência baseada em constraint/transação PostgreSQL, RLS tenant-aware, integração com Error Handling/Observabilidade e reutilização do pipeline autorizado. O runtime PostgreSQL de Production possui `USAGE` no schema e `SELECT/INSERT/UPDATE` em `idempotency.records`, sem `CREATE`, `DELETE` ou `BYPASSRLS`. Replay não duplica a mutação nem o Audit original.
+## Fase 023 — Transactional Outbox
 
-O mesmo artefato imutável passou por Staging, rollback/restore e Production protegida. `/health` e `/api/database-health` retornaram 200 para a revisão `028c9844005ced58806201bce9edce37b4ba2a01`, com logs estruturados contendo request/correlation/trace context. A migration `0014` foi aplicada em Neon Main sob o gate aprovado e verificada com checksum canônico.
+Revisão funcional/runtime e evidências oficiais:
+
+```text
+Issue                         = #103
+PR técnica                    = #105
+revision                      = b585df5f9b544f7ed315d1fa3c081dda8c4d0a09
+Foundation CI (main)          = 32890000608
+Moventra CI (main)            = 32890000544 = success
+Release Gate / Staging        = 32890129781 = success
+Rollback Drill                = 32890282262 = success
+Production Promotion          = 32890504200 = success
+Production deployment URL     = moventra-arotbh5h6-alebru.vercel.app
+Stable Production alias       = moventra-tms.vercel.app
+Production state              = READY
+Production approval           = approved / alexoaraujo83
+prevent_self_review           = true
+required_reviewer_count       = 2
+artifact_sha256               = dbe15e5b394811e62e645aed1502159f8d1d9cd512c3f4de90c8c070b88cb9c6
+production evidence artifact  = production-deployment-b585df5f9b544f7ed315d1fa3c081dda8c4d0a09
+production evidence digest    = 09bfbdd7cdcccd75b615a2c33cc609f00761eda303741d23991fc5d108530e2e
+migration                     = 0015_outbox.sql
+```
+
+A fase 023 materializou `outbox.events` tenant-scoped com RLS, constraints, claim/reclaim concorrente baseado em `FOR UPDATE SKIP LOCKED`, runtime least privilege e integração transacional com mutação de negócio, Audit e Idempotência 022. Replay idempotente não duplica Outbox. O mesmo artefato imutável passou por Staging, rollback/restore e Production protegida; revision identity e `/api/database-health` foram validados no deployment imutável e no alias estável.
+
+## Fase 024 — Mensageria
+
+A fase 024 está `ACTIVE / DEFINED` na Issue #106. O documento canônico define portas provider-neutral e primeiro adapter de referência RabbitMQ/AMQP 0-9-1, com publisher confirms, mensagens persistentes, ack/nack manual, prefetch controlado, envelope versionado, observabilidade e semântica at-least-once. Jobs 025 e DLQ administrativa 026 permanecem fora do escopo.
+
+A conclusão da 024 depende de broker RabbitMQ/serviço equivalente real, segregado por ambiente, com TLS e credenciais de menor privilégio. CI pode usar RabbitMQ efêmero, mas Staging/Production não podem usar fallback inseguro ou broker embutido.
 
 ## Runtime e entrega
 
@@ -184,4 +208,4 @@ Gates humanos protegidos não podem ser contornados por deploy manual. Revisões
 
 ## Continuidade
 
-A fundação 001–017, os hardenings P0/P1 e as fases 018–022 estão concluídos. A próxima etapa oficial é **023 — Transactional Outbox = ACTIVE / DEFINED**, rastreada pela Issue #103. A fase 024 — Mensageria e todas as posteriores permanecem inativas até a conclusão formal da 023.
+A fundação 001–017, os hardenings P0/P1 e as fases 018–023 estão concluídos. A próxima etapa oficial é **024 — Mensageria = ACTIVE / DEFINED**, rastreada pela Issue #106. A fase 025 — Jobs e todas as posteriores permanecem inativas até a conclusão formal da 024.
