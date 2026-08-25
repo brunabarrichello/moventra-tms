@@ -6,6 +6,8 @@
 
 A fase 021 foi concluída após implementação, CI, Staging, rollback/restore e promoção protegida para Production da revisão funcional `e23cff77cd1af4b590fd3bf9ceac98e1cca4e5dc`. A fase 022 — Idempotência passa a ser a única etapa funcional `ACTIVE / DEFINED`; a 023 — Outbox e todas as posteriores permanecem `NOT ACTIVE`.
 
+Registro histórico do boundary da implementação funcional: **022 — Idempotência = NOT ACTIVE** durante a 021. A ativação da 022 ocorreu somente depois da conclusão formal e da evidência de Production da 021.
+
 ## Evidência de conclusão
 
 ```text
@@ -458,7 +460,7 @@ CI
 
 ## Banco de dados
 
-A fase 021 não requer migration. Não existe tabela de erros: erros operacionais pertencem à telemetria; fatos de negócio/segurança relevantes pertencem ao Audit existente.
+A fase 021 não requer migration por padrão. Não existe tabela de erros: erros operacionais pertencem à telemetria; fatos de negócio/segurança relevantes pertencem ao Audit existente.
 
 ## Casos de borda
 
