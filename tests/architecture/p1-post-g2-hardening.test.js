@@ -65,3 +65,14 @@ test('release impact classifier is fail-closed outside explicit documentation pa
   assert.match(classifier, /runtime-impacting/);
   assert.match(classifier, /\[\[ "\$file" != \*\/\* \]\]/);
 });
+
+test('P1 hardening remains distinct from phase 018 and preserves protected Production', () => {
+  const doc = read('docs/security/P1-POST-G2-HARDENING.md');
+
+  assert.match(doc, /hardening\/revalidação do G2/i);
+  assert.match(doc, /não ativa a fase 018/i);
+  assert.match(doc, /verified provider assertion/);
+  assert.match(doc, /Production somente for promovida após gate humano explícito/i);
+  assert.match(doc, /documentation-only/);
+  assert.match(doc, /runtime-impacting/);
+});
