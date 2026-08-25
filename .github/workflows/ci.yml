@@ -51,12 +51,15 @@ jobs:
             "src/modules/identity/user/user-repository.js"
             "src/modules/identity/membership/membership-domain.js"
             "src/modules/identity/membership/membership-repository.js"
+            "src/modules/security/authorized-tenant-operation.js"
             "api/database-health.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
             "scripts/ci/build.sh"
             "scripts/ci/build-vercel-output.mjs"
             "scripts/db/migrate.mjs"
+            "scripts/db/validate-security-pipeline.mjs"
+            "scripts/release/classify-release-impact.sh"
             "db/migrations/0001_foundation.sql"
             "db/migrations/0002_tenant.sql"
             "db/migrations/0003_company.sql"
@@ -178,6 +181,7 @@ jobs:
           node --input-type=module -e "await import('./src/modules/organization/branch/branch-repository.js')"
           node --input-type=module -e "await import('./src/modules/identity/user/user-repository.js')"
           node --input-type=module -e "await import('./src/modules/identity/membership/membership-repository.js')"
+          node --input-type=module -e "await import('./src/modules/security/authorized-tenant-operation.js')"
 
   database-contract:
     name: PostgreSQL migration contract
@@ -212,6 +216,8 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
+      - name: Install locked runtime dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Install PostgreSQL client
         run: |
           set -euo pipefail
@@ -231,6 +237,8 @@ jobs:
             echo "Validating ${validation}"
             psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f "$validation"
           done
+      - name: Validate integrated Auth-RBAC-Scope-RLS-Audit pipeline
+        run: node scripts/db/validate-security-pipeline.mjs
 
   build:
     name: Build immutable artifact
