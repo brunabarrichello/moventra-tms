@@ -8,6 +8,16 @@ const IDEMPOTENCY_KEY_MAX_LENGTH = 200;
 const FINGERPRINT_INPUT_MAX_BYTES = 128 * 1024;
 const MAX_CANONICAL_DEPTH = 32;
 const OPERATION_KEY_PATTERN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_-]*){1,7}$/;
+const TRANSPORT_ONLY_KEYS = new Set([
+  'authorization',
+  'cookie',
+  'headers',
+  'idempotencykey',
+  'requestid',
+  'correlationid',
+  'traceid',
+  'spanid',
+]);
 
 export function normalizeIdempotencyKey(value) {
   if (typeof value !== 'string') {
@@ -53,7 +63,7 @@ export function buildRequestFingerprint({ operationKey, input }) {
   const normalizedOperation = normalizeOperationKey(operationKey);
   const canonicalPayload = canonicalStringify({
     operation: normalizedOperation,
-    payload: input ?? null,
+    payload: sanitizeFingerprintInput(input ?? null),
     version: IDEMPOTENCY_FINGERPRINT_VERSION,
   });
 
@@ -70,9 +80,72 @@ export function buildRequestFingerprint({ operationKey, input }) {
   });
 }
 
+export function sanitizeFingerprintInput(value) {
+  return sanitizeSemanticValue(value, new Set(), 0);
+}
+
 export function canonicalStringify(value) {
   const stack = new Set();
   return JSON.stringify(canonicalize(value, stack, 0));
+}
+
+function sanitizeSemanticValue(value, stack, depth) {
+  if (depth > MAX_CANONICAL_DEPTH) {
+    throw idempotencyInputError(
+      'MVT_IDEMPOTENCY_FINGERPRINT_INVALID',
+      'Fingerprint input exceeds the maximum nesting depth',
+    );
+  }
+
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw idempotencyInputError(
+        'MVT_IDEMPOTENCY_FINGERPRINT_INVALID',
+        'Fingerprint input must contain finite numbers',
+      );
+    }
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (Array.isArray(value)) {
+    assertNotCircular(value, stack);
+    stack.add(value);
+    try {
+      return value.map((item) => sanitizeSemanticValue(item, stack, depth + 1));
+    } finally {
+      stack.delete(value);
+    }
+  }
+  if (isPlainObject(value)) {
+    assertNotCircular(value, stack);
+    stack.add(value);
+    try {
+      const output = {};
+      for (const key of Object.keys(value)) {
+        if (isTransportOnlyKey(key)) {
+          continue;
+        }
+        const item = value[key];
+        if (item === undefined || typeof item === 'function' || typeof item === 'symbol') {
+          throw idempotencyInputError(
+            'MVT_IDEMPOTENCY_FINGERPRINT_INVALID',
+            'Fingerprint input must be JSON-compatible',
+          );
+        }
+        output[key] = sanitizeSemanticValue(item, stack, depth + 1);
+      }
+      return output;
+    } finally {
+      stack.delete(value);
+    }
+  }
+
+  throw idempotencyInputError(
+    'MVT_IDEMPOTENCY_FINGERPRINT_INVALID',
+    'Fingerprint input must contain only JSON-compatible values',
+  );
 }
 
 function canonicalize(value, stack, depth) {
@@ -132,6 +205,11 @@ function canonicalize(value, stack, depth) {
     'MVT_IDEMPOTENCY_FINGERPRINT_INVALID',
     'Fingerprint input must contain only JSON-compatible values',
   );
+}
+
+function isTransportOnlyKey(value) {
+  const normalized = value.toLowerCase().replaceAll('-', '').replaceAll('_', '');
+  return TRANSPORT_ONLY_KEYS.has(normalized);
 }
 
 function assertNotCircular(value, stack) {
