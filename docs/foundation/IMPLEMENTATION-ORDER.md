@@ -1,6 +1,6 @@
 # Continuidade da Fundação — Linha Oficial de Implantação
 
-A linha oficial do Moventra TMS preserva a sequência canônica de implantação. Neste checkpoint, a fundação e segurança 001–017, os hardenings P0/P1 e as fases 018–020 estão concluídos; a fase 021 — Error Handling é a única etapa funcional ativa.
+A linha oficial do Moventra TMS preserva a sequência canônica de implantação. Neste checkpoint, a fundação e segurança 001–017, os hardenings P0/P1 e as fases 018–021 estão concluídos; a fase 022 — Idempotência é a única etapa funcional ativa.
 
 Sequência atual:
 
@@ -39,8 +39,9 @@ Sequência atual:
 | 018 — Configurações | **CONCLUDED** | catálogo tipado + overrides Tenant/Empresa/Filial + histórico + RLS/RBAC/Audit evidenciados em Production |
 | 019 — Feature Flags | **CONCLUDED** | rollout determinístico e tenant-aware evidenciado em Production, sem substituir autorização |
 | 020 — Observabilidade Base | **CONCLUDED** | OpenTelemetry vendor-neutral, logs estruturados, traces, métricas, correlation IDs, cardinalidade controlada e fail-safe evidenciados em Production |
-| 021 — Error Handling | **ACTIVE / DEFINED** | contrato de erros empresariais, Problem Details, mapeamento domínio→HTTP, sanitização e retry classification |
-| 022+ | **NOT ACTIVE** | preservar ordem oficial |
+| 021 — Error Handling | **CONCLUDED** | erros tipados, códigos estáveis, Problem Details, sanitização, anti-enumeração e retry classification evidenciados em Production |
+| 022 — Idempotência | **ACTIVE / DEFINED** | Idempotency-Key + request fingerprint + stored result, tenant-aware e transacional |
+| 023+ | **NOT ACTIVE** | preservar ordem oficial |
 
 ## Gates macro
 
@@ -49,7 +50,7 @@ G1 — Foundation Ready = APPROVED
 G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-G2 permanece aprovado. A ativação da 021 não altera o gate de segurança já evidenciado; novos artefatos devem continuar reutilizando Auth → Membership → RBAC → Organizational Scope → Tenant/RLS → operação → Audit, manter observabilidade minimizada e não expor dados sensíveis em erros.
+G2 permanece aprovado. A ativação da 022 não altera o gate de segurança já evidenciado; novos artefatos devem continuar reutilizando Auth → Membership → RBAC → Organizational Scope → Tenant/RLS → operação → Audit, observabilidade minimizada e Error Handling seguro.
 
 ## Revisões de segurança pós-G2
 
@@ -88,8 +89,6 @@ prevent_self_review          = true
 can_admins_bypass            = false
 ```
 
-O environment protegido `production` foi aprovado externamente sem bypass. Revision identity, application health, database readiness, runtime observability, Neon Main e isolamento cross-tenant foram validados.
-
 ## Fase 020 — revisão funcional e release
 
 ```text
@@ -109,11 +108,31 @@ production evidence artifact  = production-deployment-256e87991d73cea1dd4a385488
 production evidence digest    = 5158078122a094b155e1e69667a6623e05aadb77f94c5470013eb661dfebd485
 ```
 
-A promoção utilizou o mesmo artefato imutável comprovado no rollback. `/health` e `/api/database-health` passaram no deployment imutável e no alias estável. Logs de Production confirmaram `serviceVersion=256e87991d73cea1dd4a385488708409cb22b0b2`, `environment=production`, request/correlation IDs, trace/span IDs e `outcome=success`, sem regressão de health/readiness.
+A promoção utilizou o mesmo artefato imutável comprovado no rollback. `/health` e `/api/database-health` passaram no deployment imutável e no alias estável. Logs de Production confirmaram a revisão esperada, request/correlation IDs, trace/span IDs e ausência de regressão de health/readiness.
 
-A fase 020 não criou migration de telemetria e não armazenou logs, traces ou métricas no PostgreSQL transacional.
+## Fase 021 — revisão funcional e release
 
-## Banco — estado canônico após 020
+```text
+Issue                         = #98
+PR técnica                    = #99
+functional/runtime revision   = e23cff77cd1af4b590fd3bf9ceac98e1cca4e5dc
+source CI run                 = 32879964993 = success
+Release Gate / Staging        = 32880111232 = success
+Rollback Drill                = 32880277853 = success
+Production Promotion          = 32880504603 = success
+Production deployment         = dpl_8g1qdBw99RyZePkKJqm8CCCjGyJj = READY
+Production deployment URL     = moventra-d3jdycppf-alebru.vercel.app
+Production approval           = approved / alexoaraujo83
+prevent_self_review           = true
+required_reviewer_count       = 2
+artifact_sha256               = e352490006a3b4dbacb7aef758279e9cd00dd71bc9cb6c9650347d459cfc1106
+production evidence artifact  = production-deployment-e23cff77cd1af4b590fd3bf9ceac98e1cca4e5dc
+production evidence digest    = e7aa9f4503279828ef91baf3c8519ebd77a41fd67feed2da00c3a386e236abfc
+```
+
+A revisão 021 passou pela cadeia completa build-once → Staging → rollback/restore → Production protegida. A aprovação efetiva foi externa ao ator do workflow. Revision identity e database readiness passaram tanto no deployment imutável quanto no alias estável. A fase não criou migration PostgreSQL nem armazenou catálogo de erros no banco.
+
+## Banco — estado canônico após 021
 
 Provider: Neon PostgreSQL 18.6.
 
@@ -172,9 +191,10 @@ Configuration Setting = override tenant/company/branch tenant-scoped
 Feature Flag Catalog = catálogo global de rollout
 Feature Flag Rule = targeting tenant-scoped com coorte determinística
 Observability = OpenTelemetry vendor-neutral + structured logging + tracing + metrics + request/correlation context
+Error Handling = taxonomia tipada + códigos estáveis + Problem Details + normalização segura
 ```
 
-Entidades globais não recebem RLS tenant-based apenas por serem globais. Toda autorização crítica continua no backend; RLS, Feature Flags e Observabilidade não substituem Membership/RBAC/escopo/Audit.
+Entidades globais não recebem RLS tenant-based apenas por serem globais. Toda autorização crítica continua no backend; RLS, Feature Flags, Observabilidade e Error Handling não substituem Membership/RBAC/escopo/Audit.
 
 ## Regra de revision identity
 
@@ -182,4 +202,4 @@ A revisão funcional/runtime que conclui uma fase é registrada separadamente de
 
 ## Próxima transição oficial
 
-A fase **020 — Observabilidade Base = CONCLUDED**. A fase **021 — Error Handling = ACTIVE / DEFINED**, conforme `docs/implementation/021-error-handling.md`. A 022 e todas as posteriores permanecem inativas até a conclusão formal da 021.
+A fase **021 — Error Handling = CONCLUDED**. A fase **022 — Idempotência = ACTIVE / DEFINED**, conforme `docs/implementation/022-idempotencia.md`. A fase 023 — Outbox e todas as posteriores permanecem inativas até a conclusão formal da 022.

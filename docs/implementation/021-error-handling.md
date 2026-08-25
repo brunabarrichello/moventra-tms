@@ -2,15 +2,37 @@
 
 ## Estado
 
-`ACTIVE / DEFINED`
+`CONCLUDED`
 
-A fase 021 é a única etapa funcional ativa após a conclusão formal da 020 — Observabilidade Base. A fase 022 — Idempotência e todas as posteriores permanecem `NOT ACTIVE`.
+A fase 021 foi concluída após implementação, CI, Staging, rollback/restore e promoção protegida para Production da revisão funcional `e23cff77cd1af4b590fd3bf9ceac98e1cca4e5dc`. A fase 022 — Idempotência passa a ser a única etapa funcional `ACTIVE / DEFINED`; a 023 — Outbox e todas as posteriores permanecem `NOT ACTIVE`.
+
+Registro histórico do boundary da implementação funcional: **022 — Idempotência = NOT ACTIVE** durante a 021. A ativação da 022 ocorreu somente depois da conclusão formal e da evidência de Production da 021.
+
+## Evidência de conclusão
+
+```text
+Issue                         = #98
+PR técnica                    = #99
+functional/runtime revision   = e23cff77cd1af4b590fd3bf9ceac98e1cca4e5dc
+source CI run                 = 32879964993 = success
+Release Gate / Staging        = 32880111232 = success
+Rollback Drill                = 32880277853 = success
+Production Promotion          = 32880504603 = success
+Production deployment         = dpl_8g1qdBw99RyZePkKJqm8CCCjGyJj = READY
+Production approval           = approved / alexoaraujo83
+prevent_self_review           = true
+artifact_sha256               = e352490006a3b4dbacb7aef758279e9cd00dd71bc9cb6c9650347d459cfc1106
+production evidence artifact  = production-deployment-e23cff77cd1af4b590fd3bf9ceac98e1cca4e5dc
+production evidence digest    = e7aa9f4503279828ef91baf3c8519ebd77a41fd67feed2da00c3a386e236abfc
+```
+
+Revision identity e database readiness passaram no deployment imutável e no alias estável. O mesmo artefato comprovado no rollback foi promovido a Production. A fase não criou migration PostgreSQL nem tabela de erros.
 
 ## Objetivo
 
 Estabelecer um contrato transversal, seguro, previsível e observável para erros do Moventra TMS, cobrindo domínio, aplicação, HTTP/API, infraestrutura e integrações sem expor detalhes sensíveis e sem transformar falhas técnicas em regras de negócio.
 
-O contrato deve permitir responder consistentemente:
+O contrato permite responder consistentemente:
 
 ```text
 qual categoria de erro ocorreu?
@@ -33,11 +55,11 @@ qual detalhe permanece somente em telemetria interna?
 7. Retryability é declarada por categoria/causa, não inferida da mensagem.
 8. Erro inesperado falha de forma segura com resposta genérica e diagnóstico interno suficiente.
 9. Multi-tenancy, RBAC e RLS não podem vazar existência de recursos entre escopos não autorizados.
-10. A fase 022 — Idempotência não é antecipada.
+10. A fase 022 — Idempotência não foi antecipada durante a implementação da 021.
 
 ## Taxonomia canônica
 
-A aplicação deve normalizar erros em categorias pequenas e estáveis:
+A aplicação normaliza erros em categorias pequenas e estáveis:
 
 ```text
 ValidationError
@@ -141,7 +163,7 @@ HTTP: `500` com mensagem pública genérica e observabilidade interna enriquecid
 
 ## Código estável de erro
 
-Cada erro público deve possuir `code` estável, namespaced e independente da mensagem:
+Cada erro público possui `code` estável, namespaced e independente da mensagem:
 
 ```text
 VALIDATION.INVALID_INPUT
@@ -165,9 +187,9 @@ Regras:
 
 ## Problem Details
 
-APIs HTTP devem convergir para `application/problem+json`, compatível com RFC 9457/Problem Details, usando uma extensão Moventra controlada.
+APIs HTTP convergem para `application/problem+json`, compatível com RFC 9457/Problem Details, usando extensão Moventra controlada.
 
-Formato recomendado:
+Formato:
 
 ```json
 {
@@ -238,9 +260,7 @@ Domain/Application Error
 → Observability
 ```
 
-O mapper HTTP centraliza status e representação pública.
-
-Controllers não devem repetir `try/catch` com mapeamentos diferentes por rota.
+O mapper HTTP centraliza status e representação pública. Controllers não repetem `try/catch` com mapeamentos diferentes por rota.
 
 ## PostgreSQL e constraints
 
@@ -251,7 +271,7 @@ Exemplos:
 ```text
 unique violation conhecida       → ConflictError
 foreign key conhecida            → Validation/Conflict conforme comando
-serialization/deadlock            → Concurrency/Infrastructure conforme política
+serialization/deadlock           → Concurrency/Infrastructure conforme política
 connection unavailable           → Dependency/Infrastructure
 ```
 
@@ -264,7 +284,7 @@ Regras:
 
 ## Concorrência
 
-A fase deve respeitar `version`/optimistic locking definido nas convenções.
+A fase respeita `version`/optimistic locking definido nas convenções.
 
 Version mismatch:
 
@@ -274,7 +294,7 @@ HTTP = 409
 retryable = false por padrão pelo cliente sem re-fetch
 ```
 
-Deadlock/serialization failure pode ser retryable internamente quando a operação for segura, mas a política de retry transversal não deve antecipar a fase 022 nem duplicar efeitos colaterais.
+Deadlock/serialization failure pode ser retryable internamente quando a operação for segura, mas a política de retry transversal não antecipa a fase 022 nem duplica efeitos colaterais.
 
 ## Segurança e anti-enumeração
 
@@ -288,11 +308,11 @@ Tenant A solicita ID pertencente ao Tenant B
 → resposta pública não confirma existência cross-tenant
 ```
 
-A política final entre `403` e `404` deve preservar o boundary de autorização existente e ser coberta por testes cross-tenant.
+A política entre `403` e `404` preserva o boundary de autorização e é coberta por testes cross-tenant.
 
 ## Observabilidade
 
-Todo erro normalizado deve integrar-se à fase 020.
+Todo erro normalizado integra-se à fase 020.
 
 Campos internos mínimos:
 
@@ -311,8 +331,8 @@ statusCode
 
 Regras:
 
-- erros esperados 4xx não devem ser todos logados como `error`;
-- 5xx inesperados devem produzir diagnóstico estruturado sanitizado;
+- erros esperados 4xx não são todos logados como `error`;
+- 5xx inesperados produzem diagnóstico estruturado sanitizado;
 - span recebe status de erro quando aplicável;
 - métricas usam apenas dimensões de baixa cardinalidade;
 - `error.code` pode ser label apenas se o catálogo permanecer controlado;
@@ -322,9 +342,7 @@ Regras:
 
 Nem todo erro gera Audit.
 
-Audit é obrigatório quando a tentativa constitui evento de segurança/negócio relevante já previsto pela fase 017, por exemplo alteração sensível negada ou ação administrativa crítica.
-
-Falha técnica de health/exporter não deve poluir Audit de negócio.
+Audit é obrigatório quando a tentativa constitui evento de segurança/negócio relevante já previsto pela fase 017, por exemplo alteração sensível negada ou ação administrativa crítica. Falha técnica de health/exporter não deve poluir Audit de negócio.
 
 ## Retry classification
 
@@ -335,9 +353,9 @@ retryable = true|false
 retryStrategy = none|immediate|backoff|external-reconcile
 ```
 
-Nesta fase, isso é metadado para consumidores internos. Não implementar engine de retries, idempotency key store ou exactly-once lógico; esses pertencem a fases posteriores.
+Na fase 021, isso é metadado para consumidores internos. Não foi implementada engine de retries, idempotency key store ou exactly-once lógico.
 
-## APIs internas sugeridas
+## APIs internas
 
 ```text
 src/core/errors/app-error.js
@@ -369,13 +387,11 @@ AppError {
 - trocar status HTTP/código existente pode ser breaking change;
 - `type` URI deve ser estável;
 - documentação OpenAPI futura deve referenciar o mesmo envelope;
-- APIs internas não devem expor stack por ambiente apenas porque Production está em debug.
+- APIs internas não expõem stack por ambiente apenas porque Production está em debug.
 
 ## Internacionalização
 
-A fase não exige tradução completa, mas separa código de máquina de mensagem humana para permitir i18n futura.
-
-O cliente não deve depender do texto exato da mensagem para lógica.
+A fase não exige tradução completa, mas separa código de máquina de mensagem humana para permitir i18n futura. O cliente não depende do texto exato da mensagem para lógica.
 
 ## Testes obrigatórios
 
@@ -394,7 +410,7 @@ Arquiteturais:
 - domínio não depende de HTTP;
 - controllers usam mapper central;
 - nenhuma rota retorna stack/SQL/DSN/token;
-- fase 022 não é antecipada;
+- fase 022 não foi antecipada;
 - observabilidade continua vendor-neutral;
 - Audit e error telemetry permanecem separados.
 
@@ -416,7 +432,7 @@ Runtime:
 
 ## CI/CD
 
-Atualizar CI para validar:
+A CI valida:
 
 ```text
 error contract tests
@@ -444,11 +460,7 @@ CI
 
 ## Banco de dados
 
-A fase 021 não requer migration por padrão.
-
-Não criar tabela de erros. Erros operacionais pertencem à telemetria; fatos de negócio/segurança relevantes pertencem ao Audit já existente.
-
-Se surgir necessidade de catálogo configurável persistido, ela deve ser justificada explicitamente e não é autorizada implicitamente por esta fase.
+A fase 021 não requer migration por padrão. Não existe tabela de erros: erros operacionais pertencem à telemetria; fatos de negócio/segurança relevantes pertencem ao Audit existente.
 
 ## Casos de borda
 
@@ -463,7 +475,7 @@ Se surgir necessidade de catálogo configurável persistido, ela deve ser justif
 - payload inválido enorme → resposta limitada;
 - erro no próprio error handler → fallback mínimo seguro.
 
-## Fora do escopo
+## Fora do escopo da 021
 
 - Idempotency-Key store e request fingerprint da 022;
 - retries transacionais automáticos generalizados;
@@ -471,8 +483,7 @@ Se surgir necessidade de catálogo configurável persistido, ela deve ser justif
 - mensageria/DLQ;
 - catálogo de erros tenant-configurável;
 - páginas frontend de erro;
-- suporte/incident management completo;
-- qualquer fase posterior à 021.
+- suporte/incident management completo.
 
 ## Critérios de conclusão
 
@@ -491,10 +502,10 @@ Se surgir necessidade de catálogo configurável persistido, ela deve ser justif
 - CI completo verde;
 - Staging validado;
 - rollback/restore comprovado;
-- Production somente após gate humano explícito e aprovação externa efetiva;
+- Production após gate humano explícito e aprovação externa efetiva;
 - Production evidence sem regressão;
-- documentação, Issue e Confluence sincronizados.
+- documentação e Issue sincronizadas; Confluence é atualizado na transição de governança.
 
 ## Próxima fase
 
-A fase **022 — Idempotência** permanece `NOT ACTIVE` até a conclusão formal da 021.
+A fase **022 — Idempotência = ACTIVE / DEFINED**. Sua implementação deve seguir `docs/implementation/022-idempotencia.md`. A fase **023 — Outbox** permanece `NOT ACTIVE` até a conclusão formal da 022.
