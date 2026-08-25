@@ -90,6 +90,24 @@ test('workflow change is release-impacting even when YAML is operational metadat
   }
 });
 
+test('markdown below an operational directory is not silently treated as docs-only', () => {
+  const { directory, base } = fixture();
+  try {
+    mkdirSync(join(directory, '.github', 'PULL_REQUEST_TEMPLATE'), { recursive: true });
+    writeFileSync(
+      join(directory, '.github', 'PULL_REQUEST_TEMPLATE', 'security.md'),
+      '# Operational template\n',
+    );
+    const head = commitAll(directory, 'nested operational markdown');
+    const result = classify(directory, base, head);
+
+    assert.equal(result.requires_release, 'true');
+    assert.equal(result.runtime_file_count, '1');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('deleting a runtime file still requires release', () => {
   const { directory, base } = fixture();
   try {
