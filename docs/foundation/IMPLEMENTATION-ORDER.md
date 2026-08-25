@@ -1,8 +1,10 @@
 # Continuidade da Fundação — Linha Oficial de Implantação
 
-A fundação do Moventra TMS segue esta sequência canônica:
+A linha oficial do Moventra TMS preserva a sequência canônica de implantação. Neste checkpoint, a fundação e segurança 001–017, os hardenings P0/P1 e a fase 018 estão concluídos; a fase 019 é a única etapa funcional ativa.
 
-**Governança → Arquitetura → Ambientes → CI/CD → Secrets → Banco base → Convenções → Tenant → Empresa → Filial → Usuários → Memberships → Auth → RBAC → Escopo Organizacional → RLS/Defesa adicional → Auditoria → Configurações**
+Sequência atual:
+
+**Governança → Arquitetura → Ambientes → CI/CD → Secrets → Banco base → Convenções → Tenant → Empresa → Filial → Usuários → Memberships → Auth → RBAC → Escopo Organizacional → RLS/Defesa adicional → Auditoria → Configurações → Feature Flags → Observabilidade → Error Handling → Idempotência → Outbox → Mensageria → Jobs → DLQ → Object Storage → demais domínios TMS**
 
 ## Semântica de estado
 
@@ -17,24 +19,27 @@ A fundação do Moventra TMS segue esta sequência canônica:
 
 | Etapa | Estado oficial | Evidência / decisão vigente |
 |---|---|---|
-| 001 — Governança | **CONCLUDED** | governança, histórico e processo de mudança versionados |
+| 001 — Governança | **CONCLUDED** | governança e processo versionados |
 | 002 — Arquitetura Base | **CONCLUDED** | monólito modular vigente |
 | 003 — Ambientes | **CONCLUDED** | ambientes segregados |
-| 004 — CI/CD | **CONCLUDED** | build-once, immutable artifact, staging, rollback/restore, Production protegida e revision identity validados |
+| 004 — CI/CD | **CONCLUDED** | build-once, immutable artifact, staging, rollback/restore e Production protegida |
 | 005 — Secrets Management | **CONCLUDED** | stores segregados e least privilege |
-| 006 — Banco Base | **CONCLUDED** | PostgreSQL/Neon 18.6, migration framework e runtime least privilege |
+| 006 — Banco Base | **CONCLUDED** | PostgreSQL/Neon 18.6 e migration framework |
 | 007 — Convenções de Dados | **CONCLUDED** | contrato canônico e guardrails |
 | 008 — Tenant | **CONCLUDED** | raiz SaaS materializada |
 | 009 — Empresa | **CONCLUDED** | organização tenant-aware materializada |
 | 010 — Filial | **CONCLUDED** | unidade tenant/company-aware materializada |
-| 011 — Usuários | **CONCLUDED** | identidade global/provider-agnostic materializada |
-| 012 — Memberships | **CONCLUDED** | vínculo User ↔ Tenant tenant-scoped materializado e evidenciado |
-| 013 — Auth | **CONCLUDED** | ExternalIdentity provider-agnostic e resolução User/Membership implementadas |
-| 014 — RBAC | **CONCLUDED** | permissions globais, roles/grants tenant-scoped e autorização backend deny-by-default |
-| 015 — Escopo Organizacional | **CONCLUDED** | escopos Tenant/Empresa/Filial e assignments tenant-aware materializados |
-| 016 — RLS / Defesa adicional | **CONCLUDED** | contexto transacional e RLS aplicados às estruturas tenant-scoped |
-| 017 — Auditoria Central | **CONCLUDED** | audit trail tenant-scoped, append-only, RLS e redaction/minimização validados |
-| 018 — Configurações | **ACTIVE / DEFINED** | resolução hierárquica Tenant → Empresa → Filial, definições tipadas, overrides tenant-aware, RLS/RBAC/Audit e proteção de secrets definidos em `docs/implementation/018-configuracoes.md` |
+| 011 — Usuários | **CONCLUDED** | identidade global/provider-agnostic |
+| 012 — Memberships | **CONCLUDED** | vínculo User ↔ Tenant materializado |
+| 013 — Auth | **CONCLUDED** | ExternalIdentity provider-agnostic e resolução de identidade |
+| 014 — RBAC | **CONCLUDED** | permissions globais, roles/grants tenant-scoped e deny-by-default |
+| 015 — Escopo Organizacional | **CONCLUDED** | scopes Tenant/Empresa/Filial e assignments tenant-aware |
+| 016 — RLS / Defesa adicional | **CONCLUDED** | contexto transaction-local e RLS tenant-aware |
+| 017 — Auditoria Central | **CONCLUDED** | audit trail append-only, tenant-scoped e redigido |
+| 018 — Configurações | **CONCLUDED** | catálogo tipado + overrides Tenant/Empresa/Filial + histórico + RLS/RBAC/Audit evidenciados em Production |
+| 019 — Feature Flags | **ACTIVE / DEFINED** | rollout controlado por ambiente/tenant/empresa/filial/usuário/plano/contexto e percentual, sem substituir autorização |
+| 020 — Observabilidade Base | **NOT ACTIVE** | depende da conclusão formal da 019 |
+| 021+ | **NOT ACTIVE** | preservar ordem oficial |
 
 ## Gates macro
 
@@ -43,7 +48,7 @@ G1 — Foundation Ready = APPROVED
 G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-`G2` permanece aprovado. O P0 comprovou acesso PostgreSQL least-privilege por principal non-owner/NOBYPASSRLS. O P1 pós-G2 integrou e provou o pipeline Auth → Membership → RBAC → Organizational Scope → Tenant/RLS → operação → Audit e classificou impacto de release para que alterações exclusivamente documentais não promovam runtime.
+G2 permanece aprovado. A ativação da 019 não altera o gate de segurança já evidenciado; novos artefatos devem continuar reutilizando Auth → Membership → RBAC → Organizational Scope → Tenant/RLS → operação → Audit.
 
 ## Revisões de segurança pós-G2
 
@@ -54,9 +59,22 @@ P1 Production deployment            = dpl_3fJQRBCn7WKNtRwsKdVo7nsXmZbY
 P1 docs-only proof revision         = 4d96525ef825eda49fdb7c2199d3e5cc4e96102c
 ```
 
-A revisão docs-only foi classificada com `requires_release=false`; Staging, rollback/restore, preflight e Production deployment foram pulados e nenhuma nova implantação Vercel foi criada.
+## Fase 018 — revisão funcional e release
 
-## Banco — estado canônico antes da 018
+```text
+PR técnica                   = #90
+functional/runtime revision  = 81b7edf3571aa5e3b37ce81c42ef6f4bf5311359
+Moventra CI                  = 32848703847 = success
+Foundation CI                = 32848703867 = success
+Release Gate                 = 32848816381 = success
+Rollback Drill               = 32848933076 = success
+Production Promotion         = 32849065397 = success
+Production deployment        = dpl_ELC7hjcG2rCCJY2mA4vGWwmuYZdT = READY
+```
+
+O environment protegido `production` foi aprovado externamente, com `prevent_self_review=true` e sem bypass. Revision identity, application health, database readiness e runtime observability foram validados.
+
+## Banco — estado canônico após 018
 
 Provider: Neon PostgreSQL 18.6.
 
@@ -72,6 +90,7 @@ Provider: Neon PostgreSQL 18.6.
 0009_organizational_scope.sql    = present
 0010_rls.sql                     = present
 0011_audit.sql                   = present
+0012_configuration.sql           = present
 ```
 
 Checksums canônicos:
@@ -87,6 +106,7 @@ Checksums canônicos:
 0009_organizational_scope.sql = eb9a820934b70305a50bd30a1b3a01c9aca033387e0fea09543dd25eee2748af
 0010_rls.sql                  = 4fbdc2268a390f0d103c2300e363dc927952bf5a6ae74009c4b26ed715cfc6c1
 0011_audit.sql                = 5f982ae3894d48833f27d447d24d932ddb99c3a3d2e6cb13eb823d9d67c86fa9
+0012_configuration.sql        = 4e31a90321a6480d00e2aa6b0d058c72f737241044c170db03e94eadb2f0eb5c
 ```
 
 Neon:
@@ -96,7 +116,7 @@ staging = br-rapid-math-au6j6xut
 main    = br-morning-glitter-au97suq4
 ```
 
-## Boundary de segurança consolidado
+## Boundary consolidado
 
 ```text
 User = identidade global
@@ -106,9 +126,11 @@ RBAC = permission catalog global + grants tenant-scoped
 Organizational Scope = Tenant / Company / Branch
 RLS = defesa adicional baseada em contexto transacional autorizado
 Audit Trail = tenant-scoped, append-only, minimizado e redigido
+Configuration Definition = catálogo global tipado
+Configuration Setting = override tenant/company/branch tenant-scoped
 ```
 
-Entidades globais (`identity.users`, `identity.external_identities`, `security.permissions`) não recebem RLS tenant-based. Toda autorização crítica continua obrigatória no backend; RLS não substitui Membership/RBAC/escopo de domínio.
+Entidades globais não recebem RLS tenant-based apenas por serem globais. Toda autorização crítica continua no backend; RLS não substitui Membership/RBAC/escopo.
 
 ## Regra de revision identity
 
@@ -116,4 +138,4 @@ A revisão funcional/runtime que conclui uma fase é registrada separadamente de
 
 ## Próxima transição oficial
 
-A sequência fundacional 001–017 e os hardenings pós-G2 P0/P1 estão concluídos. A **018 — Configurações** está explicitamente definida e ativada como próxima etapa oficial. Nenhuma etapa posterior à 018 está ativa.
+A fase **018 — Configurações = CONCLUDED**. A fase **019 — Feature Flags = ACTIVE / DEFINED**, conforme `docs/implementation/019-feature-flags.md`. A 020 e todas as posteriores permanecem inativas até a conclusão formal da 019.

@@ -31,7 +31,9 @@ O Moventra TMS é uma plataforma SaaS empresarial multi-tenant, multiempresa e m
 015 — Escopo Organizacional = CONCLUDED
 016 — RLS / Defesa adicional = CONCLUDED
 017 — Auditoria Central = CONCLUDED
-018 — Configurações = ACTIVE / DEFINED
+018 — Configurações = CONCLUDED
+019 — Feature Flags = ACTIVE / DEFINED
+020+ = NOT ACTIVE
 
 P0 pós-G2 — Runtime PostgreSQL least privilege = CONCLUDED
 P1 pós-G2 — Pipeline integrado + release impact = CONCLUDED
@@ -40,7 +42,7 @@ G1 — Foundation Ready = APPROVED
 G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
 ```
 
-A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`. A fase 018 está especificada em `docs/implementation/018-configuracoes.md`.
+A linha canônica e as regras de promoção estão em `docs/foundation/IMPLEMENTATION-ORDER.md`. Configurações está documentada em `docs/implementation/018-configuracoes.md`; Feature Flags está especificada em `docs/implementation/019-feature-flags.md`.
 
 ## Fundação organizacional e de segurança
 
@@ -58,7 +60,7 @@ RLS = defesa adicional por Tenant transaction-local
 Audit Trail = tenant-scoped + append-only + redaction/minimização
 ```
 
-`identity.users`, `identity.external_identities` e `security.permissions` permanecem globais ao SaaS. Vínculos e grants organizacionais são tenant-scoped. UUID vindo do cliente nunca é tratado como prova de autorização.
+`identity.users`, `identity.external_identities`, `security.permissions` e catálogos globais de plataforma permanecem globais ao SaaS. Vínculos, regras e grants organizacionais são tenant-scoped quando pertencem a um Tenant. UUID vindo do cliente nunca é prova de autorização.
 
 ## Banco e migrations vigentes
 
@@ -76,20 +78,36 @@ db/migrations/0008_rbac.sql
 db/migrations/0009_organizational_scope.sql
 db/migrations/0010_rls.sql
 db/migrations/0011_audit.sql
+db/migrations/0012_configuration.sql
 ```
 
-Checksums canônicos de 0006–0011:
+Checksum funcional mais recente:
 
 ```text
-0006_membership.sql           = 1196de78f64408d34f3e6353a57e0d68b9d39a51fb4c31a3d2ad9d684985806c
-0007_external_identity.sql    = 1fc9db5b61796d29e5b98b57231e5973a05758ff8b1bcef2b0c58ff80c4fa6b0
-0008_rbac.sql                 = 9071eccc4f7e1a80f4f2ab27bee0e75d1dc84f9e5de52dc36645bce78ca0e6f1
-0009_organizational_scope.sql = eb9a820934b70305a50bd30a1b3a01c9aca033387e0fea09543dd25eee2748af
-0010_rls.sql                  = 4fbdc2268a390f0d103c2300e363dc927952bf5a6ae74009c4b26ed715cfc6c1
-0011_audit.sql                = 5f982ae3894d48833f27d447d24d932ddb99c3a3d2e6cb13eb823d9d67c86fa9
+0012_configuration.sql = 4e31a90321a6480d00e2aa6b0d058c72f737241044c170db03e94eadb2f0eb5c
 ```
 
 Neon Staging e Main foram validados em PostgreSQL 18.6.
+
+## Fase 018 — Configurações
+
+Revisão funcional:
+
+```text
+revision              = 81b7edf3571aa5e3b37ce81c42ef6f4bf5311359
+Production deployment = dpl_ELC7hjcG2rCCJY2mA4vGWwmuYZdT
+state                 = READY
+```
+
+O domínio materializa:
+
+```text
+configuration.definitions      = catálogo global tipado
+configuration.settings         = overrides Tenant/Empresa/Filial
+configuration.setting_versions = histórico append-only tenant-scoped
+```
+
+Precedência efetiva: `BRANCH > COMPANY > TENANT > DEFINITION_DEFAULT`. RLS, RBAC, Organizational Scope, Audit, optimistic locking e runtime least privilege foram evidenciados em PostgreSQL real e Production.
 
 ## Hardening pós-G2
 
@@ -115,8 +133,6 @@ Production deployment = dpl_3fJQRBCn7WKNtRwsKdVo7nsXmZbY
 state                 = READY
 ```
 
-A revisão documental de prova `4d96525ef825eda49fdb7c2199d3e5cc4e96102c` foi classificada `documentation-only`; Staging, rollback/restore e Production foram pulados e não houve novo deployment Vercel.
-
 ## Runtime e entrega
 
 Cadeia oficial para mudanças runtime-impacting:
@@ -138,4 +154,4 @@ Gates humanos protegidos não podem ser contornados por deploy manual. Revisões
 
 ## Continuidade
 
-A fundação 001–017 e os hardenings P0/P1 estão concluídos. A próxima etapa oficial explicitamente ativada é **018 — Configurações**; nenhuma etapa posterior está ativa.
+A fundação 001–017, os hardenings P0/P1 e a fase 018 estão concluídos. A próxima etapa oficial explicitamente ativada é **019 — Feature Flags**; nenhuma etapa posterior está ativa.
