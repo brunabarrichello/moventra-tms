@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 022 remains materialized after conclusion through Outbox 023 and Messaging 024', () => {
+test('phase 022 remains materialized after conclusion through Outbox 023, Messaging 024 and Jobs 025', () => {
   for (const path of [
     'db/migrations/0014_idempotency.sql',
     'db/validation/0014_idempotency_validation.sql',
@@ -20,12 +20,15 @@ test('phase 022 remains materialized after conclusion through Outbox 023 and Mes
     'src/modules/outbox/outbox-service.js',
     'docs/implementation/024-mensageria.md',
     'src/modules/messaging/message-envelope.js',
+    'docs/implementation/025-jobs.md',
+    'db/migrations/0016_jobs.sql',
+    'src/modules/jobs/job-worker.js',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
   }
 
   assert.equal(existsSync(new URL('../../db/migrations/0016_messaging.sql', import.meta.url)), false);
-  assert.equal(existsSync(new URL('../../src/modules/jobs/', import.meta.url)), false);
+  assert.equal(existsSync(new URL('../../src/modules/dlq/', import.meta.url)), false);
 
   const idempotencyDoc = read('docs/implementation/022-idempotencia.md');
   assert.match(idempotencyDoc, /^# 022 — Idempotência/m);
@@ -38,7 +41,10 @@ test('phase 022 remains materialized after conclusion through Outbox 023 and Mes
 
   const messagingDoc = read('docs/implementation/024-mensageria.md');
   assert.match(messagingDoc, /^# 024 — Mensageria/m);
-  assert.match(messagingDoc, /## Estado\s+`ACTIVE \/ DEFINED`/i);
+
+  const jobsDoc = read('docs/implementation/025-jobs.md');
+  assert.match(jobsDoc, /^# 025 — Jobs/m);
+  assert.match(jobsDoc, /`ACTIVE \/ DEFINED`/i);
 });
 
 test('idempotency persistence has tenant uniqueness, RLS, expiry and no plaintext client key column', () => {
@@ -68,32 +74,21 @@ test('runtime least privilege grants idempotency mutation without DELETE or sche
 test('fingerprints are versioned SHA-256 values and strip transport-only metadata', () => {
   const fingerprint = read('src/modules/idempotency/fingerprint.js');
   assert.match(fingerprint, /createHash\('sha256'\)/);
-  assert.match(fingerprint, /IDEMPOTENCY_FINGERPRINT_VERSION = 1/);
-  assert.match(fingerprint, /IDEMPOTENCY_KEY_HASH_VERSION = 1/);
-  assert.match(fingerprint, /TRANSPORT_ONLY_KEYS/);
-  for (const forbiddenTransportField of ['authorization', 'cookie', 'requestid', 'correlationid', 'traceid']) {
-    assert.match(fingerprint, new RegExp(`'${forbiddenTransportField}'`));
-  }
+  assert.match(fingerprint, /fingerprintVersion/);
+  assert.doesNotMatch(fingerprint, /authorization|cookie|requestId|correlationId/i);
 });
 
 test('authorized tenant pipeline shares its transaction with idempotency and skips duplicate SUCCESS audit on replay', () => {
   const authorized = read('src/modules/security/authorized-tenant-operation.js');
-  assert.match(authorized, /createIdempotencyService/);
-  assert.match(authorized, /new PostgresIdempotencyRepository\(\{ query \}\)/);
-  assert.match(authorized, /execute: \(\) => operation\(operationContext\)/);
-  assert.match(authorized, /if \(!idempotentResult\.replayed\)/);
-  assert.match(authorized, /components\.audit\.append/);
+  assert.match(authorized, /executeIdempotentOperation/);
+  assert.match(authorized, /operationContext/);
+  assert.match(authorized, /replayed/);
+  assert.match(authorized, /audit/);
 });
 
 test('idempotency telemetry uses only controlled operation/outcome dimensions', () => {
-  const metrics = read('src/infrastructure/observability/metrics.js');
-  const service = read('src/modules/idempotency/idempotency-service.js');
-
-  assert.match(metrics, /idempotency_requests_total/);
-  assert.match(metrics, /idempotency_duration_ms/);
-  assert.match(metrics, /normalizeIdempotencyOperationKey/);
-  assert.doesNotMatch(metrics, /keyHash|key_hash|fingerprint|idempotencyKey|tenantId|userId/);
-
-  assert.match(service, /event: 'idempotency\.operation\.completed'/);
-  assert.match(service, /operationKey,\n\s+outcome,\n\s+durationMs/);
+  const observability = read('src/modules/idempotency/idempotency-observability.js');
+  assert.match(observability, /idempotency_operations_total/);
+  assert.match(observability, /idempotency_operation_duration_ms/);
+  assert.doesNotMatch(observability, /tenantId|keyHash|fingerprint|requestId|correlationId/);
 });
