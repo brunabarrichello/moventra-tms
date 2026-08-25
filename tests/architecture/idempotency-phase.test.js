@@ -23,7 +23,8 @@ test('phase 022 materializes tenant-scoped idempotency without anticipating Outb
   assert.equal(existsSync(new URL('../../src/modules/outbox/', import.meta.url)), false);
 
   const doc = read('docs/implementation/022-idempotencia.md');
-  assert.match(doc, /022 — Idempotência = ACTIVE \/ DEFINED/i);
+  assert.match(doc, /^# 022 — Idempotência/m);
+  assert.match(doc, /## Estado\s+`ACTIVE \/ DEFINED`/i);
   assert.match(doc, /023 — Transactional Outbox.*NOT ACTIVE/is);
   assert.match(doc, /não promete exactly-once para efeitos externos/i);
 });
