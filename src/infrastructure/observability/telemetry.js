@@ -4,6 +4,7 @@ import { resourceFromAttributes } from '@opentelemetry/resources';
 import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { recordObservabilityExportError } from './metrics.js';
 
 const DISCARD_SPAN_EXPORTER = Object.freeze({
   export(_spans, callback) {
@@ -37,6 +38,7 @@ export async function shutdownObservability({ timeoutMs = 2_500 } = {}) {
   try {
     await withTimeout(activeSdk.shutdown(), timeoutMs);
   } catch (error) {
+    recordObservabilityExportError('shutdown');
     bootstrapLog('warn', 'observability.shutdown.failed', error);
   }
 }
@@ -66,6 +68,12 @@ export function buildOtlpConfiguration(environment = process.env) {
     metrics,
     headers: parseOtlpHeaders(environment.OTEL_EXPORTER_OTLP_HEADERS),
   });
+}
+
+export function resetObservabilityForTest() {
+  initializationPromise = undefined;
+  sdk = undefined;
+  state = Object.freeze({ initialized: false, mode: 'uninitialized' });
 }
 
 async function initializeInternal() {
@@ -116,6 +124,7 @@ async function initializeInternal() {
     return state;
   } catch (error) {
     state = Object.freeze({ initialized: true, mode: 'degraded' });
+    recordObservabilityExportError('initialization');
     bootstrapLog('warn', 'observability.initialize.failed', error);
     return state;
   }
@@ -229,6 +238,8 @@ async function withTimeout(promise, timeoutMs) {
       }),
     ]);
   } finally {
-    if (timer) clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }
