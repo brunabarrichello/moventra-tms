@@ -60,6 +60,9 @@ function statusFor(error) {
   if (error.code === ERROR_CODES.HTTP_METHOD_NOT_ALLOWED) {
     return 405;
   }
+  if (error.code === ERROR_CODES.IDEMPOTENCY_RESULT_UNAVAILABLE) {
+    return 503;
+  }
 
   switch (error.category) {
     case ERROR_CATEGORIES.VALIDATION:
