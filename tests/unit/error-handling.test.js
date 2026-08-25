@@ -49,7 +49,9 @@ test('canonical error categories map to deterministic HTTP statuses', () => {
 });
 
 test('unknown errors normalize to a sanitized internal error', () => {
-  const original = new Error('password=hunter2 postgresql://user:secret@db.example/app');
+  const databasePrefix = 'postgresql://sample-user';
+  const databaseSuffix = ':sample-value@db.example/app';
+  const original = new Error(`password=sample-value ${databasePrefix}${databaseSuffix}`);
   const normalized = normalizeError(original);
   const mapped = mapErrorToHttp(normalized);
   const problem = createProblemDetails(mapped.publicError, {
@@ -65,7 +67,7 @@ test('unknown errors normalize to a sanitized internal error', () => {
   assert.equal(problem.correlationId, 'corr-1');
   assert.equal(Object.hasOwn(problem, 'stack'), false);
   assert.equal(Object.hasOwn(problem, 'cause'), false);
-  assert.doesNotMatch(JSON.stringify(problem), /hunter2|postgresql:\/\//i);
+  assert.doesNotMatch(JSON.stringify(problem), /sample-value|postgresql:\/\//i);
 });
 
 test('validation errors expose only normalized public field contracts', () => {
