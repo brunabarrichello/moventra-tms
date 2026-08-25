@@ -1,5 +1,10 @@
 import { getHealthSnapshot } from '../core/health.js';
+import {
+  MethodNotAllowedError,
+  NotFoundError,
+} from '../core/errors/app-error.js';
 import { observeHttpRequest } from '../infrastructure/observability/http.js';
+import { handleHttpError } from './error-mapper.js';
 
 const JSON_HEADERS = Object.freeze({
   'content-type': 'application/json; charset=utf-8',
@@ -21,15 +26,25 @@ export function requestHandler(request, response) {
     response,
     route,
     handler: async () => {
-      if (method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
-        sendJson(response, 200, getHealthSnapshot());
-        return;
-      }
+      try {
+        if (url.pathname === '/' || url.pathname === '/health') {
+          if (method !== 'GET') {
+            throw new MethodNotAllowedError({ message: `Method ${method} is not allowed on health route` });
+          }
+          sendJson(response, 200, getHealthSnapshot());
+          return;
+        }
 
-      sendJson(response, 404, {
-        status: 'error',
-        code: 'NOT_FOUND',
-      });
+        throw new NotFoundError({ message: 'Requested HTTP route was not found' });
+      } catch (error) {
+        handleHttpError({
+          error,
+          request,
+          response,
+          instance: url.pathname,
+          allow: error instanceof MethodNotAllowedError ? 'GET' : undefined,
+        });
+      }
     },
   });
 }
