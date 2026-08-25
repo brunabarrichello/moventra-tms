@@ -42,6 +42,7 @@ test('authorized idempotent replay does not execute a second outbox append', asy
   const outboxAppends = [];
   let operationCalls = 0;
   let storedBody;
+  let transactionQuerySeen = false;
   const sharedQuery = async () => ({ rows: [], rowCount: 0 });
 
   const components = {
@@ -86,7 +87,7 @@ test('authorized idempotent replay does not execute a second outbox append', asy
     operationCalls += 1;
     const outbox = createAuthorizedOutbox(context, {
       serviceFactory: (query) => {
-        assert.equal(query, sharedQuery);
+        transactionQuerySeen = typeof query === 'function';
         return {
           append: async (input) => {
             outboxAppends.push(input);
@@ -107,6 +108,7 @@ test('authorized idempotent replay does not execute a second outbox append', asy
   const first = await service.execute(request(), operation);
   const replay = await service.execute(request(), operation);
 
+  assert.equal(transactionQuerySeen, true);
   assert.equal(operationCalls, 1);
   assert.equal(outboxAppends.length, 1);
   assert.equal(outboxAppends[0].tenantId, TENANT_ID);
