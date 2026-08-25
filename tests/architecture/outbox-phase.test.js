@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 023 remains materialized after conclusion while Messaging 024 is active', () => {
+test('phase 023 remains materialized after conclusion while Jobs 025 consumes its public contract', () => {
   for (const path of [
     'db/migrations/0015_outbox.sql',
     'db/validation/0015_outbox_validation.sql',
@@ -19,26 +19,26 @@ test('phase 023 remains materialized after conclusion while Messaging 024 is act
     'scripts/db/validate-outbox-concurrency.mjs',
     'docs/implementation/023-outbox.md',
     'docs/implementation/024-mensageria.md',
+    'docs/implementation/025-jobs.md',
     'src/modules/messaging/message-envelope.js',
     'src/infrastructure/messaging/rabbitmq/rabbitmq-adapter.js',
+    'src/modules/jobs/outbox-dispatcher-job.js',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
   }
 
   assert.equal(existsSync(new URL('../../db/migrations/0016_messaging.sql', import.meta.url)), false);
-  assert.equal(existsSync(new URL('../../src/modules/jobs/', import.meta.url)), false);
   assert.equal(existsSync(new URL('../../src/modules/dlq/', import.meta.url)), false);
 
   const outboxDoc = read('docs/implementation/023-outbox.md');
   assert.match(outboxDoc, /^# 023 — Transactional Outbox/m);
   assert.match(outboxDoc, /## Estado\s+`CONCLUDED`/i);
-  assert.match(outboxDoc, /024 — Mensageria = ACTIVE \/ DEFINED/i);
   assert.match(outboxDoc, /não promete exactly-once/i);
 
-  const messagingDoc = read('docs/implementation/024-mensageria.md');
-  assert.match(messagingDoc, /^# 024 — Mensageria/m);
-  assert.match(messagingDoc, /## Estado\s+`ACTIVE \/ DEFINED`/i);
-  assert.match(messagingDoc, /025 — Jobs.*NOT ACTIVE/is);
+  const jobsDoc = read('docs/implementation/025-jobs.md');
+  assert.match(jobsDoc, /^# 025 — Jobs/m);
+  assert.match(jobsDoc, /`ACTIVE \/ DEFINED`/i);
+  assert.match(jobsDoc, /system\.outbox_dispatch/);
 });
 
 test('outbox persistence is tenant-scoped, append-only in business facts and claim-safe', () => {
@@ -64,7 +64,7 @@ test('outbox persistence is tenant-scoped, append-only in business facts and cla
   assert.match(runtimeAccess, /REVOKE CREATE ON SCHEMA[\s\S]*outbox/);
 });
 
-test('outbox append is explicitly bound to the authorized tenant transaction and idempotent callback boundary', () => {
+test('outbox append remains bound to authorized tenant transaction and idempotent callback boundary', () => {
   const authorizedOutbox = read('src/modules/outbox/authorized-outbox.js');
   const authorizedPipeline = read('src/modules/security/authorized-tenant-operation.js');
 
@@ -74,7 +74,7 @@ test('outbox append is explicitly bound to the authorized tenant transaction and
   assert.match(authorizedPipeline, /execute: \(\) => operation\(operationContext\)/);
 });
 
-test('outbox remains provider-neutral after Messaging 024 is introduced', () => {
+test('Outbox remains broker-neutral; system dispatcher crosses RLS only through narrow database capabilities', () => {
   const observability = read('src/modules/outbox/outbox-observability.js');
   const source = [
     read('src/modules/outbox/outbox-contract.js'),
@@ -82,16 +82,26 @@ test('outbox remains provider-neutral after Messaging 024 is introduced', () => 
     read('src/modules/outbox/outbox-service.js'),
     read('src/modules/outbox/authorized-outbox.js'),
   ].join('\n');
+  const jobsMigration = read('db/migrations/0016_jobs.sql');
+  const systemRepository = read('src/infrastructure/outbox/system-outbox-repository.js');
 
   assert.match(observability, /outbox_operations_total/);
   assert.match(observability, /outbox_operation_duration_ms/);
   assert.doesNotMatch(observability, /tenantId|aggregateId|eventId|claimToken|correlationId/);
   assert.doesNotMatch(source, /kafka|rabbitmq|\bsqs\b|\bsns\b|eventbridge|pub\/sub|amqp/i);
   assert.doesNotMatch(source, /setInterval|setTimeout\s*\(/);
+
+  assert.match(jobsMigration, /outbox\.claim_system_batch/);
+  assert.match(jobsMigration, /SECURITY DEFINER/);
+  assert.match(jobsMigration, /REVOKE ALL ON FUNCTION outbox\.claim_system_batch/);
+  assert.match(systemRepository, /claim_system_batch/);
+  assert.doesNotMatch(systemRepository, /BYPASSRLS|ALTER ROLE|DISABLE ROW LEVEL SECURITY/i);
 });
 
-test('CI database contract continues to execute outbox runtime and concurrency validation', () => {
+test('CI runtime contract includes Outbox and Jobs least-privilege validation', () => {
   const runtimeContract = read('scripts/ci/runtime-access-contract.sh');
   assert.match(runtimeContract, /outbox-runtime-access-validation\.sql/);
+  assert.match(runtimeContract, /jobs-runtime-access-validation\.sql/);
   assert.match(runtimeContract, /validate-outbox-concurrency\.mjs/);
+  assert.match(runtimeContract, /validate-jobs-concurrency\.mjs/);
 });
