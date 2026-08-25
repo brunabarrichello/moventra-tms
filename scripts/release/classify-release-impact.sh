@@ -4,8 +4,12 @@ set -euo pipefail
 is_documentation_only_path() {
   local file="$1"
   case "$file" in
-    docs/*|README.md|LICENSE|CHANGELOG.md|CONTRIBUTING.md|CODE_OF_CONDUCT.md|SECURITY.md|*.md)
+    docs/*|README.md|LICENSE|CHANGELOG.md|CONTRIBUTING.md|CODE_OF_CONDUCT.md|SECURITY.md)
       return 0
+      ;;
+    *.md)
+      [[ "$file" != */* ]]
+      return
       ;;
     *)
       return 1
