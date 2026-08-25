@@ -7,7 +7,22 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 const MAX_METADATA_BYTES = 8 * 1024;
 const MAX_AVAILABLE_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
 const METADATA_KEYS = new Set(['correlationId', 'causationId', 'actorType', 'schemaVersion']);
-const FORBIDDEN_KEY = /^(authorization|cookie|set-cookie|password|passwd|secret|token|access_token|refresh_token|dsn|database_url|idempotency[-_]?key)$/i;
+const FORBIDDEN_KEYS = new Set([
+  'authorization',
+  'cookie',
+  'cookies',
+  'setcookie',
+  'password',
+  'passwd',
+  'secret',
+  'token',
+  'tokens',
+  'accesstoken',
+  'refreshtoken',
+  'dsn',
+  'databaseurl',
+  'idempotencykey',
+]);
 
 export function defineOutboxEventContract({ aggregateType, eventType, schemaVersion }) {
   const normalizedAggregateType = normalizeAggregateType(aggregateType);
@@ -161,21 +176,34 @@ function assertNoForbiddenKeys(value, depth) {
   }
   if (Array.isArray(value)) {
     for (const item of value) {
-      if (item && typeof item === 'object') assertNoForbiddenKeys(item, depth + 1);
+      if (item && typeof item === 'object') {
+        assertNoForbiddenKeys(item, depth + 1);
+      }
     }
     return;
   }
-  if (!isPlainObject(value)) return;
+  if (!isPlainObject(value)) {
+    return;
+  }
   for (const [key, nested] of Object.entries(value)) {
-    if (FORBIDDEN_KEY.test(key)) {
+    if (isForbiddenKey(key)) {
       throw outboxContractError('MVT_OUTBOX_PAYLOAD_SENSITIVE', 'Outbox payload contains a forbidden sensitive field');
     }
-    if (nested && typeof nested === 'object') assertNoForbiddenKeys(nested, depth + 1);
+    if (nested && typeof nested === 'object') {
+      assertNoForbiddenKeys(nested, depth + 1);
+    }
   }
 }
 
+function isForbiddenKey(value) {
+  const normalized = String(value).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return FORBIDDEN_KEYS.has(normalized);
+}
+
 function isPlainObject(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
