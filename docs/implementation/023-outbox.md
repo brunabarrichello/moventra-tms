@@ -2,15 +2,15 @@
 
 ## Estado
 
-`ACTIVE / DEFINED`
+`CONCLUDED`
 
-A fase 023 é a única etapa funcional ativa após a conclusão formal da 022 — Idempotência. A fase 024 — Mensageria e todas as posteriores permanecem `NOT ACTIVE`.
+A fase 023 foi implementada, validada em PostgreSQL real, promovida pela cadeia oficial de Staging → rollback/restore → Production protegida e concluída com evidência de runtime, banco e governança. A fase **024 — Mensageria = ACTIVE / DEFINED**.
 
-## Objetivo
+## Objetivo concluído
 
-Eliminar a janela entre o `COMMIT` da mutação de negócio e a intenção de publicação assíncrona, registrando um evento Outbox na mesma transação PostgreSQL do estado de negócio e do Audit correspondente.
+A fase eliminou a janela entre o `COMMIT` da mutação de negócio e a intenção de publicação assíncrona, registrando o evento Outbox na mesma transação PostgreSQL do estado de negócio e do Audit correspondente.
 
-Contrato canônico:
+Contrato canônico materializado:
 
 ```text
 mutação de negócio
@@ -21,221 +21,97 @@ outbox event
 = mesma transação PostgreSQL
 ```
 
-A fase 023 não publica em broker específico e não promete exactly-once fim a fim. Ela garante atomicidade local entre estado de negócio e registro do evento a publicar. A entrega futura deverá assumir at-least-once e consumidores idempotentes.
+A garantia é de atomicidade local. A fase 023 não promete exactly-once fim a fim e não publica diretamente em broker. Entrega externa assume at-least-once e consumidores idempotentes.
 
-## Decisão arquitetural
+## Implementação materializada
 
-O Outbox será provider-neutral e fará parte da infraestrutura transversal do monólito modular. Domínios produzem eventos de integração através de uma porta interna; não conhecem Kafka, RabbitMQ, SQS, SNS, EventBridge, Pub/Sub ou qualquer provider futuro.
-
-A publicação externa não ocorre dentro da transação PostgreSQL. A transação apenas persiste o evento Outbox. A fase 024 — Mensageria definirá adapters/broker; a fase 025 — Jobs definirá o scheduler/dispatcher recorrente; a fase 026 — DLQ definirá tratamento de dead-letter.
-
-## Modelo de dados proposto
-
-Schema:
+### Banco
 
 ```text
-outbox
+schema       = outbox
+tabela       = outbox.events
+migration    = db/migrations/0015_outbox.sql
+validation   = db/validation/0015_outbox_validation.sql
 ```
 
-Tabela principal:
+Campos materializados:
 
 ```text
-outbox.events
+id                  UUID PK / uuidv7()
+tenant_id           UUID NOT NULL
+aggregate_type      TEXT NOT NULL
+aggregate_id        UUID NULL
+event_type          TEXT NOT NULL
+schema_version      SMALLINT NOT NULL
+payload             JSONB NOT NULL
+metadata            JSONB NOT NULL
+dedupe_key          TEXT NULL
+occurred_at         TIMESTAMPTZ NOT NULL
+available_at        TIMESTAMPTZ NOT NULL
+published_at        TIMESTAMPTZ NULL
+attempt_count       INTEGER NOT NULL
+last_attempt_at     TIMESTAMPTZ NULL
+claim_token         UUID NULL
+claimed_at          TIMESTAMPTZ NULL
+created_at          TIMESTAMPTZ NOT NULL
 ```
 
-Campos mínimos:
+`tenant_id` é obrigatório, referencia `organization.tenants(id)` e é protegido por RLS usando `security.current_tenant_id()`.
+
+### Código
 
 ```text
-id                  uuid PK
-tenant_id           uuid NOT NULL
-aggregate_type      text NOT NULL
-aggregate_id        uuid NULL
-event_type          text NOT NULL
-schema_version      smallint NOT NULL
-payload             jsonb NOT NULL
-metadata            jsonb NOT NULL
-dedupe_key          text NULL
-occurred_at         timestamptz NOT NULL
-available_at        timestamptz NOT NULL
-published_at        timestamptz NULL
-attempt_count       integer NOT NULL
-last_attempt_at     timestamptz NULL
-claim_token         uuid NULL
-claimed_at          timestamptz NULL
-created_at          timestamptz NOT NULL
+src/modules/outbox/outbox-contract.js
+src/modules/outbox/outbox-repository.js
+src/modules/outbox/outbox-service.js
+src/modules/outbox/authorized-outbox.js
+src/modules/outbox/outbox-observability.js
+scripts/db/validate-outbox-concurrency.mjs
 ```
 
-### Identidade do evento
+O módulo Outbox permanece provider-neutral: não importa RabbitMQ, Kafka, SQS, SNS, EventBridge, Pub/Sub ou SDK de broker.
 
-`id` é UUID/UUIDv7 e representa a identidade imutável do evento de integração. Consumidores futuros podem usar esse ID para deduplicação.
+## Regras consolidadas
 
-### Tenant
+- `tenantId` vem do contexto autorizado, nunca do payload do cliente;
+- `aggregateType` e `eventType` são contratos controlados pela aplicação;
+- payload é JSON minimizado, limitado e inspecionado contra campos sensíveis;
+- metadata é allowlisted;
+- nenhuma publicação de rede ocorre dentro da transação PostgreSQL;
+- replay da Idempotência 022 não executa novamente a mutação e não cria segundo evento Outbox;
+- rollback da transação remove mutação, Audit, claim idempotente e Outbox correspondente;
+- evento publicado não volta automaticamente a pending;
+- cleanup físico não é permitido ao runtime principal e permanece responsabilidade futura de Jobs 025;
+- Audit e Outbox têm responsabilidades distintas e complementares.
 
-`tenant_id` é obrigatório para eventos tenant-scoped e deve vir do contexto autorizado, nunca do payload do evento. Eventos realmente globais de plataforma deverão ser modelados por contrato separado quando houver caso real; não introduzir `tenant_id NULL` genericamente nesta fase.
-
-### Aggregate
-
-`aggregate_type` e `event_type` são identificadores controlados pela aplicação e estáveis, por exemplo futuramente:
+## Estados operacionais derivados
 
 ```text
-freight
-trip
-invoice
-payment
-shipment
+pending   = published_at IS NULL e claim ausente/expirado
+claimed   = claim_token + claimed_at válidos
+published = published_at IS NOT NULL
 ```
 
-```text
-freight.created
-trip.started
-invoice.issued
-payment.authorized
-shipment.delivered
-```
-
-Não usar nomes derivados de URL, texto livre ou valores fornecidos pelo cliente.
-
-### Payload e metadata
-
-`payload` contém somente dados necessários ao contrato de integração. Preferir IDs e fatos de domínio a cópias integrais de entidades.
-
-`metadata` é allowlisted e pode conter apenas informações técnicas estáveis necessárias ao tracing/integration contract, por exemplo:
-
-```text
-correlationId
-causationId
-actorType
-schemaVersion
-```
-
-Nunca persistir:
-
-```text
-Authorization
-Cookie
-tokens
-senhas
-DSN
-Idempotency-Key plaintext
-payload bruto de requisição
-headers arbitrários
-```
-
-## Estado operacional
-
-A fase 023 evita uma state machine de broker. O evento Outbox possui apenas metadata operacional suficiente para claim/publicação futura:
-
-```text
-pending        = published_at IS NULL e claim expirado/ausente
-claimed        = claim_token/claimed_at válidos
-published      = published_at IS NOT NULL
-```
-
-Esses estados são derivados dos campos e não representam estado de negócio.
-
-Não criar `DEAD_LETTER`, `RETRY_SCHEDULED`, `BROKER_ACKED` ou similares nesta fase.
-
-## Atomicidade
-
-Fluxo canônico:
-
-```text
-BEGIN tenant transaction
-  ↓
-SET LOCAL moventra.tenant_id
-  ↓
-autorizar Membership/RBAC/Scope
-  ↓
-Idempotência 022 (quando aplicável)
-  ↓
-mutação de negócio
-  ↓
-Audit SUCCESS
-  ↓
-INSERT outbox.events
-  ↓
-COMMIT
-```
-
-Se qualquer etapa falhar:
-
-```text
-ROLLBACK
-→ mutação revertida
-→ Audit SUCCESS revertido
-→ outbox event revertido
-→ claim de idempotência revertido quando fizer parte da mesma transação
-```
-
-Nenhum evento pode sobreviver a uma mutação que não foi commitada.
-
-## Integração com Idempotência 022
-
-Para uma operação idempotente:
-
-- primeira execução efetiva cria no máximo um evento Outbox por fato lógico esperado;
-- replay da mesma `Idempotency-Key` e fingerprint não executa novamente a mutação e não cria novo Outbox event;
-- mismatch da chave não cria evento;
-- rollback da execução remove também o evento.
-
-O Outbox não substitui o registro idempotente. São responsabilidades complementares.
-
-## Append API interna
-
-API conceitual:
-
-```text
-OutboxService.append({
-  tenantId,
-  aggregateType,
-  aggregateId,
-  eventType,
-  schemaVersion,
-  payload,
-  metadata,
-  query
-})
-```
-
-Regras:
-
-- `query` deve pertencer à transação compartilhada do fluxo autorizado;
-- `tenantId` deve corresponder ao tenant transaction-local;
-- `aggregateType` e `eventType` devem ser allowlisted/normalizados;
-- payload e metadata devem possuir limites de tamanho;
-- o serviço não faz network I/O;
-- o serviço não publica mensagem;
-- o serviço não abre segunda transação concorrente.
-
-## Claim API para preparação da fase 024/025
-
-A fase 023 deve provar que múltiplos dispatchers futuros poderão competir sem selecionar o mesmo evento simultaneamente.
-
-Contrato conceitual:
-
-```text
-claimBatch({
-  limit,
-  now,
-  claimTtl,
-  claimToken,
-  query
-})
-```
-
-Estratégia recomendada PostgreSQL:
-
-```text
-SELECT ... FOR UPDATE SKIP LOCKED
-```
-
-seguido de atualização do claim dentro da mesma transação de claim.
-
-Essa API é infraestrutura de persistência; não cria scheduler, loop infinito, worker distribuído ou broker nesta fase.
+Não foi criada state machine de broker nem estado `DEAD_LETTER`, `BROKER_ACKED` ou `RETRY_SCHEDULED`.
 
 ## Concorrência
 
-Obrigatório provar em PostgreSQL real:
+O claim usa PostgreSQL:
+
+```text
+FOR UPDATE SKIP LOCKED
+```
+
+seguido de atualização atômica de:
+
+```text
+claim_token
+claimed_at
+attempt_count
+last_attempt_at
+```
+
+Foi comprovado em PostgreSQL real que:
 
 ```text
 2 claimers concorrentes
@@ -243,234 +119,127 @@ Obrigatório provar em PostgreSQL real:
 → nenhum mesmo event id em ambos
 ```
 
-Também provar:
+Também foram comprovados reclaim após TTL e exclusão de eventos já publicados dos claims normais.
+
+## Runtime least privilege
+
+O runtime possui somente os privilégios necessários:
 
 ```text
-claim expirado
-→ evento pode ser reclamado
-```
-
-`published_at` torna o evento inelegível para novos claims normais.
-
-## Deduplicação
-
-O ID do evento é a referência primária de deduplicação para consumidores futuros.
-
-`dedupe_key` é opcional e só deve ser usado quando um domínio tiver uma chave lógica estável e comprovadamente necessária. Não criar unicidade global genérica que possa bloquear eventos legítimos diferentes.
-
-## RLS e isolamento
-
-`outbox.events` é tenant-scoped e deve ter RLS baseado em `security.current_tenant_id()`.
-
-O runtime da aplicação:
-
-```text
-USAGE schema
-SELECT
-INSERT
-UPDATE limitado ao necessário
+USAGE no schema outbox
+SELECT em outbox.events
+INSERT em outbox.events
+UPDATE somente em:
+  attempt_count
+  last_attempt_at
+  claim_token
+  claimed_at
+  published_at
 sem DELETE
-sem DDL
+sem CREATE no schema
 sem BYPASSRLS
 ```
 
-A role principal de runtime não deve receber hard delete para cleanup. Retenção física futura pertence ao principal operacional dedicado do Jobs 025 e deverá ser auditada.
+Payload, metadata, event type, tenant e demais fatos imutáveis não podem ser atualizados pelo principal de runtime.
 
-## Audit
+## Integração com Idempotência 022
 
-Outbox não substitui Audit.
+Fluxo consolidado quando a operação é idempotente:
 
-- Audit descreve quem fez o quê no sistema;
-- Outbox descreve fato/evento a integrar com outros componentes;
-- ambos podem nascer da mesma transação;
-- replay idempotente não duplica Audit de negócio nem Outbox event;
-- mudanças administrativas futuras em Outbox devem ser auditadas.
+```text
+claim Idempotency-Key
+→ autorização Tenant/RBAC/Scope/RLS
+→ mutação de negócio
+→ Audit SUCCESS
+→ append Outbox
+→ stored result
+→ COMMIT
+```
+
+Replay do mesmo contrato retorna o stored result e não duplica:
+
+```text
+mutação
+Audit SUCCESS
+Outbox event
+```
 
 ## Observabilidade
 
-Dimensões permitidas de baixa cardinalidade:
-
-```text
-outbox.operation = append | claim | mark_published
-outbox.outcome   = success | empty | conflict | failed
-outbox.event_type = controlado/allowlisted
-```
-
-Não usar como metric labels:
-
-```text
-tenant_id
-aggregate_id
-event_id
-claim_token
-correlationId
-payload values
-```
-
-Logs/traces podem carregar IDs somente quando estritamente necessários e sanitizados; payload não deve ser logado.
-
-Métricas sugeridas:
+Métricas materializadas:
 
 ```text
 outbox_operations_total{operation,outcome}
 outbox_operation_duration_ms{operation,outcome}
-outbox_pending_events (gauge agregado, sem tenant label)
 ```
 
-A métrica de backlog poderá ser refinada quando o dispatcher da fase 025 existir.
+Dimensões são controladas e de baixa cardinalidade. `tenantId`, `aggregateId`, `eventId`, `claimToken`, `correlationId` e valores de payload não são metric labels.
 
-## Retenção
-
-A fase 023 deve manter `published_at` e timestamps suficientes para futura política de retenção, mas não implementa purge scheduler.
-
-Registros publicados não devem ser removidos pelo runtime principal. Retenção futura deve considerar auditoria, requisitos contratuais/fiscais, LGPD e troubleshooting.
-
-## Erros
-
-Reutilizar Error Handling 021. Códigos públicos só devem ser criados se houver boundary externo real. Como a fase 023 é inicialmente infraestrutura interna, não criar catálogo público excessivo.
-
-Erros internos devem distinguir ao menos:
+## Evidência oficial
 
 ```text
-invalid outbox contract
-cross-tenant violation
-payload/metadata size violation
-invalid claim
-concurrency/retryable database failure
+Issue                         = #103 = COMPLETED
+PR técnica                    = #105
+functional/runtime revision   = b585df5f9b544f7ed315d1fa3c081dda8c4d0a09
+Foundation CI (main)          = 32890000608
+Moventra CI (main)            = 32890000544 = success
+Release Gate / Staging        = 32890129781 = success
+Rollback Drill                = 32890282262 = success
+Production Promotion          = 32890504200 = success
+Production deployment URL     = moventra-arotbh5h6-alebru.vercel.app
+Stable Production alias       = moventra-tms.vercel.app
+Production state              = READY
+Production approval           = approved / alexoaraujo83
+prevent_self_review           = true
+required_reviewer_count       = 2
+artifact_sha256               = dbe15e5b394811e62e645aed1502159f8d1d9cd512c3f4de90c8c070b88cb9c6
+production evidence artifact  = production-deployment-b585df5f9b544f7ed315d1fa3c081dda8c4d0a09
+production evidence digest    = 09bfbdd7cdcccd75b615a2c33cc609f00761eda303741d23991fc5d108530e2e
+migration                     = 0015_outbox.sql
 ```
 
-Sem expor SQL, constraint interna, payload ou identificadores cross-tenant.
+O mesmo artefato imutável passou por Staging, rollback/restore e Production protegida. Revision identity e `/api/database-health` foram validados no deployment imutável e no alias estável.
 
-## Banco e migration
-
-Migration prevista:
+## Governança de fechamento
 
 ```text
-db/migrations/0015_outbox.sql
+PR de governança = #107
+merge            = d2e661cde2638d83b338920f49ac0e960da963e4
+Confluence       = Moventra TMS — Projeto Oficial, versão 17
 ```
 
-Validation prevista:
+A revision identity funcional permanece `b585df5f...`; o merge documental posterior não reabre o gate funcional.
 
-```text
-db/validation/0015_outbox_validation.sql
-```
+## Critérios de aceite finais
 
-Constraints mínimas:
+- [x] migration `0015_outbox.sql` aditiva e versionada;
+- [x] validation correspondente;
+- [x] modelo tenant-scoped com RLS e constraints;
+- [x] runtime least privilege atualizado;
+- [x] `OutboxService` e repository reutilizáveis;
+- [x] append na mesma transação da mutação/Audit;
+- [x] integração com Idempotência 022 sem evento duplicado em replay;
+- [x] claim concorrente seguro comprovado em PostgreSQL real;
+- [x] reclaim após expiração comprovado;
+- [x] evento published não é reclamado novamente;
+- [x] rollback transacional comprovado;
+- [x] nenhuma antecipação de broker na fase 023;
+- [x] nenhum scheduler/Jobs 025 antecipado;
+- [x] nenhuma DLQ administrativa 026 antecipada;
+- [x] observabilidade de baixa cardinalidade;
+- [x] testes unitários/arquiteturais/integração verdes;
+- [x] CI completo verde;
+- [x] Neon Staging/Main validados;
+- [x] Staging validado;
+- [x] rollback/restore comprovado;
+- [x] Production protegida aprovada e evidenciada;
+- [x] documentação, Issue #103 e Confluence sincronizados.
 
-```text
-PK id
-FK tenant_id → organization.tenants
-CHECK aggregate_type/event_type format
-CHECK schema_version > 0
-CHECK payload/metadata JSON object e size bounds
-CHECK attempt_count >= 0
-CHECK published/claim timestamps coerentes
-CHECK claim_token e claimed_at ambos NULL ou ambos NOT NULL
-```
+## Próxima etapa
 
-Índices mínimos:
+`024 — Mensageria = ACTIVE / DEFINED`
 
-```text
-pending eligibility por published_at/available_at/claimed_at
-lookup tenant/event id
-future retention por published_at/created_at
-```
+Documento: `docs/implementation/024-mensageria.md`  
+Issue: `#106`
 
-Evitar índice de payload JSON nesta fase sem query real que o justifique.
-
-## Casos de borda
-
-- transação de negócio falha após append → evento deve sumir com rollback;
-- append falha → transação de negócio deve falhar, salvo contrato explicitamente diferente no futuro;
-- replay idempotente → nenhum novo evento;
-- dois claimers simultâneos → lotes disjuntos;
-- claimer morre após claim → TTL permite reclaim futuro;
-- evento marcado published → não volta a pending automaticamente;
-- evento de Tenant A não pode ser lido/alterado sob Tenant B;
-- payload acima do limite deve falhar antes/na persistência;
-- event type desconhecido deve falhar antes da persistência;
-- clock skew de app não deve definir verdade operacional; timestamps persistidos preferencialmente no PostgreSQL.
-
-## Testes obrigatórios
-
-Unitários:
-
-- normalização/validação de aggregate/event type;
-- payload/metadata bounds;
-- append contract;
-- integração idempotency replay → zero append adicional;
-- observabilidade sem alta cardinalidade.
-
-Arquiteturais:
-
-- nenhum broker/provider importado no domínio;
-- nenhuma implementação de Mensageria 024;
-- nenhum scheduler/Jobs 025;
-- nenhuma DLQ 026;
-- append reutiliza transação compartilhada;
-- runtime sem DELETE/DDL/BYPASSRLS.
-
-PostgreSQL/integração:
-
-- migration em banco limpo;
-- rerun de migrations preserva histórico imutável;
-- append + mutação + Audit + Outbox commitam atomicamente;
-- rollback remove todos os efeitos;
-- replay idempotente não duplica evento;
-- cross-tenant RLS;
-- claim concorrente com `SKIP LOCKED` produz lotes disjuntos;
-- reclaim após expiração;
-- published event não é reclamado;
-- least privilege comprovado.
-
-Runtime/CI:
-
-- health/database-health preservados;
-- build imutável reproduzível;
-- Staging validado;
-- rollback/restore comprovado;
-- Production somente após gate humano explícito e aprovação externa efetiva;
-- evidências de Production registradas.
-
-## Critérios de aceite
-
-- [ ] migration `0015_outbox.sql` aditiva e backward-compatible;
-- [ ] validation correspondente;
-- [ ] modelo tenant-scoped com RLS e constraints;
-- [ ] runtime least privilege atualizado;
-- [ ] `OutboxService` e repository reutilizáveis;
-- [ ] append na mesma transação da mutação/Audit;
-- [ ] integração com Idempotência 022 sem evento duplicado em replay;
-- [ ] claim concorrente seguro comprovado em PostgreSQL real;
-- [ ] rollback transacional comprovado;
-- [ ] nenhuma antecipação de broker/Mensageria 024;
-- [ ] nenhuma antecipação de scheduler/Jobs 025;
-- [ ] nenhuma antecipação de DLQ 026;
-- [ ] observabilidade de baixa cardinalidade;
-- [ ] testes unitários/arquiteturais/integração verdes;
-- [ ] CI completo verde;
-- [ ] Neon Staging/Main validados;
-- [ ] Staging validado;
-- [ ] rollback/restore comprovado;
-- [ ] Production protegida aprovada e evidenciada;
-- [ ] documentação, Issue #103 e Confluence sincronizados.
-
-## Fora do escopo
-
-```text
-024 — Mensageria / broker adapters
-025 — Jobs / scheduler / dispatcher recorrente
-026 — DLQ
-Object Storage
-workers distribuídos completos
-exactly-once fim a fim
-reprocessamento manual completo
-UI administrativa de Outbox
-integrações específicas de domínios ainda inativos
-```
-
-## Próxima etapa após conclusão
-
-Somente depois da conclusão formal da 023 poderá ser ativada:
-
-`024 — Mensageria`
+A fase **025 — Jobs** e todas as posteriores permanecem `NOT ACTIVE` até a conclusão formal da 024.

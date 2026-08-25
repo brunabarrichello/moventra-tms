@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 022 remains materialized after conclusion while Outbox 023 is the active implementation phase', () => {
+test('phase 022 remains materialized after conclusion through Outbox 023 and Messaging 024', () => {
   for (const path of [
     'db/migrations/0014_idempotency.sql',
     'db/validation/0014_idempotency_validation.sql',
@@ -18,23 +18,27 @@ test('phase 022 remains materialized after conclusion while Outbox 023 is the ac
     'docs/implementation/023-outbox.md',
     'db/migrations/0015_outbox.sql',
     'src/modules/outbox/outbox-service.js',
+    'docs/implementation/024-mensageria.md',
+    'src/modules/messaging/message-envelope.js',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
   }
 
   assert.equal(existsSync(new URL('../../db/migrations/0016_messaging.sql', import.meta.url)), false);
-  assert.equal(existsSync(new URL('../../src/modules/messaging/', import.meta.url)), false);
+  assert.equal(existsSync(new URL('../../src/modules/jobs/', import.meta.url)), false);
 
   const idempotencyDoc = read('docs/implementation/022-idempotencia.md');
   assert.match(idempotencyDoc, /^# 022 — Idempotência/m);
   assert.match(idempotencyDoc, /## Estado\s+`CONCLUDED`/i);
-  assert.match(idempotencyDoc, /023 — Transactional Outbox = ACTIVE \/ DEFINED/i);
   assert.match(idempotencyDoc, /não promete exactly-once para efeitos externos/i);
 
   const outboxDoc = read('docs/implementation/023-outbox.md');
   assert.match(outboxDoc, /^# 023 — Transactional Outbox/m);
-  assert.match(outboxDoc, /## Estado\s+`ACTIVE \/ DEFINED`/i);
-  assert.match(outboxDoc, /024 — Mensageria.*NOT ACTIVE/is);
+  assert.match(outboxDoc, /## Estado\s+`CONCLUDED`/i);
+
+  const messagingDoc = read('docs/implementation/024-mensageria.md');
+  assert.match(messagingDoc, /^# 024 — Mensageria/m);
+  assert.match(messagingDoc, /## Estado\s+`ACTIVE \/ DEFINED`/i);
 });
 
 test('idempotency persistence has tenant uniqueness, RLS, expiry and no plaintext client key column', () => {

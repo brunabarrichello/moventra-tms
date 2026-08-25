@@ -47,6 +47,8 @@ jobs:
             "src/infrastructure/observability/metrics.js"
             "src/infrastructure/observability/tracing.js"
             "src/infrastructure/observability/http.js"
+            "src/infrastructure/messaging/rabbitmq/rabbitmq-config.js"
+            "src/infrastructure/messaging/rabbitmq/rabbitmq-adapter.js"
             "src/modules/organization/tenant/tenant-domain.js"
             "src/modules/organization/tenant/tenant-repository.js"
             "src/modules/organization/company/company-domain.js"
@@ -67,6 +69,16 @@ jobs:
             "src/modules/idempotency/fingerprint.js"
             "src/modules/idempotency/idempotency-repository.js"
             "src/modules/idempotency/idempotency-service.js"
+            "src/modules/outbox/outbox-contract.js"
+            "src/modules/outbox/outbox-repository.js"
+            "src/modules/outbox/outbox-service.js"
+            "src/modules/outbox/authorized-outbox.js"
+            "src/modules/outbox/outbox-observability.js"
+            "src/modules/messaging/message-envelope.js"
+            "src/modules/messaging/messaging-ports.js"
+            "src/modules/messaging/messaging-errors.js"
+            "src/modules/messaging/messaging-observability.js"
+            "src/modules/messaging/outbox-message-mapper.js"
             "api/health.js"
             "api/database-health.js"
             "tests/unit/observability-request-context.test.js"
@@ -78,20 +90,27 @@ jobs:
             "tests/unit/idempotency-repository.test.js"
             "tests/unit/idempotency-service.test.js"
             "tests/unit/authorized-tenant-idempotency.test.js"
+            "tests/unit/messaging-envelope.test.js"
+            "tests/unit/rabbitmq-messaging.test.js"
             "tests/architecture/observability-phase.test.js"
             "tests/architecture/idempotency-phase.test.js"
+            "tests/architecture/outbox-phase.test.js"
+            "tests/architecture/messaging-phase.test.js"
             "scripts/ci/lint.sh"
             "scripts/ci/test.sh"
             "scripts/ci/build.sh"
             "scripts/ci/build-vercel-output.mjs"
             "scripts/ci/runtime-access-contract.sh"
+            "scripts/ci/validate-rabbitmq-messaging.mjs"
             "scripts/db/migrate.mjs"
             "scripts/db/validate-security-pipeline.mjs"
             "scripts/db/validate-idempotency-concurrency.mjs"
+            "scripts/db/validate-outbox-concurrency.mjs"
             "scripts/release/classify-release-impact.sh"
             "db/runtime/runtime-access.sql"
             "db/runtime/runtime-access-validation.sql"
             "db/runtime/idempotency-runtime-access-validation.sql"
+            "db/runtime/outbox-runtime-access-validation.sql"
             "db/migrations/0001_foundation.sql"
             "db/migrations/0002_tenant.sql"
             "db/migrations/0003_company.sql"
@@ -101,6 +120,7 @@ jobs:
             "db/migrations/0012_configuration.sql"
             "db/migrations/0013_feature_flags.sql"
             "db/migrations/0014_idempotency.sql"
+            "db/migrations/0015_outbox.sql"
             "db/validation/0001_foundation_validation.sql"
             "db/validation/0002_tenant_validation.sql"
             "db/validation/0003_company_validation.sql"
@@ -110,6 +130,7 @@ jobs:
             "db/validation/0012_configuration_validation.sql"
             "db/validation/0013_feature_flags_validation.sql"
             "db/validation/0014_idempotency_validation.sql"
+            "db/validation/0015_outbox_validation.sql"
             ".github/workflows/release-gate.yml"
             ".github/workflows/rollback-drill.yml"
             ".github/workflows/production-promotion.yml"
@@ -128,6 +149,9 @@ jobs:
             "docs/implementation/020-observabilidade-base.md"
             "docs/implementation/021-error-handling.md"
             "docs/implementation/022-idempotencia.md"
+            "docs/implementation/023-outbox.md"
+            "docs/implementation/024-mensageria.md"
+            "docs/architecture/024-messaging-provider-decision.md"
           )
 
           for file in "${required_files[@]}"; do
@@ -238,6 +262,10 @@ jobs:
           node --input-type=module -e "await import('./src/modules/idempotency/fingerprint.js')"
           node --input-type=module -e "await import('./src/modules/idempotency/idempotency-repository.js')"
           node --input-type=module -e "await import('./src/modules/idempotency/idempotency-service.js')"
+          node --input-type=module -e "await import('./src/modules/outbox/outbox-service.js')"
+          node --input-type=module -e "await import('./src/modules/messaging/message-envelope.js')"
+          node --input-type=module -e "await import('./src/modules/messaging/messaging-ports.js')"
+          node --input-type=module -e "await import('./src/infrastructure/messaging/rabbitmq/rabbitmq-adapter.js')"
 
   database-contract:
     name: PostgreSQL migration contract
@@ -300,9 +328,51 @@ jobs:
       - name: Validate integrated Auth-RBAC-Scope-RLS-Audit pipeline
         run: node scripts/db/validate-security-pipeline.mjs
 
+  messaging-contract:
+    name: RabbitMQ messaging contract
+    needs: repository-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      rabbitmq:
+        image: rabbitmq:4.3.5-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: moventra_ci
+          RABBITMQ_DEFAULT_PASS: moventra-ci-only
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      MOVENTRA_ENV: ci
+      MESSAGING_PROVIDER: rabbitmq
+      MESSAGING_EXCHANGE: moventra.events.ci
+      MESSAGING_PREFETCH: 20
+      MESSAGING_PUBLISH_CONFIRM_TIMEOUT_MS: 5000
+      RABBITMQ_CI_USER: moventra_ci
+      RABBITMQ_CI_PASSWORD: moventra-ci-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Install locked runtime dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate real RabbitMQ publish, ack, retry and dead-letter contract
+        run: |
+          set -euo pipefail
+          export MESSAGING_RABBITMQ_URL="amqp://${RABBITMQ_CI_USER}:${RABBITMQ_CI_PASSWORD}@127.0.0.1:5672/"
+          node scripts/ci/validate-rabbitmq-messaging.mjs
+
   build:
     name: Build immutable artifact
-    needs: [lint, tests, security-baseline, runtime-dependencies, database-contract]
+    needs: [lint, tests, security-baseline, runtime-dependencies, database-contract, messaging-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -328,7 +398,7 @@ jobs:
 
   evidence:
     name: CI evidence
-    needs: [repository-contract, lint, tests, security-baseline, runtime-dependencies, database-contract, build]
+    needs: [repository-contract, lint, tests, security-baseline, runtime-dependencies, database-contract, messaging-contract, build]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -341,6 +411,7 @@ jobs:
           SECURITY_RESULT: ${{ needs.security-baseline.result }}
           RUNTIME_DEPS_RESULT: ${{ needs.runtime-dependencies.result }}
           DATABASE_RESULT: ${{ needs.database-contract.result }}
+          MESSAGING_RESULT: ${{ needs.messaging-contract.result }}
           BUILD_RESULT: ${{ needs.build.result }}
         run: |
           set -euo pipefail
@@ -360,10 +431,11 @@ jobs:
           security_baseline=${SECURITY_RESULT}
           runtime_dependencies=${RUNTIME_DEPS_RESULT}
           database_contract=${DATABASE_RESULT}
+          messaging_contract=${MESSAGING_RESULT}
           build=${BUILD_RESULT}
           EOF
 
-          for result in "$CONTRACT_RESULT" "$LINT_RESULT" "$TEST_RESULT" "$SECURITY_RESULT" "$RUNTIME_DEPS_RESULT" "$DATABASE_RESULT" "$BUILD_RESULT"; do
+          for result in "$CONTRACT_RESULT" "$LINT_RESULT" "$TEST_RESULT" "$SECURITY_RESULT" "$RUNTIME_DEPS_RESULT" "$DATABASE_RESULT" "$MESSAGING_RESULT" "$BUILD_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "::error::One or more CI controls failed."
               exit 1

@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 023 materializes Transactional Outbox without anticipating Messaging 024', () => {
+test('phase 023 remains materialized after conclusion while Messaging 024 is active', () => {
   for (const path of [
     'db/migrations/0015_outbox.sql',
     'db/validation/0015_outbox_validation.sql',
@@ -18,20 +18,27 @@ test('phase 023 materializes Transactional Outbox without anticipating Messaging
     'src/modules/outbox/outbox-observability.js',
     'scripts/db/validate-outbox-concurrency.mjs',
     'docs/implementation/023-outbox.md',
+    'docs/implementation/024-mensageria.md',
+    'src/modules/messaging/message-envelope.js',
+    'src/infrastructure/messaging/rabbitmq/rabbitmq-adapter.js',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
   }
 
   assert.equal(existsSync(new URL('../../db/migrations/0016_messaging.sql', import.meta.url)), false);
-  assert.equal(existsSync(new URL('../../src/modules/messaging/', import.meta.url)), false);
   assert.equal(existsSync(new URL('../../src/modules/jobs/', import.meta.url)), false);
   assert.equal(existsSync(new URL('../../src/modules/dlq/', import.meta.url)), false);
 
-  const doc = read('docs/implementation/023-outbox.md');
-  assert.match(doc, /^# 023 — Transactional Outbox/m);
-  assert.match(doc, /`ACTIVE \/ DEFINED`/);
-  assert.match(doc, /024 — Mensageria.*NOT ACTIVE/is);
-  assert.match(doc, /não promete exactly-once/i);
+  const outboxDoc = read('docs/implementation/023-outbox.md');
+  assert.match(outboxDoc, /^# 023 — Transactional Outbox/m);
+  assert.match(outboxDoc, /## Estado\s+`CONCLUDED`/i);
+  assert.match(outboxDoc, /024 — Mensageria = ACTIVE \/ DEFINED/i);
+  assert.match(outboxDoc, /não promete exactly-once/i);
+
+  const messagingDoc = read('docs/implementation/024-mensageria.md');
+  assert.match(messagingDoc, /^# 024 — Mensageria/m);
+  assert.match(messagingDoc, /## Estado\s+`ACTIVE \/ DEFINED`/i);
+  assert.match(messagingDoc, /025 — Jobs.*NOT ACTIVE/is);
 });
 
 test('outbox persistence is tenant-scoped, append-only in business facts and claim-safe', () => {
@@ -67,7 +74,7 @@ test('outbox append is explicitly bound to the authorized tenant transaction and
   assert.match(authorizedPipeline, /execute: \(\) => operation\(operationContext\)/);
 });
 
-test('outbox observability has controlled dimensions and no provider or high-cardinality labels', () => {
+test('outbox remains provider-neutral after Messaging 024 is introduced', () => {
   const observability = read('src/modules/outbox/outbox-observability.js');
   const source = [
     read('src/modules/outbox/outbox-contract.js'),
@@ -83,7 +90,7 @@ test('outbox observability has controlled dimensions and no provider or high-car
   assert.doesNotMatch(source, /setInterval|setTimeout\s*\(/);
 });
 
-test('CI database contract executes outbox runtime and concurrency validation', () => {
+test('CI database contract continues to execute outbox runtime and concurrency validation', () => {
   const runtimeContract = read('scripts/ci/runtime-access-contract.sh');
   assert.match(runtimeContract, /outbox-runtime-access-validation\.sql/);
   assert.match(runtimeContract, /validate-outbox-concurrency\.mjs/);

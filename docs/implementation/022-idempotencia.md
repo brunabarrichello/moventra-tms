@@ -4,7 +4,7 @@
 
 `CONCLUDED`
 
-A fase 022 foi implementada, validada em PostgreSQL real, promovida pela cadeia oficial de Staging → rollback/restore → Production protegida e concluída com evidência de runtime e banco. A fase 023 — Transactional Outbox é a próxima etapa oficial e passa a `ACTIVE / DEFINED`.
+A fase 022 foi implementada, validada em PostgreSQL real, promovida pela cadeia oficial de Staging → rollback/restore → Production protegida e concluída com evidência de runtime e banco. Desde então, a fase 023 — Transactional Outbox também foi concluída; a etapa oficial vigente é **024 — Mensageria = ACTIVE / DEFINED**.
 
 ## Objetivo concluído
 
@@ -31,7 +31,7 @@ stored result
 = mesma transação PostgreSQL / mesmo Tenant-RLS context
 ```
 
-Essa garantia evita duplicação de efeitos transacionais em retry. Ela não promete exactly-once para efeitos externos fora do PostgreSQL; essa lacuna é tratada a partir da fase 023 — Transactional Outbox.
+Essa garantia evita duplicação de efeitos transacionais em retry. Ela não promete exactly-once para efeitos externos fora do PostgreSQL; essa lacuna passou a ser coberta pelo Transactional Outbox 023 e pela Mensageria 024, sem alterar a responsabilidade da Idempotência.
 
 ## Implementação materializada
 
@@ -77,6 +77,7 @@ Error Handling 021
 Observabilidade 020
 Audit 017
 AuthorizedTenantOperationService
+Transactional Outbox 023
 ```
 
 ## Regras de negócio consolidadas
@@ -89,7 +90,8 @@ AuthorizedTenantOperationService
 - RLS bloqueia leitura/escrita cross-tenant;
 - concorrência é resolvida por constraint/transaction PostgreSQL, não por mutex local;
 - expiração é metadata de retenção; cleanup físico permanece reservado ao framework de Jobs 025;
-- runtime principal não possui `DELETE` ou DDL no schema/tabela de idempotência.
+- runtime principal não possui `DELETE` ou DDL no schema/tabela de idempotência;
+- após a 023, replay idempotente também não duplica o Outbox event gerado pela primeira execução efetiva.
 
 ## Segurança e LGPD
 
@@ -152,18 +154,20 @@ A migration `0014_idempotency.sql` foi aplicada em Neon Main sob o gate de Produ
 - [x] rollback/retry comprovados;
 - [x] runtime least privilege validado;
 - [x] observabilidade de baixa cardinalidade;
-- [x] nenhuma antecipação de Outbox/Mensageria/Jobs;
 - [x] CI completo verde;
 - [x] Neon Staging e Main validados;
 - [x] Staging validado;
 - [x] rollback/restore comprovado;
 - [x] Production protegida aprovada e evidenciada.
 
-## Próxima etapa
+## Continuidade atual
 
-`023 — Transactional Outbox = ACTIVE / DEFINED`
+```text
+022 — Idempotência = CONCLUDED
+023 — Transactional Outbox = CONCLUDED
+024 — Mensageria = ACTIVE / DEFINED
+025+ = NOT ACTIVE
+```
 
-Documento: `docs/implementation/023-outbox.md`  
-Issue: `#103`
-
-A fase 024 — Mensageria e todas as posteriores permanecem `NOT ACTIVE` até a conclusão formal da 023.
+Documento da etapa vigente: `docs/implementation/024-mensageria.md`  
+Issue: `#106`

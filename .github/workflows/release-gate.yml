@@ -91,6 +91,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install locked messaging smoke dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Resolve immutable artifact source
         id: source
         run: |
@@ -113,12 +121,14 @@ jobs:
       - name: Validate protected staging credentials
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MESSAGING_RABBITMQ_URL: ${{ secrets.MESSAGING_RABBITMQ_URL }}
         run: |
           set -euo pipefail
           test -n "$VERCEL_TOKEN" || { echo '::error::VERCEL_TOKEN is required'; exit 1; }
           test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
           test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
           test -n "$DATABASE_URL" || { echo '::error::DATABASE_URL is required in the protected GitHub staging environment'; exit 1; }
+          test -n "$MESSAGING_RABBITMQ_URL" || { echo '::error::MESSAGING_RABBITMQ_URL is required in the protected GitHub staging environment'; exit 1; }
 
       - name: Converge staging Vercel project
         id: vercel-project
@@ -219,6 +229,15 @@ jobs:
           bash scripts/release/smoke-database-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
           bash scripts/release/smoke-database-health.sh "$STAGING_URL" "$EXPECTED_SHA"
 
+      - name: Verify staging messaging readiness
+        env:
+          MOVENTRA_ENV: staging
+          MESSAGING_PROVIDER: rabbitmq
+          MESSAGING_RABBITMQ_URL: ${{ secrets.MESSAGING_RABBITMQ_URL }}
+          MESSAGING_PREFETCH: 1
+          MESSAGING_PUBLISH_CONFIRM_TIMEOUT_MS: 5000
+        run: node scripts/release/smoke-messaging.mjs
+
       - name: Record staging evidence
         env:
           COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
@@ -244,6 +263,7 @@ jobs:
           database_url_synced=true
           application_health=success
           database_health=success
+          messaging_readiness=success
           deployment_url=${DEPLOYMENT_URL}
           stable_url=${STAGING_URL}
           workflow_actor=${GITHUB_ACTOR}
