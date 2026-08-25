@@ -2,9 +2,9 @@
 
 ## Estado
 
-`ACTIVE / DEFINED`
+`CONCLUDED`
 
-A fase 019 é a única etapa funcional ativa após a conclusão da 018 — Configurações. A fase 020 e todas as posteriores permanecem inativas.
+A fase 019 foi concluída com implementação, validação PostgreSQL real, Staging, rollback/restore, aprovação humana externa de Production, promoção do artefato imutável, migration em Neon Main e evidência operacional. A fase 020 — Observabilidade Base está oficialmente `ACTIVE / DEFINED`.
 
 ## Objetivo
 
@@ -335,9 +335,9 @@ feature_flags.environment_policies
 
 ## Runtime PostgreSQL
 
-`db/runtime/runtime-access.sql` deverá ser atualizado preservando least privilege.
+`db/runtime/runtime-access.sql` foi atualizado preservando least privilege.
 
-Contrato esperado:
+Contrato comprovado:
 
 ```text
 schema feature_flags: USAGE, sem CREATE
@@ -448,7 +448,7 @@ feature_flag_rollout_bucket_total{flag,enabled}
 
 Logs estruturados devem incluir request/correlation IDs e provenance, sem PII ou secrets.
 
-A fase 020 — Observabilidade Base introduzirá a plataforma transversal de OpenTelemetry; a 019 deve apenas expor hooks/contratos compatíveis, sem antecipar a fase 020.
+A fase 020 — Observabilidade Base introduzirá a plataforma transversal de OpenTelemetry; a 019 expõe hooks/contratos compatíveis sem antecipar a implementação transversal.
 
 ## Concorrência e consistência
 
@@ -476,21 +476,21 @@ A fase 020 — Observabilidade Base introduzirá a plataforma transversal de Ope
 
 ## Migração e validação
 
-A implementação deverá introduzir:
+Implementado:
 
 ```text
 db/migrations/0013_feature_flags.sql
 db/validation/0013_feature_flags_validation.sql
 ```
 
-E atualizar:
+Atualizado:
 
 ```text
 db/runtime/runtime-access.sql
 .github/workflows/ci.yml
 ```
 
-Validações obrigatórias:
+Validações concluídas:
 
 - PostgreSQL 18 limpo;
 - runner de migrations e idempotência do histórico;
@@ -514,14 +514,41 @@ CI
 → Staging immutable artifact
 → rollback/restore
 → gate humano Production
-→ Neon Main / Production conforme estratégia segura
+→ Neon Main / Production
 → revision identity
 → health/database readiness
 → runtime observability
 → governança de fechamento
 ```
 
-Mudanças de banco devem ser backward-compatible com o artefato anterior durante rollout.
+Mudanças de banco permaneceram backward-compatible com o artefato anterior durante rollout.
+
+## Evidência final
+
+```text
+PR técnica                    = #93
+functional/runtime revision   = 1dd64edb27be2edb8d22187b1997a315952cff08
+Moventra CI                   = 32856005715 = success
+Release Gate                  = 32856127017 = success
+Rollback Drill                = 32856241092 = success
+Production Promotion          = 32856385783 = success
+Production deployment         = dpl_7ZMu3BuqtAFfRbPfVpmn2uUt5KcV = READY
+Production stable URL         = https://moventra-tms-alebru.vercel.app
+Production approval           = approved / approver alexoaraujo83
+prevent_self_review           = true
+can_admins_bypass             = false
+migration                     = 0013_feature_flags.sql
+migration SHA-256             = 2a22ee5ca00b0f3b7515d8a4f82ca37c3e0c7b4286c73348da7e91dde18ccb19
+Neon staging                  = br-rapid-math-au6j6xut
+Neon main                     = br-morning-glitter-au97suq4
+health                        = 200
+api/database-health           = 200
+Production runtime errors     = none in validated deployment window
+Production cross-tenant smoke = own=1 / cross-tenant=0
+Production smoke residue      = 0
+```
+
+O smoke administrativo de Production restaurou integralmente a configuração de membership PostgreSQL usada para a validação, preservando o grant original de `cloud_admin` e sem deixar principals, flags, rules ou Tenants sintéticos.
 
 ## Fora do escopo
 
@@ -537,25 +564,25 @@ Mudanças de banco devem ser backward-compatible com o artefato anterior durante
 
 ## Critérios de conclusão
 
-- catálogo global de flags materializado;
-- política global por ambiente materializada;
-- rules tenant-scoped para Tenant/Empresa/Filial/User/Plan materializadas;
-- percentage rollout determinístico em basis points;
-- precedência e provenance comprovadas;
-- Membership/FKs tenant-aware preservados;
-- RBAC + Organizational Scope + RLS + Audit integrados;
-- runtime least-privilege/NOBYPASSRLS preservado;
-- history append-only comprovado;
-- optimistic locking e concorrência testados;
-- cross-tenant read/write bloqueados em PostgreSQL real;
-- Feature Flag comprovadamente não substitui autorização;
-- CI completo verde;
-- Neon Staging/Main e smoke sem resíduos;
-- Staging + rollback/restore;
-- Production somente após gate humano explícito e aprovação externa efetiva;
-- revision identity, health, database readiness e observabilidade verificadas;
-- documentação, Issue e Confluence sincronizados.
+- [x] catálogo global de flags materializado;
+- [x] política global por ambiente materializada;
+- [x] rules tenant-scoped para Tenant/Empresa/Filial/User/Plan materializadas;
+- [x] percentage rollout determinístico em basis points;
+- [x] precedência e provenance comprovadas;
+- [x] Membership/FKs tenant-aware preservados;
+- [x] RBAC + Organizational Scope + RLS + Audit integrados;
+- [x] runtime least-privilege/NOBYPASSRLS preservado;
+- [x] history append-only comprovado;
+- [x] optimistic locking e concorrência testados;
+- [x] cross-tenant read/write bloqueados em PostgreSQL real;
+- [x] Feature Flag comprovadamente não substitui autorização;
+- [x] CI completo verde;
+- [x] Neon Staging/Main e smoke sem resíduos;
+- [x] Staging + rollback/restore;
+- [x] Production somente após gate humano explícito e aprovação externa efetiva;
+- [x] revision identity, health, database readiness e observabilidade verificadas;
+- [x] documentação e Issue sincronizados; Confluence é atualizado pela governança de fechamento.
 
 ## Próxima fase
 
-A fase 020 — Observabilidade Base permanece `NOT ACTIVE` até a conclusão formal da 019.
+A fase **020 — Observabilidade Base = ACTIVE / DEFINED**. A fase 021 e todas as posteriores permanecem `NOT ACTIVE` até a conclusão formal da 020.
