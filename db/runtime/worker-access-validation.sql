@@ -13,11 +13,45 @@
 \endif
 
 SELECT set_config('moventra.validation_worker_role', :'worker_role', false);
+SELECT set_config('moventra.validation_worker_app_role', :'worker_app_role', false);
 
 DO $acl$
 DECLARE
   worker_role TEXT := current_setting('moventra.validation_worker_role');
+  worker_app_role TEXT := current_setting('moventra.validation_worker_app_role');
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_roles
+     WHERE rolname = worker_role
+       AND NOT rolcanlogin
+       AND NOT rolsuper
+       AND NOT rolcreatedb
+       AND NOT rolcreaterole
+       AND NOT rolreplication
+       AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'worker authorization role must be NOLOGIN and NOBYPASSRLS without elevated attributes';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_roles
+     WHERE rolname = worker_app_role
+       AND rolcanlogin
+       AND NOT rolsuper
+       AND NOT rolcreatedb
+       AND NOT rolcreaterole
+       AND NOT rolreplication
+       AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'worker application role must be LOGIN and NOBYPASSRLS without elevated attributes';
+  END IF;
+
+  IF NOT pg_has_role(worker_app_role, worker_role, 'MEMBER') THEN
+    RAISE EXCEPTION 'worker application role must inherit the dedicated worker authorization role';
+  END IF;
+
   IF NOT has_schema_privilege(worker_role, 'jobs', 'USAGE')
      OR NOT has_schema_privilege(worker_role, 'outbox', 'USAGE') THEN
     RAISE EXCEPTION 'worker lacks required jobs/outbox schema USAGE';
