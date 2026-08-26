@@ -52,6 +52,14 @@ try {
       claimTtlMs: integerSetting('OUTBOX_DISPATCH_CLAIM_TTL_MS', 60_000, 1_000, 3_600_000),
     }),
   });
+
+  const idlePollMs = integerSetting('JOBS_IDLE_POLL_MS', 1_000, 100, 60_000);
+  const idlePollMaxMs = integerSetting(
+    'JOBS_IDLE_POLL_MAX_MS',
+    Math.max(5_000, idlePollMs),
+    idlePollMs,
+    300_000,
+  );
   const worker = new JobWorker({
     repository: jobRepository,
     registry,
@@ -59,7 +67,8 @@ try {
     concurrency: integerSetting('JOBS_CONCURRENCY', 5, 1, 100),
     leaseMs: integerSetting('JOBS_LEASE_MS', 60_000, 1_000, 3_600_000),
     heartbeatMs: integerSetting('JOBS_HEARTBEAT_MS', 20_000, 500, 3_599_999),
-    idlePollMs: integerSetting('JOBS_IDLE_POLL_MS', 1_000, 100, 60_000),
+    idlePollMs,
+    idlePollMaxMs,
     handlerTimeoutMs: integerSetting('JOBS_HANDLER_TIMEOUT_MS', 30_000, 250, 3_600_000),
     retryBaseMs: integerSetting('JOBS_RETRY_BASE_MS', 1_000, 100, 3_600_000),
     retryMaxMs: integerSetting('JOBS_RETRY_MAX_MS', 300_000, 100, 86_400_000),
@@ -69,6 +78,8 @@ try {
     event: 'jobs.worker.started',
     databaseRole: principal.roleName,
     handlers: registry.listTypes(),
+    idlePollMs,
+    idlePollMaxMs,
   });
 
   await worker.runForever({ signal: shutdownController.signal });

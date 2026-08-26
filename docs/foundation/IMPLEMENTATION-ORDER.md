@@ -1,173 +1,106 @@
 # Continuidade da Fundação — Linha Oficial de Implantação
 
-A linha oficial do Moventra TMS preserva a sequência canônica de implantação. Neste checkpoint, a fundação e segurança 001–017, os hardenings P0/P1 e as fases 018–023 estão concluídos; a fase 024 — Mensageria é a única etapa funcional ativa.
+Este documento é a **linha canônica de implantação do Moventra TMS**. Estado operacional e estado de artefatos em source control são tratados separadamente para impedir que código preparado seja confundido com fase ativada ou promovida.
 
-Sequência atual:
+## Sequência canônica
 
-**Governança → Arquitetura → Ambientes → CI/CD → Secrets → Banco base → Convenções → Tenant → Empresa → Filial → Usuários → Memberships → Auth → RBAC → Escopo Organizacional → RLS/Defesa adicional → Auditoria → Configurações → Feature Flags → Observabilidade → Error Handling → Idempotência → Outbox → Mensageria → Jobs → DLQ → Object Storage → demais domínios TMS**
+**Governança → Arquitetura → Ambientes → CI/CD → Secrets → Banco base → Convenções → Tenant → Empresa → Filial → Usuários → Memberships → Auth → RBAC → Escopo Organizacional → RLS → Auditoria → Configurações → Feature Flags → Observabilidade → Error Handling → Idempotência → Transactional Outbox → Mensageria → Jobs → DLQ → Object Storage → demais domínios TMS**
 
 ## Semântica de estado
 
-- **DEFINED** — arquitetura, responsabilidade e critérios documentados;
-- **ACTIVE** — etapa oficialmente autorizada para execução;
-- **PREPARED** — artefato técnico existe, mas a etapa ainda não está concluída;
-- **IMPLEMENTED** — código ou infraestrutura existem fisicamente;
-- **EVIDENCED** — execução real foi observada e validada;
-- **CONCLUDED** — implementação, validação, evidência e governança do gate foram aprovadas.
+- **DEFINED** — arquitetura, responsabilidades e critérios documentados;
+- **ACTIVE** — fase autorizada para execução;
+- **PREPARED** — artefatos podem existir, porém a fase não está liberada para promoção operacional;
+- **IMPLEMENTED** — código/infraestrutura materializados;
+- **EVIDENCED** — execução real observada e validada;
+- **CONCLUDED** — implementação, validação, evidências e governança aprovadas;
+- **FROZEN** — nenhuma progressão, promoção ou migration adicional até fechamento do gate indicado;
+- **NOT ACTIVE** — fase ainda não autorizada.
 
-## Estado canônico
+## Estado canônico — baseline 025 pós-auditoria
 
 | Etapa | Estado oficial | Evidência / decisão vigente |
 |---|---|---|
 | 001 — Governança | **CONCLUDED** | governança e processo versionados |
 | 002 — Arquitetura Base | **CONCLUDED** | monólito modular vigente |
 | 003 — Ambientes | **CONCLUDED** | ambientes segregados |
-| 004 — CI/CD | **CONCLUDED** | build-once, immutable artifact, staging, rollback/restore e Production protegida |
+| 004 — CI/CD | **CONCLUDED** | pipeline, artifact/release gates e proteção de Production |
 | 005 — Secrets Management | **CONCLUDED** | stores segregados e least privilege |
-| 006 — Banco Base | **CONCLUDED** | PostgreSQL/Neon 18.6 e migration framework |
+| 006 — Banco Base | **CONCLUDED** | Neon PostgreSQL 18.6 + migration framework |
 | 007 — Convenções de Dados | **CONCLUDED** | contrato canônico e guardrails |
 | 008 — Tenant | **CONCLUDED** | raiz SaaS materializada |
 | 009 — Empresa | **CONCLUDED** | organização tenant-aware materializada |
 | 010 — Filial | **CONCLUDED** | unidade tenant/company-aware materializada |
 | 011 — Usuários | **CONCLUDED** | identidade global/provider-agnostic |
-| 012 — Memberships | **CONCLUDED** | vínculo User ↔ Tenant materializado |
-| 013 — Auth | **CONCLUDED** | ExternalIdentity provider-agnostic e resolução de identidade |
-| 014 — RBAC | **CONCLUDED** | permissions globais, roles/grants tenant-scoped e deny-by-default |
-| 015 — Escopo Organizacional | **CONCLUDED** | scopes Tenant/Empresa/Filial e assignments tenant-aware |
-| 016 — RLS / Defesa adicional | **CONCLUDED** | contexto transaction-local e RLS tenant-aware |
-| 017 — Auditoria Central | **CONCLUDED** | audit trail append-only, tenant-scoped e redigido |
-| 018 — Configurações | **CONCLUDED** | catálogo tipado + overrides Tenant/Empresa/Filial + histórico + RLS/RBAC/Audit evidenciados em Production |
-| 019 — Feature Flags | **CONCLUDED** | rollout determinístico e tenant-aware evidenciado em Production, sem substituir autorização |
-| 020 — Observabilidade Base | **CONCLUDED** | OpenTelemetry vendor-neutral, logs estruturados, traces, métricas, correlation IDs, cardinalidade controlada e fail-safe evidenciados em Production |
-| 021 — Error Handling | **CONCLUDED** | erros tipados, códigos estáveis, Problem Details, sanitização, anti-enumeração e retry classification evidenciados em Production |
-| 022 — Idempotência | **CONCLUDED** | chave/fingerprint/stored result tenant-aware, transação PostgreSQL, RLS, concorrência e replay evidenciados em Production |
-| 023 — Transactional Outbox | **CONCLUDED** | estado de negócio + Audit + outbox event na mesma transação, RLS, claim concorrente e replay idempotente evidenciados em Production |
-| 024 — Mensageria | **ACTIVE / DEFINED** | RabbitMQ/serviço equivalente atrás de portas provider-neutral; at-least-once, confirms e ack/nack |
-| 025+ | **NOT ACTIVE** | preservar ordem oficial |
+| 012 — Memberships | **CONCLUDED** | vínculo User ↔ Tenant |
+| 013 — Auth | **CONCLUDED** | identidade externa e boundary de autenticação |
+| 014 — RBAC | **CONCLUDED** | permissions + roles/grants tenant-scoped |
+| 015 — Escopo Organizacional | **CONCLUDED** | Tenant/Empresa/Filial |
+| 016 — RLS / Defesa adicional | **CONCLUDED** | contexto transacional + RLS tenant-aware |
+| 017 — Auditoria Central | **CONCLUDED** | audit trail append-only/minimizado |
+| 018 — Configurações | **CONCLUDED** | catálogo tipado + overrides hierárquicos |
+| 019 — Feature Flags | **CONCLUDED** | targeting/rollout tenant-aware |
+| 020 — Observabilidade Base | **CONCLUDED** | OpenTelemetry + logs/traces/métricas |
+| 021 — Error Handling | **CONCLUDED** | erros tipados + Problem Details |
+| 022 — Idempotência | **CONCLUDED** | claim/fingerprint/result tenant-aware |
+| 023 — Transactional Outbox | **CONCLUDED** | intenção de publicação atômica |
+| 024 — Mensageria | **CONCLUDED** | RabbitMQ atrás de portas provider-neutral, at-least-once, confirms e ack/nack |
+| 025 — Jobs / Outbox Dispatcher | **EVIDENCED / CONCLUDED** | Jobs duráveis PostgreSQL + Worker Railway + dispatcher Outbox |
+| 026 — DLQ | **PREPARED / FROZEN / NOT RELEASED** | artefatos preparatórios entraram em source control antes do gate pós-auditoria; não promover nem aplicar migration 0017 até fechamento das correções 1–14 |
+| 027+ | **NOT ACTIVE** | preservar a ordem oficial |
+
+> **Regra de precedência:** o estado operacional acima prevalece sobre a mera existência de arquivo, migration ou código em `main`. Artefato preparado não autoriza release.
 
 ## Gates macro
 
 ```text
 G1 — Foundation Ready = APPROVED
-G2 — Security Ready = APPROVED / REVALIDATED AFTER P0 + P1
+G2 — Security Ready   = APPROVED / REVALIDATED AFTER P0 + P1
+G3+                   = NOT REACHED
 ```
 
-G2 permanece aprovado. A fase 024 deve reutilizar os contratos consolidados de Auth, Membership, RBAC, Organizational Scope, RLS, Audit, Observability, Error Handling, Idempotência e Transactional Outbox. Mensageria não substitui autorização, não altera a origem confiável do Tenant e não cria exactly-once fim a fim.
-
-## Revisões de segurança pós-G2
+## Baseline 025 — identidade e runtime
 
 ```text
-P0 runtime least privilege revision = 8c17e8c2c101c6e5c3bda3c5870e86a9136d43a8
-P1 functional/runtime revision      = 0a0ec943cc249e635d94267f386bb638228e11f7
-P1 Production deployment            = dpl_3fJQRBCn7WKNtRwsKdVo7nsXmZbY
-P1 docs-only proof revision         = 4d96525ef825eda49fdb7c2199d3e5cc4e96102c
+025 functional revision          = d6fcf32e56d812cc8df90fc9a4ef2191c18a4173
+025 conclusion/docs revision     = d110360473f011ab2c586ad32006278063281f55
+025 post-audit hardening revision= 3d0ac7864d784e9bd74046cd995fab5ca6321b15
+finding MOV-P1-OBS-001           = RESOLVED / PRODUCTION VALIDATED
+worker runtime                   = Railway / moventra-worker-production
+worker entrypoint                = node src/worker.js
+system handler                   = system.outbox_dispatch
+messaging                        = RabbitMQ / AMQP 0-9-1 / TLS em staging+production
+serviceVersion precedence        = MOVENTRA_RELEASE_SHA → APP_VERSION → VERCEL_GIT_COMMIT_SHA → development
 ```
 
-## Fase 020 — revisão funcional e release
+A revisão funcional original da 025 continua histórica. A revisão `3d0ac786...` é hardening pós-auditoria e corrige a identidade observável do Worker sem alterar o contrato funcional de Jobs/Outbox.
+
+## Banco — baseline operacional de Production
+
+Provider: **Neon PostgreSQL 18.6**.
 
 ```text
-Issue                         = #95
-PR técnica                    = #96
-functional/runtime revision   = 256e87991d73cea1dd4a385488708409cb22b0b2
-Production Promotion          = 32876872400 = success
-Production deployment         = dpl_2poo2Y8TnDaie3MM4NA2KzbXwBMu = READY
-Production approval           = approved / alexoaraujo83
-prevent_self_review           = true
+0001_foundation.sql
+0002_tenant.sql
+0003_company.sql
+0004_branch.sql
+0005_user.sql
+0006_membership.sql
+0007_external_identity.sql
+0008_rbac.sql
+0009_organizational_scope.sql
+0010_rls.sql
+0011_audit.sql
+0012_configuration.sql
+0013_feature_flags.sql
+0014_idempotency.sql
+0015_outbox.sql
+0016_jobs.sql
 ```
 
-## Fase 021 — revisão funcional e release
+A migration `0017_dlq.sql` pode existir em source control como artefato **PREPARED**, porém **não faz parte da baseline operacional 025 e não deve ser aplicada em Production antes da liberação formal da 026**.
 
-```text
-Issue                         = #98
-PR técnica                    = #99
-functional/runtime revision   = e23cff77cd1af4b590fd3bf9ceac98e1cca4e5dc
-source CI run                 = 32879964993 = success
-Release Gate / Staging        = 32880111232 = success
-Rollback Drill                = 32880277853 = success
-Production Promotion          = 32880504603 = success
-Production deployment         = dpl_8g1qdBw99RyZePkKJqm8CCCjGyJj = READY
-Production approval           = approved / alexoaraujo83
-prevent_self_review           = true
-```
-
-## Fase 022 — revisão funcional e release
-
-```text
-Issue                         = #101
-PR técnica                    = #102
-functional/runtime revision   = 028c9844005ced58806201bce9edce37b4ba2a01
-Foundation CI (PR)            = 32884603521 = success
-Moventra CI (PR)              = 32884603500 = success
-source CI run                 = 32885005759 = success
-Release Gate / Staging        = 32885144772 = success
-Rollback Drill                = 32885320734 = success
-Production Promotion          = 32885547785 = success
-Production deployment         = dpl_8cVxgkFEaaQHh5spQiomrPgt14aK = READY
-Production deployment URL     = moventra-31craqkfb-alebru.vercel.app
-Production approval           = approved / alexoaraujo83
-prevent_self_review           = true
-required_reviewer_count       = 2
-artifact_sha256               = 495b6fc6cd29a558330bcc43bd4d8840cd9f4bd119728ca0850572ff94e3cbc8
-production evidence artifact  = production-deployment-028c9844005ced58806201bce9edce37b4ba2a01
-production evidence digest    = 497ed0c5b8904182c3f1b5d70a7f5a0ffd07b7603934d95b4819643e5172aeaa
-```
-
-## Fase 023 — revisão funcional e release
-
-```text
-Issue                         = #103
-PR técnica                    = #105
-functional/runtime revision   = b585df5f9b544f7ed315d1fa3c081dda8c4d0a09
-Foundation CI (main)          = 32890000608
-source CI run                 = 32890000544 = success
-Release Gate / Staging        = 32890129781 = success
-Rollback Drill                = 32890282262 = success
-Production Promotion          = 32890504200 = success
-Production deployment URL     = moventra-arotbh5h6-alebru.vercel.app
-Stable Production alias       = moventra-tms.vercel.app
-Production approval           = approved / alexoaraujo83
-prevent_self_review           = true
-required_reviewer_count       = 2
-artifact_sha256               = dbe15e5b394811e62e645aed1502159f8d1d9cd512c3f4de90c8c070b88cb9c6
-production evidence artifact  = production-deployment-b585df5f9b544f7ed315d1fa3c081dda8c4d0a09
-production evidence digest    = 09bfbdd7cdcccd75b615a2c33cc609f00761eda303741d23991fc5d108530e2e
-migration                     = 0015_outbox.sql
-```
-
-A revisão 023 passou pela cadeia completa build-once → Staging → rollback/restore → Production protegida. A aprovação efetiva foi externa ao ator do workflow. Revision identity e database readiness passaram no deployment imutável e no alias estável. O `outbox.events` permanece provider-neutral e a publicação externa não ocorre dentro da transação PostgreSQL.
-
-## Banco — estado canônico após 023
-
-Provider: Neon PostgreSQL 18.6.
-
-```text
-0001_foundation.sql              = present
-0002_tenant.sql                  = present
-0003_company.sql                 = present
-0004_branch.sql                  = present
-0005_user.sql                    = present
-0006_membership.sql              = present
-0007_external_identity.sql       = present
-0008_rbac.sql                    = present
-0009_organizational_scope.sql    = present
-0010_rls.sql                     = present
-0011_audit.sql                   = present
-0012_configuration.sql           = present
-0013_feature_flags.sql           = present
-0014_idempotency.sql             = present
-0015_outbox.sql                  = present
-```
-
-Neon:
-
-```text
-staging = br-rapid-math-au6j6xut
-main    = br-morning-glitter-au97suq4
-```
-
-`idempotency.records` e `outbox.events` são tenant-scoped e protegidos por RLS. O runtime segue non-owner/NOBYPASSRLS. Para Outbox, o runtime possui somente os privilégios necessários a leitura, append e atualização das colunas operacionais de claim/publicação, sem `DELETE` ou DDL.
-
-## Boundary consolidado
+## Boundary consolidado até 025
 
 ```text
 User = identidade global
@@ -178,26 +111,46 @@ Organizational Scope = Tenant / Company / Branch
 RLS = defesa adicional baseada em contexto transacional autorizado
 Audit Trail = tenant-scoped, append-only, minimizado e redigido
 Configuration = catálogo tipado + overrides hierárquicos
-Feature Flags = targeting tenant-aware com coorte determinística
+Feature Flags = targeting tenant-aware + coorte determinística
 Observability = OpenTelemetry + structured logging + tracing + metrics
 Error Handling = taxonomia tipada + códigos estáveis + Problem Details
-Idempotency = claim/fingerprint/stored result transacional e tenant-aware
-Transactional Outbox = registro atômico da intenção de publicação, sem broker específico
-Messaging = porta provider-neutral para broker, entrega at-least-once, confirms e ack/nack
+Idempotency = claim/fingerprint/stored result transacional
+Transactional Outbox = intenção de publicação atômica
+Messaging = provider-neutral + RabbitMQ adapter + at-least-once
+Jobs = filas duráveis em PostgreSQL + leases/heartbeat/retry + handler registry
+Outbox Dispatcher = job de sistema dedicado no Worker Railway
 ```
 
-## Regras específicas da fase 024
+## Gate de reconciliação pós-auditoria antes da 026
 
-A implementação de referência será RabbitMQ/AMQP 0-9-1, isolada atrás de ports internos. Domínios não podem importar SDK/provider. Publisher confirms, mensagens persistentes, manual ack/nack, prefetch, envelope versionado, retry classification e observabilidade de baixa cardinalidade são obrigatórios.
+A fase 026 não pode avançar operacionalmente até os itens abaixo estarem concluídos/evidenciados:
 
-A fase 025 — Jobs permanece fora do escopo: não criar scheduler, loop recorrente de dispatcher ou framework central de jobs. A fase 026 — DLQ permanece fora do escopo administrativo: topology técnica de dead-letter pode ser suportada, mas reprocessamento, UI e governança operacional pertencem à 026.
+1. Revision Identity do Worker;
+2. `IMPLEMENTATION-ORDER.md`;
+3. `README.md`;
+4. Confluence oficial;
+5. `.env.example`;
+6. resolução da PR #109;
+7. CI completo;
+8. smoke real em Production;
+9. dependency vulnerability gate;
+10. SAST inicial;
+11. revisão de polling/idle do Worker;
+12. ADR de postura de rede Neon;
+13. saneamento/rotulagem do legado Atlassian `MP-*`;
+14. decisão de materialização Jira `MVT`.
 
-A conclusão `EVIDENCED / CONCLUDED` da 024 exige broker RabbitMQ/serviço equivalente real, segregado por ambiente, acessível por Staging e Production com TLS e credenciais de menor privilégio. Broker efêmero é aceitável apenas para CI.
+Durante este gate ficam proibidos:
+
+- migration `0017_dlq.sql` em Production;
+- promoção de runtime 026;
+- alteração do estado operacional da 026 para `EVIDENCED`/`CONCLUDED`;
+- início da fase 027.
 
 ## Regra de revision identity
 
-A revisão funcional/runtime que conclui uma fase é registrada separadamente de revisões exclusivamente documentais. Commits documentais posteriores não reabrem o gate funcional nem exigem nova promoção de aplicação Production.
+Revisão funcional/runtime é registrada separadamente de revisões exclusivamente documentais. Commits documentais posteriores não reabrem gates funcionais. Para Worker Railway, promoção de uma nova revisão exige SHA explicitamente selecionado, build fail-closed e comprovação do mesmo SHA em `serviceVersion`.
 
-## Próxima transição oficial
+## Próxima transição permitida
 
-A fase **023 — Transactional Outbox = CONCLUDED**. A fase **024 — Mensageria = ACTIVE / DEFINED**, conforme `docs/implementation/024-mensageria.md` e Issue #106. A fase 025 — Jobs e todas as posteriores permanecem inativas até a conclusão formal da 024.
+A baseline operacional vigente permanece **001–025 CONCLUDED**. A **026 — DLQ** está **PREPARED / FROZEN / NOT RELEASED** até fechamento formal do gate pós-auditoria 1–14. Somente então poderá retornar a `ACTIVE` e seguir os release gates próprios da fase.

@@ -12,6 +12,7 @@ export class JobWorker {
     leaseMs = 60000,
     heartbeatMs = 20000,
     idlePollMs = 1000,
+    idlePollMaxMs = 5000,
     handlerTimeoutMs = 30000,
     retryBaseMs = 1000,
     retryMaxMs = 300000,
@@ -30,6 +31,7 @@ export class JobWorker {
     this.leaseMs = boundedInteger(leaseMs, 1000, 3600000, 'leaseMs');
     this.heartbeatMs = boundedInteger(heartbeatMs, 500, Math.max(500, this.leaseMs - 1), 'heartbeatMs');
     this.idlePollMs = boundedInteger(idlePollMs, 100, 60000, 'idlePollMs');
+    this.idlePollMaxMs = boundedInteger(idlePollMaxMs, this.idlePollMs, 300000, 'idlePollMaxMs');
     this.handlerTimeoutMs = boundedInteger(handlerTimeoutMs, 250, 3600000, 'handlerTimeoutMs');
     this.retryBaseMs = boundedInteger(retryBaseMs, 100, 3600000, 'retryBaseMs');
     this.retryMaxMs = boundedInteger(retryMaxMs, this.retryBaseMs, 86400000, 'retryMaxMs');
@@ -71,6 +73,8 @@ export class JobWorker {
   }
 
   async runForever({ signal } = {}) {
+    let idleDelayMs = this.idlePollMs;
+
     while (true) {
       if (signal?.aborted) {
         return;
@@ -88,13 +92,21 @@ export class JobWorker {
 
       if (result.claimed === 0) {
         try {
-          await sleep(this.idlePollMs, signal);
+          await sleep(idleDelayMs, signal);
         } catch (error) {
           if (signal?.aborted) {
             return;
           }
           throw error;
         }
+        idleDelayMs = calculateIdlePollDelay({
+          currentMs: idleDelayMs,
+          baseMs: this.idlePollMs,
+          maxMs: this.idlePollMaxMs,
+        });
+      } else {
+        // Any real work restores the low-latency polling interval immediately.
+        idleDelayMs = this.idlePollMs;
       }
     }
   }
@@ -193,6 +205,13 @@ export class JobWorker {
       delayMs,
     });
   }
+}
+
+export function calculateIdlePollDelay({ currentMs, baseMs, maxMs }) {
+  const current = boundedInteger(currentMs, 1, 300000, 'currentMs');
+  const base = boundedInteger(baseMs, 1, 300000, 'baseMs');
+  const maximum = boundedInteger(maxMs, base, 300000, 'maxMs');
+  return Math.min(maximum, Math.max(base, current * 2));
 }
 
 function sleep(milliseconds, signal) {
