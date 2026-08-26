@@ -44,7 +44,8 @@ test('phase 022 remains materialized after conclusion through Outbox 023, Messag
 
   const jobsDoc = read('docs/implementation/025-jobs.md');
   assert.match(jobsDoc, /^# 025 — Jobs/m);
-  assert.match(jobsDoc, /`ACTIVE \/ IMPLEMENTED \/ AWAITING CI\+RELEASE EVIDENCE`/i);
+  assert.match(jobsDoc, /`EVIDENCED \/ CONCLUDED`/i);
+  assert.match(jobsDoc, /026 — DLQ.*NOT ACTIVE/is);
 });
 
 test('idempotency persistence has tenant uniqueness, RLS, expiry and no plaintext client key column', () => {
