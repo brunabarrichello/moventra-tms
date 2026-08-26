@@ -70,3 +70,55 @@ test('outbox dispatcher leaves event recoverable when worker aborts during broke
   await assert.rejects(() => handler({ signal: controller.signal }), /dispatcher timed out/);
   assert.equal(marked, false);
 });
+
+test('outbox dispatcher exponentially backs off consecutive empty runs and resets after work', async () => {
+  const batches = [[], [], [EVENT], []];
+  const handler = createOutboxDispatcherHandler({
+    outboxService: {
+      async claimBatch() {
+        return {
+          claimToken: '01990250-0000-7000-8000-000000000040',
+          events: batches.shift() ?? [],
+        };
+      },
+      async markPublished() {},
+    },
+    publisher: {
+      async publish({ envelope }) {
+        return { messageId: envelope.messageId, confirmed: true };
+      },
+    },
+    idleBackoffBaseMs: 1000,
+    idleBackoffMaxMs: 10000,
+  });
+
+  const firstEmpty = await handler();
+  const secondEmpty = await handler();
+  const withWork = await handler();
+  const afterReset = await handler();
+
+  assert.equal(firstEmpty.nextRunDelayMs, 1000);
+  assert.equal(secondEmpty.nextRunDelayMs, 2000);
+  assert.equal(withWork.claimed, 1);
+  assert.equal(withWork.nextRunDelayMs, undefined);
+  assert.equal(afterReset.nextRunDelayMs, 1000);
+});
+
+test('outbox dispatcher caps idle delay at configured maximum', async () => {
+  const handler = createOutboxDispatcherHandler({
+    outboxService: {
+      async claimBatch() { return { claimToken: '01990250-0000-7000-8000-000000000040', events: [] }; },
+      async markPublished() {},
+    },
+    publisher: {
+      async publish() { throw new Error('not expected'); },
+    },
+    idleBackoffBaseMs: 1000,
+    idleBackoffMaxMs: 2500,
+  });
+
+  assert.equal((await handler()).nextRunDelayMs, 1000);
+  assert.equal((await handler()).nextRunDelayMs, 2000);
+  assert.equal((await handler()).nextRunDelayMs, 2500);
+  assert.equal((await handler()).nextRunDelayMs, 2500);
+});
