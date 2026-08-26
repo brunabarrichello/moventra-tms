@@ -37,7 +37,7 @@ test('phase 023 remains materialized after conclusion while Jobs 025 consumes it
 
   const jobsDoc = read('docs/implementation/025-jobs.md');
   assert.match(jobsDoc, /^# 025 — Jobs/m);
-  assert.match(jobsDoc, /`ACTIVE \/ DEFINED`/i);
+  assert.match(jobsDoc, /`ACTIVE \/ IMPLEMENTED \/ AWAITING CI\+RELEASE EVIDENCE`/i);
   assert.match(jobsDoc, /system\.outbox_dispatch/);
 });
 
