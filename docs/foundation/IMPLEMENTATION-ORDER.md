@@ -1,6 +1,6 @@
 # Continuidade da Fundação — Linha Oficial de Implantação
 
-Este documento é a **linha canônica de implantação do Moventra TMS**. Estado operacional e estado de artefatos em source control são tratados separadamente para impedir que código preparado seja confundido com fase ativada ou promovida.
+Este documento é a **linha canônica de implantação do Moventra TMS**. Estado operacional e estado de artefatos em source control são tratados separadamente para impedir que código implementado seja confundido com promoção ou conclusão de fase.
 
 ## Sequência canônica
 
@@ -10,14 +10,14 @@ Este documento é a **linha canônica de implantação do Moventra TMS**. Estado
 
 - **DEFINED** — arquitetura, responsabilidades e critérios documentados;
 - **ACTIVE** — fase autorizada para execução;
-- **PREPARED** — artefatos podem existir, porém a fase não está liberada para promoção operacional;
+- **PREPARED** — artefatos podem existir, porém a fase ainda não foi liberada;
 - **IMPLEMENTED** — código/infraestrutura materializados;
 - **EVIDENCED** — execução real observada e validada;
 - **CONCLUDED** — implementação, validação, evidências e governança aprovadas;
-- **FROZEN** — nenhuma progressão, promoção ou migration adicional até fechamento do gate indicado;
+- **FROZEN** — nenhuma progressão/promoção até fechamento do gate indicado;
 - **NOT ACTIVE** — fase ainda não autorizada.
 
-## Estado canônico — baseline 025 pós-auditoria
+## Estado canônico vigente
 
 | Etapa | Estado oficial | Evidência / decisão vigente |
 |---|---|---|
@@ -46,10 +46,24 @@ Este documento é a **linha canônica de implantação do Moventra TMS**. Estado
 | 023 — Transactional Outbox | **CONCLUDED** | intenção de publicação atômica |
 | 024 — Mensageria | **CONCLUDED** | RabbitMQ atrás de portas provider-neutral, at-least-once, confirms e ack/nack |
 | 025 — Jobs / Outbox Dispatcher | **EVIDENCED / CONCLUDED** | Jobs duráveis PostgreSQL + Worker Railway + dispatcher Outbox |
-| 026 — DLQ | **PREPARED / FROZEN / NOT RELEASED** | artefatos preparatórios entraram em source control antes do gate pós-auditoria; não promover nem aplicar migration 0017 até fechamento das correções 1–14 |
+| 026 — DLQ | **ACTIVE / IMPLEMENTED / AWAITING RELEASE EVIDENCE** | gate pós-auditoria 1–14 concluído; artefatos técnicos já materializados; release próprio ainda pendente |
 | 027+ | **NOT ACTIVE** | preservar a ordem oficial |
 
-> **Regra de precedência:** o estado operacional acima prevalece sobre a mera existência de arquivo, migration ou código em `main`. Artefato preparado não autoriza release.
+## Fechamento da reconciliação pós-auditoria 025
+
+```text
+Gate 1–14                  = CONCLUDED
+PR de reconciliação        = #118
+main revision reconciliada = b3808c9e3ca3c6896e9ea32bcd96bbf7a5e15ceb
+Foundation CI              = 32935498433 SUCCESS
+Moventra CI                = 32935498446 SUCCESS
+Jobs Contract              = 32935498527 SUCCESS
+Security CI                = 32935498444 SUCCESS
+Production DB max migration= 0016
+Production has 0017        = false
+```
+
+O histórico completo e a matriz dos 14 itens estão em `docs/governance/025-POST-AUDIT-CORRECTIONS.md`.
 
 ## Gates macro
 
@@ -59,25 +73,26 @@ G2 — Security Ready   = APPROVED / REVALIDATED AFTER P0 + P1
 G3+                   = NOT REACHED
 ```
 
-## Baseline 025 — identidade e runtime
+## Baseline 025 — identidade e runtime validado
 
 ```text
-025 functional revision          = d6fcf32e56d812cc8df90fc9a4ef2191c18a4173
-025 conclusion/docs revision     = d110360473f011ab2c586ad32006278063281f55
-025 post-audit hardening revision= 3d0ac7864d784e9bd74046cd995fab5ca6321b15
-finding MOV-P1-OBS-001           = RESOLVED / PRODUCTION VALIDATED
-worker runtime                   = Railway / moventra-worker-production
-worker entrypoint                = node src/worker.js
-system handler                   = system.outbox_dispatch
-messaging                        = RabbitMQ / AMQP 0-9-1 / TLS em staging+production
-serviceVersion precedence        = MOVENTRA_RELEASE_SHA → APP_VERSION → VERCEL_GIT_COMMIT_SHA → development
+025 functional revision           = d6fcf32e56d812cc8df90fc9a4ef2191c18a4173
+025 conclusion/docs revision      = d110360473f011ab2c586ad32006278063281f55
+025 revision-identity hardening   = 3d0ac7864d784e9bd74046cd995fab5ca6321b15
+025 reconciliation main revision  = b3808c9e3ca3c6896e9ea32bcd96bbf7a5e15ceb
+finding MOV-P1-OBS-001            = RESOLVED / PRODUCTION VALIDATED
+worker runtime                    = Railway / moventra-worker-production
+worker entrypoint                 = node src/worker.js
+system handler                    = system.outbox_dispatch
+messaging                         = RabbitMQ / AMQP 0-9-1 / TLS em staging+production
+serviceVersion precedence         = MOVENTRA_RELEASE_SHA → APP_VERSION → VERCEL_GIT_COMMIT_SHA → development
 ```
 
-A revisão funcional original da 025 continua histórica. A revisão `3d0ac786...` é hardening pós-auditoria e corrige a identidade observável do Worker sem alterar o contrato funcional de Jobs/Outbox.
-
-## Banco — baseline operacional de Production
+## Banco — estado operacional de Production no momento da ativação 026
 
 Provider: **Neon PostgreSQL 18.6**.
+
+Aplicado em Production:
 
 ```text
 0001_foundation.sql
@@ -98,7 +113,7 @@ Provider: **Neon PostgreSQL 18.6**.
 0016_jobs.sql
 ```
 
-A migration `0017_dlq.sql` pode existir em source control como artefato **PREPARED**, porém **não faz parte da baseline operacional 025 e não deve ser aplicada em Production antes da liberação formal da 026**.
+A migration `0017_dlq.sql` existe em source control como parte da implementação técnica da fase 026, mas **não estava aplicada em Production no momento da ativação formal desta fase**.
 
 ## Boundary consolidado até 025
 
@@ -121,36 +136,46 @@ Jobs = filas duráveis em PostgreSQL + leases/heartbeat/retry + handler registry
 Outbox Dispatcher = job de sistema dedicado no Worker Railway
 ```
 
-## Gate de reconciliação pós-auditoria antes da 026
+## Fase ativa — 026 DLQ
 
-A fase 026 não pode avançar operacionalmente até os itens abaixo estarem concluídos/evidenciados:
+A 026 está liberada para continuidade técnica sob o contrato de `docs/implementation/026-dlq.md` e issue #115.
 
-1. Revision Identity do Worker;
-2. `IMPLEMENTATION-ORDER.md`;
-3. `README.md`;
-4. Confluence oficial;
-5. `.env.example`;
-6. resolução da PR #109;
+Estado correto:
+
+```text
+ACTIVE / IMPLEMENTED / AWAITING RELEASE EVIDENCE
+```
+
+Isto significa:
+
+- modelo/migration/código já existem em source control;
+- a fase pode prosseguir com validação e release controlado;
+- **não** significa `EVIDENCED` ou `CONCLUDED`;
+- **não** autoriza promoção direta a Production.
+
+Antes de concluir 026 permanecem obrigatórios:
+
+1. validation SQL/RLS/least privilege;
+2. state machine e concorrência de quarentena/reprocessamento;
+3. idempotência de reprocessamento;
+4. RabbitMQ DLX/DLQ real;
+5. APIs administrativas protegidas por RBAC/tenant scope;
+6. auditoria e observabilidade seguras;
 7. CI completo;
-8. smoke real em Production;
-9. dependency vulnerability gate;
-10. SAST inicial;
-11. revisão de polling/idle do Worker;
-12. ADR de postura de rede Neon;
-13. saneamento/rotulagem do legado Atlassian `MP-*`;
-14. decisão de materialização Jira `MVT`.
+8. Staging;
+9. rollback/restore;
+10. aprovação humana explícita para Production;
+11. smoke/evidências após eventual Production;
+12. documentação de conclusão e somente então liberação da fase 027.
 
-Durante este gate ficam proibidos:
+## Regras de progressão
 
-- migration `0017_dlq.sql` em Production;
-- promoção de runtime 026;
-- alteração do estado operacional da 026 para `EVIDENCED`/`CONCLUDED`;
-- início da fase 027.
-
-## Regra de revision identity
-
-Revisão funcional/runtime é registrada separadamente de revisões exclusivamente documentais. Commits documentais posteriores não reabrem gates funcionais. Para Worker Railway, promoção de uma nova revisão exige SHA explicitamente selecionado, build fail-closed e comprovação do mesmo SHA em `serviceVersion`.
+- `027 — Object Storage` permanece **NOT ACTIVE** até 026 ser `EVIDENCED / CONCLUDED`;
+- nenhuma aprovação de Production pode ser inferida da ativação documental;
+- nenhuma migration em Production pode ser aplicada fora do release gate aprovado;
+- revisões de Worker devem usar SHA explicitamente selecionado e comprovar o mesmo SHA em `serviceVersion`;
+- secrets nunca são versionados nem usados como evidência documental.
 
 ## Próxima transição permitida
 
-A baseline operacional vigente permanece **001–025 CONCLUDED**. A **026 — DLQ** está **PREPARED / FROZEN / NOT RELEASED** até fechamento formal do gate pós-auditoria 1–14. Somente então poderá retornar a `ACTIVE` e seguir os release gates próprios da fase.
+Prosseguir exclusivamente com a **fase 026 — DLQ**, buscando `EVIDENCED / CONCLUDED`. A fase 027 continua bloqueada.
