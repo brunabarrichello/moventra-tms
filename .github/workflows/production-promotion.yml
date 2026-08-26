@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   impact:
-    name: Classify release impact
+    name: Resolve upstream release evidence
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -36,15 +36,17 @@ jobs:
       requires_release: ${{ steps.classify.outputs.requires_release }}
       classification: ${{ steps.classify.outputs.classification }}
     steps:
-      - name: Checkout exact candidate revision
+      - name: Checkout release governance utilities
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
-          fetch-depth: 2
           persist-credentials: false
 
-      - name: Classify application release impact
+      - name: Classify from trusted upstream evidence
         id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.rollback_run_id }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
@@ -54,16 +56,11 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-          head_sha='${{ github.event.workflow_run.head_sha }}'
-          base_sha="$(git rev-parse "${head_sha}^")"
-          result="$(bash scripts/release/classify-release-impact.sh "$base_sha" "$head_sha")"
+          result="$(bash scripts/release/classify-upstream-release-evidence.sh "$UPSTREAM_RUN_ID" rollback-drill-)"
           printf '%s\n' "$result"
           while IFS='=' read -r key value; do
             case "$key" in
-              requires_release|classification)
-                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
-                ;;
+              requires_release|classification) printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT" ;;
             esac
           done <<< "$result"
 
@@ -79,6 +76,9 @@ jobs:
       artifact_name: ${{ steps.evidence.outputs.artifact_name }}
       commit_sha: ${{ steps.evidence.outputs.commit_sha }}
       artifact_sha256: ${{ steps.evidence.outputs.artifact_sha256 }}
+      database_migration_max: ${{ steps.evidence.outputs.database_migration_max }}
+      database_migration_name: ${{ steps.evidence.outputs.database_migration_name }}
+      database_migration_checksum: ${{ steps.evidence.outputs.database_migration_checksum }}
       source_actor: ${{ steps.source.outputs.source_actor }}
       environment_id: ${{ steps.environment.outputs.environment_id }}
       reviewer_count: ${{ steps.environment.outputs.reviewer_count }}
@@ -118,18 +118,18 @@ jobs:
             echo '::error::Rollback Drill must originate from main'
             exit 1
           }
-          if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
-            test "${{ github.event.workflow_run.event }}" = workflow_run || {
-              echo '::error::Automatic production only accepts rollback runs triggered by workflow_run.'
-              exit 1
-            }
-          fi
+          upstream_event="$(jq -r '.event' <<< "$run_json")"
+          case "$upstream_event" in
+            workflow_run|workflow_dispatch) ;;
+            *) echo "::error::Unsupported Rollback Drill source event: ${upstream_event}"; exit 1 ;;
+          esac
           source_actor="$(jq -r '.actor.login // empty' <<< "$run_json")"
           test -n "$source_actor" || { echo '::error::Could not resolve rollback workflow actor'; exit 1; }
           {
             printf 'rollback_run_id=%s\n' "$SELECTED_RUN_ID"
             printf 'source_actor=%s\n' "$source_actor"
             printf 'production_url=%s\n' "$SELECTED_PRODUCTION_URL"
+            printf 'rollback_event=%s\n' "$upstream_event"
           } >> "$GITHUB_OUTPUT"
 
       - name: Download trusted rollback evidence
@@ -160,18 +160,26 @@ jobs:
           rollback_smoke="$(awk -F= '$1=="rollback_smoke" {print $2}' "$evidence")"
           restore_deploy="$(awk -F= '$1=="restore_deploy" {print $2}' "$evidence")"
           restore_smoke="$(awk -F= '$1=="restore_smoke" {print $2}' "$evidence")"
+          forward_schema_compatibility="$(awk -F= '$1=="forward_schema_rollback_compatibility" {print $2}' "$evidence")"
           source_run_id="$(awk -F= '$1=="restore_source_run" {print $2}' "$evidence")"
           artifact_name="$(awk -F= '$1=="restore_github_artifact" {print $2}' "$evidence")"
           commit_sha="$(awk -F= '$1=="restore_commit_sha" {print $2}' "$evidence")"
           artifact_sha256="$(awk -F= '$1=="restore_artifact_sha256" {print $2}' "$evidence")"
+          migration_max="$(awk -F= '$1=="database_migration_max" {print $2}' "$evidence")"
+          migration_name="$(awk -F= '$1=="database_migration_name" {print $2}' "$evidence")"
+          migration_checksum="$(awk -F= '$1=="database_migration_checksum" {print $2}' "$evidence")"
 
           test "$rollback_deploy" = success
           test "$rollback_smoke" = success
           test "$restore_deploy" = success
           test "$restore_smoke" = success
+          test "$forward_schema_compatibility" = success
           [[ "$source_run_id" =~ ^[0-9]+$ ]]
           [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$artifact_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$migration_max" =~ ^[0-9]{4}$ ]]
+          [[ "$migration_name" =~ ^[0-9]{4}_[a-z0-9_]+\.sql$ ]]
+          [[ "$migration_checksum" =~ ^[0-9a-f]{64}$ ]]
           test "$artifact_name" = "moventra-tms-${commit_sha}"
 
           main_json="$(curl --fail --silent --show-error \
@@ -210,6 +218,9 @@ jobs:
             printf 'artifact_name=%s\n' "$artifact_name"
             printf 'commit_sha=%s\n' "$commit_sha"
             printf 'artifact_sha256=%s\n' "$artifact_sha256"
+            printf 'database_migration_max=%s\n' "$migration_max"
+            printf 'database_migration_name=%s\n' "$migration_name"
+            printf 'database_migration_checksum=%s\n' "$migration_checksum"
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify protected production environment
@@ -264,7 +275,7 @@ jobs:
     environment:
       name: production
       url: ${{ needs.preflight.outputs.production_url }}
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
@@ -284,8 +295,14 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
-      - name: Install locked messaging smoke dependencies
+      - name: Install locked runtime and smoke dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
 
       - name: Capture authoritative environment approval
         id: approval
@@ -337,6 +354,8 @@ jobs:
 
       - name: Validate production deployment configuration
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MIGRATIONS_DATABASE_URL: ${{ secrets.MIGRATIONS_DATABASE_URL }}
           MESSAGING_RABBITMQ_URL: ${{ secrets.MESSAGING_RABBITMQ_URL }}
         run: |
           set -euo pipefail
@@ -345,6 +364,8 @@ jobs:
           test -n "$VERCEL_PROJECT_ID" || { echo '::error::VERCEL_PRODUCTION_PROJECT_ID is required'; exit 1; }
           test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
           test "$VERCEL_NODE_VERSION" = '22.x' || { echo '::error::production Vercel Node policy must be 22.x'; exit 1; }
+          test -n "$DATABASE_URL" || { echo '::error::DATABASE_URL is required in the protected GitHub production environment'; exit 1; }
+          test -n "$MIGRATIONS_DATABASE_URL" || { echo '::error::MIGRATIONS_DATABASE_URL is required in the protected GitHub production environment'; exit 1; }
           test -n "$MESSAGING_RABBITMQ_URL" || { echo '::error::MESSAGING_RABBITMQ_URL is required in the protected GitHub production environment'; exit 1; }
 
       - name: Verify production messaging readiness
@@ -401,6 +422,29 @@ jobs:
             printf 'artifact_sha256=%s\n' "$artifact_sha256"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Apply governed production database migrations
+        id: migration
+        env:
+          MIGRATIONS_DATABASE_URL: ${{ secrets.MIGRATIONS_DATABASE_URL }}
+          EXPECTED_MIGRATION_MAX: ${{ needs.preflight.outputs.database_migration_max }}
+          EXPECTED_MIGRATION_NAME: ${{ needs.preflight.outputs.database_migration_name }}
+          EXPECTED_MIGRATION_CHECKSUM: ${{ needs.preflight.outputs.database_migration_checksum }}
+        run: |
+          set -euo pipefail
+          result="$(bash scripts/release/apply-database-migrations.sh)"
+          printf '%s\n' "$result"
+          migration_max="$(printf '%s\n' "$result" | awk -F= '$1=="database_migration_max" {print $2}')"
+          migration_name="$(printf '%s\n' "$result" | awk -F= '$1=="database_migration_name" {print $2}')"
+          migration_checksum="$(printf '%s\n' "$result" | awk -F= '$1=="database_migration_checksum" {print $2}')"
+          test "$migration_max" = "$EXPECTED_MIGRATION_MAX" || { echo '::error::Production migration max differs from Staging evidence'; exit 1; }
+          test "$migration_name" = "$EXPECTED_MIGRATION_NAME" || { echo '::error::Production migration name differs from Staging evidence'; exit 1; }
+          test "$migration_checksum" = "$EXPECTED_MIGRATION_CHECKSUM" || { echo '::error::Production migration checksum differs from Staging evidence'; exit 1; }
+          {
+            printf 'database_migration_max=%s\n' "$migration_max"
+            printf 'database_migration_name=%s\n' "$migration_name"
+            printf 'database_migration_checksum=%s\n' "$migration_checksum"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Deploy exact approved prebuilt artifact to production
         id: deploy
         run: |
@@ -438,6 +482,9 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
           PROJECT_ID: ${{ steps.vercel-project.outputs.project_id }}
           NODE_VERSION: ${{ steps.vercel-project.outputs.node_version }}
+          DATABASE_MIGRATION_MAX: ${{ steps.migration.outputs.database_migration_max }}
+          DATABASE_MIGRATION_NAME: ${{ steps.migration.outputs.database_migration_name }}
+          DATABASE_MIGRATION_CHECKSUM: ${{ steps.migration.outputs.database_migration_checksum }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -450,6 +497,11 @@ jobs:
           github_artifact_name=${{ needs.preflight.outputs.artifact_name }}
           commit_sha=${{ needs.preflight.outputs.commit_sha }}
           artifact_sha256=${{ needs.preflight.outputs.artifact_sha256 }}
+          database_migration_max=${DATABASE_MIGRATION_MAX}
+          database_migration_name=${DATABASE_MIGRATION_NAME}
+          database_migration_checksum=${DATABASE_MIGRATION_CHECKSUM}
+          database_migration_promotion=success
+          staging_forward_schema_rollback_compatibility=success
           production_environment_id=${{ needs.preflight.outputs.environment_id }}
           required_reviewer_count=${{ needs.preflight.outputs.reviewer_count }}
           required_reviewers=${{ needs.preflight.outputs.reviewers }}

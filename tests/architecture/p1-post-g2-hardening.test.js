@@ -36,14 +36,20 @@ test('database CI executes integrated security pipeline using runtime app role',
   assert.match(validation, /Tenant B must be invisible/);
 });
 
-test('automatic release workflows classify impact before deploy gates', () => {
+test('automatic release workflows resolve release intent before deploy gates', () => {
   const releaseGate = read('.github/workflows/release-gate.yml');
   const rollback = read('.github/workflows/rollback-drill.yml');
   const production = read('.github/workflows/production-promotion.yml');
 
-  for (const workflow of [releaseGate, rollback, production]) {
-    assert.match(workflow, /Classify release impact/);
-    assert.match(workflow, /classify-release-impact\.sh/);
+  assert.match(releaseGate, /Classify release impact/);
+  assert.match(releaseGate, /classify-release-impact\.sh/);
+  assert.match(releaseGate, /UPSTREAM_EVENT/);
+  assert.match(releaseGate, /manual-release/);
+
+  for (const workflow of [rollback, production]) {
+    assert.match(workflow, /Resolve upstream release evidence/);
+    assert.match(workflow, /classify-upstream-release-evidence\.sh/);
+    assert.doesNotMatch(workflow, /classify-release-impact\.sh/);
     assert.match(workflow, /requires_release/);
     assert.match(workflow, /manual-release/);
   }
