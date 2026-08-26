@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "start:worker": "node src/worker.js",
     "lint": "./scripts/ci/lint.sh",
     "test": "./scripts/ci/test.sh",
     "build": "./scripts/ci/build.sh",
