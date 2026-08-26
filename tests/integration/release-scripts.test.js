@@ -155,19 +155,26 @@ test('production evidence capture survives checkout cleanup and records approval
   assert.ok(uploadIndex > recordIndex, 'production evidence must be uploaded after it is recorded');
 
   const approvalSection = workflow.slice(approvalIndex, recordIndex);
-  assert.match(approvalSection, /environment_approvals/);
-  assert.match(approvalSection, /reviewer/);
-  assert.match(approvalSection, /reviewed_at/);
-  assert.match(approvalSection, /environment_name/);
+  assert.match(approvalSection, /mkdir -p evidence/);
+  assert.match(approvalSection, /> evidence\/approval-history\.json/);
+
+  const recordSection = workflow.slice(recordIndex, uploadIndex);
+  assert.match(recordSection, /mkdir -p evidence/);
+  assert.match(recordSection, /evidence\/production-deployment\.txt/);
 });
 
 test('Vercel output parser preserves the immutable deployment URL before mutable aliases', async () => {
+  const immutableUrl = 'https://moventra-qdeqqgj3y-alebru.vercel.app';
   const output = [
-    'https://moventra-tms-staging.vercel.app',
-    'https://moventra-tms-git-main-team.vercel.app',
-    'https://moventra-tms-abcdefghijkl-team.vercel.app',
+    'Vercel CLI 59.4.0',
+    'Inspect https://vercel.com/alebru/moventra-tms/HCh9jAeUNvD3FeSkeLB8TP48wkVv',
+    `Production ${immutableUrl}`,
+    'Building…',
+    '▲ Aliased https://moventra-tms.vercel.app',
+    '▲ Aliased https://moventra-tms-alebru.vercel.app',
   ].join('\n');
+
   const result = await runProcess('bash', [deploymentUrlParser], { input: output });
   assert.equal(result.code, 0, result.stderr);
-  assert.equal(result.stdout.trim(), 'https://moventra-tms-abcdefghijkl-team.vercel.app');
+  assert.equal(result.stdout.trim(), immutableUrl);
 });
