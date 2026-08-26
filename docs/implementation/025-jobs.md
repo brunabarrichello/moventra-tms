@@ -2,7 +2,7 @@
 
 ## Estado
 
-`ACTIVE / DEFINED`
+`ACTIVE / IMPLEMENTED / AWAITING CI+RELEASE EVIDENCE`
 
 A fase 024 — Mensageria foi concluída e evidenciada em Production para a revisão funcional `93354cce0119cad56a39c29e4adf237043183da1`. A fase 025 — Jobs é a etapa oficial ativa. A fase 026 — DLQ e posteriores permanecem `NOT ACTIVE`.
 
@@ -10,9 +10,9 @@ Issue oficial: #110.
 
 ## Objetivo
 
-Introduzir o subsistema transversal de Jobs do Moventra TMS para execução assíncrona e recorrente com durabilidade, concorrência controlada, lease, retry/backoff, observabilidade e shutdown seguro, preservando o monólito modular e sem antecipar a governança administrativa de DLQ da fase 026.
+Introduzir o subsistema transversal de Jobs do Moventra TMS para execução assíncrona e recorrente com durabilidade, concorrência controlada, lease, heartbeat, retry/backoff, observabilidade e shutdown seguro, preservando o monólito modular e sem antecipar a governança administrativa da DLQ 026.
 
-A primeira integração funcional obrigatória será o **Outbox Dispatcher**, materializando o fluxo preparado nas fases 023 e 024:
+A primeira integração funcional obrigatória é o **Outbox Dispatcher**:
 
 ```text
 claim Outbox
@@ -26,145 +26,162 @@ markPublished Outbox
 
 ## Decisão arquitetural
 
-A recomendação para a 025 é um framework interno de Jobs, provider-neutral no nível de aplicação, com persistência PostgreSQL e execução por worker do próprio monólito modular.
+A 025 usa um framework interno provider-neutral no nível da aplicação e persistência PostgreSQL. O runtime de execução é um **processo de worker dedicado**, separado do runtime HTTP/serverless.
 
 ```text
 Application / Domain
         │
-        ├── agenda job por porta interna
+        ├── agenda tenant job
+        ▼
+JobScheduler
         │
         ▼
-JobScheduler Port
+PostgreSQL Durable Jobs
         │
-        ▼
-PostgreSQL Job Repository
-        │
-        ▼
-Job Worker Runner
-        │
-        ▼
-JobHandlerRegistry
-        │
-        ├── OutboxDispatcherJob
-        └── futuros handlers controlados
+        ├── jobs.jobs          (tenant-scoped, RLS)
+        └── jobs.system_jobs   (technical/global)
+                 │
+                 ▼
+        Dedicated Job Worker
+                 │
+                 ▼
+        JobHandlerRegistry
+                 │
+                 └── system.outbox_dispatch
+                           │
+                           ▼
+                Outbox -> RabbitMQ 024
 ```
 
-Não introduzir Redis/BullMQ, Kubernetes Jobs ou SaaS externo apenas para cumprir esta fase. A decisão reduz dependências operacionais e reutiliza PostgreSQL 18, `FOR UPDATE SKIP LOCKED`, transações, observabilidade e padrões já consolidados.
+Não introduzir Redis/BullMQ, Kubernetes Jobs ou SaaS de fila de jobs apenas para cumprir esta fase. PostgreSQL 18, `FOR UPDATE SKIP LOCKED`, leases e transações atendem ao requisito atual sem contaminar os handlers com tecnologia de infraestrutura.
 
-A abstração deve permitir futura troca ou coexistência de runtime sem contaminar handlers de aplicação.
+## Decisão de escopo físico
 
-## Escopos de job
+A convenção canônica da fase 007 exige `tenant_id UUID NOT NULL` em toda tabela tenant-scoped. Portanto, **não** é permitido representar jobs tenant e system na mesma tabela por `tenant_id NULL`.
 
-Jobs devem declarar explicitamente um dos escopos:
+A modelagem física correta é:
 
 ```text
-tenant  -> pertence a um tenant e exige tenant_id
-system  -> infraestrutura/plataforma, tenant_id ausente
+jobs.jobs
+  = jobs pertencentes a tenant
+  = tenant_id UUID NOT NULL
+  = RLS obrigatório
+
+jobs.system_jobs
+  = jobs técnicos/globais da plataforma
+  = NÃO possui tenant_id
+  = schedules definidos por migration/configuração confiável
 ```
 
-Regras:
+Essa separação evita enfraquecer a convenção de tenancy e torna a propriedade de cada job inequívoca.
 
-- job tenant-scoped nunca deriva `tenantId` de payload arbitrário;
-- `tenant_id` é coluna estruturada, não somente metadata JSON;
-- job system-scoped só pode usar tipos registrados como permitidos para sistema;
-- nenhum handler pode elevar escopo organizacional implicitamente;
-- jobs de domínio continuam sujeitos às invariantes, autorização e contexto transacional adequados.
+No contrato de aplicação, o campo lógico `scope` continua existindo:
 
-## Estado e state machine
+```text
+tenant -> persiste em jobs.jobs
+system -> persiste em jobs.system_jobs
+```
 
-Estados canônicos:
+O `PostgresJobRepository` recebe `scope` confiável no bootstrap e seleciona a tabela por catálogo interno fixo; nenhum nome de tabela é derivado de payload/input do usuário.
+
+## Modelo de dados — `jobs.jobs`
+
+Responsabilidade: jobs de negócio pertencentes a um tenant.
+
+Campos principais:
+
+```text
+id                      uuid PK DEFAULT uuidv7()
+tenant_id               uuid NOT NULL FK organization.tenants
+job_type                text NOT NULL
+schema_version          smallint NOT NULL
+payload                  jsonb NOT NULL
+metadata                 jsonb NOT NULL
+status                   text NOT NULL
+priority                 smallint NOT NULL
+available_at             timestamptz NOT NULL
+attempt_count            integer NOT NULL
+max_attempts             smallint NOT NULL
+lease_token              uuid NULL
+leased_at                timestamptz NULL
+lease_expires_at         timestamptz NULL
+last_heartbeat_at        timestamptz NULL
+last_error_code          text NULL
+last_error_class         text NULL
+schedule_key             text NULL
+recurrence_interval_ms  bigint NULL
+last_completed_at        timestamptz NULL
+completed_at             timestamptz NULL
+cancelled_at             timestamptz NULL
+created_at               timestamptz NOT NULL
+updated_at               timestamptz NOT NULL
+```
+
+RLS:
+
+```text
+USING     tenant_id = security.current_tenant_id()
+WITH CHECK tenant_id = security.current_tenant_id()
+```
+
+Índices de elegibilidade são tenant-leading quando o padrão é tenant-scoped. O singleton recorrente tenant-aware usa unicidade parcial `(tenant_id, schedule_key)` para estados ativos.
+
+## Modelo de dados — `jobs.system_jobs`
+
+Responsabilidade: jobs técnicos/globais criados e governados pela plataforma.
+
+Não possui `tenant_id`. Usa o mesmo lifecycle durável de lease/retry, com tipo restrito a namespace `system.*`.
+
+A migration 0016 cria o primeiro schedule oficial:
+
+```text
+job_type                = system.outbox_dispatch
+schedule_key            = system.outbox_dispatch
+recurrence_interval_ms  = 1000
+priority                = 100
+max_attempts             = 10
+```
+
+O runtime web não pode criar, alterar ou apagar esse schedule. A definição é migration-owned; alterações futuras exigem mudança versionada de infraestrutura.
+
+## State machine
+
+Estado físico:
 
 ```text
 scheduled
-  ↓ available_at alcançado
-available
-  ↓ claim/lease
+   │ available_at <= now
+   ▼
 running
-  ├── success ───────────────→ succeeded
-  ├── retryable failure ─────→ retry_scheduled
-  ├── non-retryable/max ─────→ failed_terminal
-  └── cancellation permitida → cancelled
+   ├── success ────────────────→ succeeded
+   │                              ou scheduled (recorrente)
+   ├── retryable failure ──────→ retry_scheduled
+   ├── max/non-retryable ──────→ failed_terminal
+   └── tenant cancellation ────→ cancelled
 ```
 
-Persistir somente estados úteis e auditáveis. `available` pode ser derivado de `status` + `available_at` em vez de duplicar estado físico se isso simplificar constraints.
+`available` é derivado de `status + available_at`, não duplicado.
 
-Transições devem ser condicionais por lease/claim token para evitar conclusão por worker que perdeu propriedade do job.
-
-## Modelo de dados proposto
-
-Schema: `jobs`.
-
-Tabela principal: `jobs.jobs`.
-
-Campos mínimos:
-
-```text
-id                    uuid PK
-tenant_id             uuid NULL
-scope                  text NOT NULL
-job_type               text NOT NULL
-schema_version         integer NOT NULL
-payload                jsonb NOT NULL
-metadata               jsonb NOT NULL
-status                 text NOT NULL
-priority               smallint NOT NULL
-available_at           timestamptz NOT NULL
-attempt_count          integer NOT NULL
-max_attempts           integer NOT NULL
-lease_token            uuid NULL
-leased_at              timestamptz NULL
-lease_expires_at       timestamptz NULL
-last_heartbeat_at      timestamptz NULL
-last_error_code        text NULL
-last_error_class       text NULL
-completed_at           timestamptz NULL
-cancelled_at           timestamptz NULL
-created_at             timestamptz NOT NULL
-updated_at             timestamptz NOT NULL
-```
-
-Regras estruturais:
-
-- `scope='tenant'` implica `tenant_id IS NOT NULL`;
-- `scope='system'` implica `tenant_id IS NULL`;
-- `schema_version > 0`;
-- `attempt_count >= 0`;
-- `max_attempts` limitado;
-- lease fields devem ser todos nulos ou coerentes com `status='running'`;
-- erro persistido somente como código/classe sanitizados, nunca stack/raw secret;
-- payload e metadata com limites de tamanho aplicados na aplicação e guardrails no banco quando viável;
-- soft delete não é apropriado para job operacional: lifecycle é representado por estado, retenção posterior e auditoria.
-
-Índices mínimos:
-
-```text
-(status, available_at, priority, created_at)
-(lease_expires_at) WHERE status = 'running'
-(tenant_id, status, available_at) WHERE tenant_id IS NOT NULL
-(job_type, status, available_at)
-```
-
-Não criar unicidade global de payload. Dedupe/idempotência deve ser explícita por caso de uso.
+Toda conclusão exige o `lease_token` ainda ativo. Um worker que perdeu o lease não pode concluir o job.
 
 ## Claim e concorrência
 
-Claim deve ser atômico e concorrente:
+O repositório usa claim atômico:
 
 ```sql
 WITH eligible AS (
   SELECT id
-    FROM jobs.jobs
-   WHERE status IN ('scheduled', 'retry_scheduled')
-     AND available_at <= clock_timestamp()
-     AND (
-       lease_token IS NULL
-       OR lease_expires_at <= clock_timestamp()
-     )
+    FROM <trusted_job_table>
+   WHERE (
+      (status IN ('scheduled', 'retry_scheduled') AND available_at <= clock_timestamp())
+      OR (status = 'running' AND lease_expires_at <= clock_timestamp())
+   )
+     AND attempt_count < max_attempts
    ORDER BY priority DESC, available_at, created_at, id
    FOR UPDATE SKIP LOCKED
    LIMIT $1
 )
-UPDATE jobs.jobs AS job
+UPDATE <trusted_job_table> AS job
    SET status = 'running',
        lease_token = $2,
        leased_at = clock_timestamp(),
@@ -177,124 +194,188 @@ UPDATE jobs.jobs AS job
 RETURNING job.*;
 ```
 
-Workers concorrentes não podem receber o mesmo lease ativo.
+`<trusted_job_table>` é escolhido somente pelo `scope` configurado no repositório (`jobs.jobs` ou `jobs.system_jobs`), nunca por input livre.
 
-## Lease e heartbeat
+Workers concorrentes não podem receber o mesmo lease ativo. Lease expirado pode ser recuperado; lease expirado com tentativas esgotadas transita para `failed_terminal`.
 
-O worker deve renovar o lease somente quando ainda é proprietário do `lease_token`.
+## Lease, heartbeat e timeout
 
-Heartbeat perdido ou worker morto não pode manter job preso indefinidamente. Após `lease_expires_at`, o job pode ser recuperado por outro worker conforme classificação e limite de tentativas.
-
-Defaults iniciais recomendados:
+Defaults iniciais:
 
 ```text
-lease = 60 s
-heartbeat = 20 s
-batch = 25
-concurrency = 5
-idle poll = 1 s em runtime dedicado
+lease              = 60 s
+heartbeat          = 20 s
+batch              = 25
+concurrency        = 5
+idle poll          = 1 s
+handler timeout    = 30 s
 ```
 
-Os valores devem ser configuráveis e limitados. Em runtime serverless request-driven, não iniciar loop infinito. A execução recorrente deve ocorrer em processo/entrypoint de worker apropriado.
+O `JobWorker`:
+
+- usa `AbortController`;
+- renova heartbeat apenas enquanto detém o lease;
+- aborta o handler se perder ownership;
+- aplica timeout bounded;
+- processa em concorrência limitada;
+- não faz busy-loop;
+- em shutdown para novos claims e usa cancel signal cooperativo.
+
+Um entrypoint HTTP/serverless **não pode** chamar `runForever()`. O loop recorrente pertence a um runtime de worker dedicado.
 
 ## Retry e backoff
 
-A 025 implementa política central de retry de Jobs.
-
-Recomendação:
+Política central:
 
 ```text
-delay = min(maxDelay, baseDelay * 2^(attempt-1)) + jitter
+delay = min(maxDelay, baseDelay * 2^(attempt-1)) + bounded jitter
 ```
 
-Com defaults conservadores:
+Defaults:
 
 ```text
-baseDelay = 1 s
-maxDelay  = 5 min
-maxAttempts = 10
-jitter <= 20%
+baseDelay    = 1 s
+maxDelay     = 5 min
+maxAttempts  = 10
+jitter       <= 20%
 ```
 
-Jitter deve ser injetável/determinístico em testes.
-
-Classificação usa Error Handling 021 e classificadores específicos do handler. Erro `non-retryable` ou job que excedeu `max_attempts` transita para `failed_terminal`.
-
-A fase 026 tratará governança/reprocessamento de falhas terminais. A 025 apenas persiste o estado terminal de forma segura.
+Jitter é injetável para testes determinísticos. Erros somente são retryable quando a classificação explícita assim determina; mensagens de erro arbitrárias não são persistidas como dados operacionais.
 
 ## Handler Registry
 
-Handlers são registrados no bootstrap da aplicação:
+`JobHandlerRegistry` mantém catálogo interno:
 
 ```text
-job_type -> handler
+job_type -> scope permitido + schemaVersions + handler
 ```
 
 Regras:
 
-- `job_type` controlado por catálogo da aplicação;
-- não importar módulo/arquivo por string fornecida em payload;
-- schema version validado antes da execução;
-- payload validado por handler/contrato;
-- handler recebe contexto estruturado (`jobId`, `tenantId`, attempt, correlation context), não a linha SQL crua;
-- handler deve respeitar idempotência quando houver efeito externo.
+- `job_type` namespaced e validado;
+- duplicidade de registro rejeitada;
+- incompatibilidade de scope rejeitada;
+- schema version não suportado rejeitado;
+- nenhum `eval`, `new Function` ou import dinâmico por payload;
+- handler recebe contexto estruturado e `AbortSignal`.
 
 ## Outbox Dispatcher
 
-Primeiro handler obrigatório:
+Handler inicial:
 
 ```text
 system.outbox_dispatch
 ```
 
-Responsabilidade de uma execução:
+Invariante crítica:
 
-1. `OutboxService.claimBatch()` com batch e claim TTL limitados;
-2. para cada evento claimado, mapear via mapper 024;
-3. publicar via `MessagingPublisher` 024;
-4. somente após publisher confirm, chamar `OutboxService.markPublished()`;
-5. se publish falhar, não marcar published;
-6. permitir recuperação pelo TTL de claim da Outbox;
-7. falha de um evento não pode apagar/invalidar outros eventos do batch;
-8. resultados e métricas não expõem payload/tenant em labels.
+```text
+publisher confirm SUCCESS
+          ↓
+markPublished(eventId, claimToken)
+```
 
-O job recorrente pode ser agendado em intervalo curto, mas deve evitar duplicação explosiva. Recomenda-se um schedule singleton por ambiente, com chave lógica fixa e execução que agenda a próxima ocorrência somente de forma idempotente.
+Nunca o inverso.
 
-A 025 não altera a semântica at-least-once da 024 e não promete exactly-once.
+Fluxo de cada execução:
 
-## Scheduler
+1. `OutboxService.claimBatch()` por capability interna;
+2. mapear `outbox.events` para envelope canônico 024;
+3. publicar via `MessagingPublisher`;
+4. exigir `confirmed=true` e `messageId == event.id`;
+5. somente então chamar `markPublished`;
+6. falha deixa evento recuperável pelo claim TTL;
+7. sucessos parciais do batch permanecem marcados; o primeiro erro é propagado como falha retryable quando aplicável.
 
-O scheduler deve suportar:
+A semântica continua **at-least-once**. Não existe promessa de exactly-once fim a fim.
 
-- one-shot (`availableAt`);
-- delay relativo;
-- recorrência interna controlada para jobs de sistema;
-- cancelamento antes de execução quando permitido;
-- chave de deduplicação opcional para schedules singleton.
+## Boundary de segurança — runtime web x worker
 
-Cron expression arbitrária fornecida por usuário não entra nesta fase. Se futuramente exposta, deverá possuir parser seguro, RBAC, timezone explícito e limites.
+A 025 introduz separação de principal PostgreSQL:
 
-## Worker Runner
+### Application runtime
 
-O runner deve:
+Contrato: `db/runtime/runtime-access.sql`.
 
-- fazer claim bounded;
-- respeitar concorrência configurada;
-- executar handlers com timeout/cancel signal quando aplicável;
-- heartbeat leases ativos;
-- registrar sucesso/retry/falha terminal de forma condicional ao lease;
-- aguardar com backoff quando não houver trabalho;
-- reagir a `SIGTERM`/`SIGINT`;
-- parar novos claims durante shutdown;
-- aguardar jobs ativos até grace period;
-- nunca executar busy-loop.
+Pode:
+
+- agendar/consultar tenant jobs sob RLS;
+- mutar apenas colunas operacionais tenant-scoped autorizadas;
+- usar Outbox tenant-scoped conforme contratos anteriores.
+
+Não pode:
+
+- ler ou mutar `jobs.system_jobs`;
+- executar `outbox.claim_system_batch`;
+- executar `outbox.mark_system_published`;
+- obter bypass de RLS.
+
+### Dedicated worker
+
+Contrato: `db/runtime/worker-access.sql`.
+
+Pode apenas:
+
+- `USAGE` em `jobs` e `outbox`;
+- `SELECT` do schedule técnico em `jobs.system_jobs`;
+- atualizar somente lifecycle/lease desse schedule;
+- executar as duas capabilities estreitas de Outbox.
+
+Não pode:
+
+- `INSERT`/`DELETE` de system jobs;
+- redefinir `job_type`, payload, metadata, schedule key ou recurrence;
+- acessar diretamente `outbox.events`;
+- acessar diretamente `jobs.jobs` tenant-scoped nesta primeira integração;
+- acessar schemas de negócio, identidade, RBAC, auditoria/configuração;
+- criar objetos;
+- BYPASSRLS.
+
+Essa segregação reduz blast radius e impede que comprometimento do runtime HTTP conceda automaticamente poder cross-tenant de despacho.
+
+## Capability cross-tenant do Outbox
+
+O Outbox Dispatcher precisa localizar eventos de múltiplos tenants sem dar `BYPASSRLS` ao worker. A migration cria funções estreitas `SECURITY DEFINER`:
+
+```text
+outbox.claim_system_batch(limit, claim_ttl_ms, claim_token)
+outbox.mark_system_published(event_id, claim_token)
+```
+
+Propriedades:
+
+- `PUBLIC EXECUTE` revogado;
+- somente a role dedicada de worker recebe `EXECUTE`;
+- limit e TTL validados no banco;
+- `markPublished` exige `claim_token` proprietário;
+- nenhuma capability permite append arbitrário, DELETE ou alteração de payload/tenant/event contract;
+- `search_path` fixado em `pg_catalog` e objetos de aplicação referenciados de forma qualificada.
+
+## Tenant Jobs
+
+A 025 materializa persistência, agendamento, claim e worker genéricos para tenant jobs, mas a primeira execução operacional ativada é exclusivamente `system.outbox_dispatch`.
+
+Qualquer worker futuro que varra jobs de múltiplos tenants deverá receber capability explícita e estreita própria, com tenant context estabelecido antes do handler. **Não** será concedido acesso cross-tenant genérico antecipadamente.
+
+## Scheduler e recorrência
+
+Suportado:
+
+- one-shot por `available_at`;
+- atraso relativo no chamador;
+- schedule singleton por chave;
+- recorrência interna bounded para system jobs migration-owned;
+- cancelamento de tenant job antes de execução quando permitido.
+
+No sucesso de job recorrente, a mesma linha volta a `scheduled`, `attempt_count` é resetado e `available_at` avança pelo intervalo configurado. Isso evita explosão de linhas duplicadas do scheduler.
+
+Cron arbitrário fornecido por usuário permanece fora de escopo.
 
 ## Configuração
 
-Variáveis propostas:
+Parâmetros de worker devem ser env/configuração confiável e possuir min/max:
 
 ```text
-JOBS_ENABLED=true|false
 JOBS_BATCH_SIZE=25
 JOBS_CONCURRENCY=5
 JOBS_LEASE_MS=60000
@@ -308,22 +389,27 @@ OUTBOX_DISPATCH_BATCH_SIZE=50
 OUTBOX_DISPATCH_CLAIM_TTL_MS=60000
 ```
 
-Todos os números devem ter min/max. Defaults de Production não devem ser alterados por input HTTP.
+Credenciais esperadas no runtime dedicado:
+
+```text
+DATABASE_URL=<worker PostgreSQL credential, secret>
+MESSAGING_RABBITMQ_URL=<worker RabbitMQ credential, secret>
+```
+
+Production e Staging devem usar credenciais segregadas por ambiente. A credencial PostgreSQL do worker não deve ser a mesma do runtime web.
 
 ## Observabilidade
 
-Métricas de baixa cardinalidade:
+Implementado:
 
 ```text
-jobs_operations_total{operation,outcome,job_type}
-jobs_operation_duration_ms{operation,outcome,job_type}
-jobs_active{job_type}
-jobs_claim_batch_size{job_type}
+jobs_operations_total{operation,outcome,job_type,environment}
+jobs_operation_duration_ms{operation,outcome,job_type,environment}
 ```
 
-`job_type` é catálogo controlado e de baixa cardinalidade.
+`job_type` pertence ao catálogo controlado. IDs de alta cardinalidade não são labels.
 
-Não usar como labels:
+Nunca usar como label:
 
 ```text
 jobId
@@ -334,115 +420,91 @@ payload
 error message arbitrária
 ```
 
-Logs/traces podem conter IDs sanitizados quando necessários para troubleshooting, sem payload ou secrets.
-
-## Segurança
-
-- backend-only execution;
-- payload validado e limitado;
-- nenhum secret persistido em payload/metadata;
-- lease token criptograficamente aleatório;
-- tenant/system scope validado por constraint e aplicação;
-- RLS tenant-aware para jobs tenant-scoped;
-- jobs system-scoped acessíveis somente por caminhos internos confiáveis;
-- SQL parametrizado;
-- errors sanitizados;
-- nenhuma execução dinâmica de código;
-- rate/concurrency limits por configuração;
-- autorização futura de endpoints administrativos obrigatoriamente no backend.
-
-## RLS e runtime least privilege
-
-A migration deve conceder ao runtime somente os privilégios necessários para:
-
-- `SELECT` de jobs elegíveis;
-- `INSERT` de jobs permitidos;
-- atualização das colunas operacionais de claim/heartbeat/status;
-
-Sem `DELETE`, DDL ou alteração arbitrária de campos de segurança.
-
-Para tenant jobs, políticas RLS devem usar o contexto transaction-local já consolidado. Operações system-scoped exigem caminho interno explícito e não podem usar bypass global de RLS como conveniência.
+Telemetry é fail-safe: erro no exportador não altera a correção do job.
 
 ## Idempotência
 
-A infraestrutura de Jobs oferece at-least-once execution quando lease expira após efeito parcial. Portanto:
+Jobs são at-least-once. Um worker pode morrer depois de produzir efeito e antes de registrar sucesso.
 
-- handlers com side effect externo devem usar Idempotência 022, semântica do provider ou dedupe do domínio;
-- Outbox Dispatcher usa `eventId/messageId` estáveis e `markPublished` condicional;
-- sucesso do handler e update de status não criam exactly-once fim a fim.
+Portanto:
 
-## Testes obrigatórios
+- handlers com efeito externo precisam de Idempotência 022/provider/domain dedupe;
+- Outbox Dispatcher usa `eventId/messageId` estáveis;
+- `markPublished` é condicional ao claim;
+- lease não transforma o sistema em exactly-once.
 
-Unitários:
+## Testes e evidência obrigatória
 
-- contratos e validação de payload/config;
-- state machine;
-- backoff/jitter;
-- handler registry;
-- graceful shutdown;
-- timeout/cancellation;
-- Outbox Dispatcher success/failure/partial batch;
-- observabilidade sem alta cardinalidade.
+### Unitários
 
-Integração PostgreSQL:
+- validação de scope, payload e metadata;
+- bloqueio de campos sensíveis;
+- backoff/jitter determinístico;
+- Handler Registry;
+- worker success/retry;
+- confirm-before-markPublished;
+- falha de broker sem markPublished.
 
-- enqueue;
-- claim concorrente com `SKIP LOCKED`;
-- lease ownership;
-- heartbeat;
-- lease expiry/recovery;
-- success;
-- retry schedule;
-- terminal failure;
-- cancellation;
-- tenant isolation/RLS;
-- least privilege runtime.
+### PostgreSQL
 
-Integração RabbitMQ:
+- migration 0016 em banco limpo;
+- `tenant_id NOT NULL` e RLS em `jobs.jobs`;
+- ausência de `tenant_id` em `jobs.system_jobs`;
+- singleton system schedule;
+- `SKIP LOCKED` com workers concorrentes;
+- heartbeat e conclusão por lease;
+- retry scheduling;
+- app runtime least privilege;
+- dedicated worker least privilege;
+- aplicação normal sem capability cross-tenant;
+- worker sem acesso direto a Outbox/business data.
 
-- Outbox Dispatcher publica evento real via adapter 024;
-- publisher confirm antecede `markPublished`;
-- falha do broker mantém Outbox recuperável;
-- reexecução preserva identidade lógica.
+### RabbitMQ real em CI
 
-Arquiteturais:
+Workflow `Moventra Jobs Contract` sobe PostgreSQL 18 + RabbitMQ 4.3.5 e executa:
 
-- domínios não dependem do PostgreSQL Job Repository;
-- handlers não importam runner internals;
-- Jobs não implementa UI/DLQ administrativo 026;
-- sem dependência obrigatória de Redis/Kubernetes;
-- nenhum loop infinito em entrypoint HTTP/serverless.
+```text
+seed Outbox event
+  ↓
+SET ROLE dedicated worker CI principal
+  ↓
+JobWorker.runOnce()
+  ↓
+system.outbox_dispatch
+  ↓
+claim Outbox capability
+  ↓
+RabbitMQ publish + confirm
+  ↓
+consumer recebe envelope
+  ↓
+markPublished
+  ↓
+system job volta a scheduled
+```
 
-Release:
+A evidência só é válida se todo o fluxo passar sob o principal dedicado de worker; executar como owner/admin não é suficiente.
+
+### Release
+
+Para concluir a fase:
 
 - CI completo verde;
-- migration aplicada de forma controlada;
-- Staging executa job real e Outbox Dispatcher real;
+- migration 0016 aplicada em Staging;
+- worker PostgreSQL role/credential de menor privilégio em Staging;
+- runtime dedicado de worker executando continuamente em Staging;
+- broker real de Staging;
+- Outbox Dispatcher observado em execução real;
 - rollback/restore comprovado;
-- Production exige gate humano explícito;
-- evidência sem credenciais/payloads.
+- mesma arquitetura/segregação em Production;
+- aprovação humana explícita de Production;
+- evidence artifact sem secrets/payloads.
 
-## Critérios de aceite
+## Risco operacional ainda aberto
 
-- [ ] contratos internos de Jobs provider-neutral;
-- [ ] migration PostgreSQL de jobs;
-- [ ] tenant/system scope explícito;
-- [ ] state machine e constraints;
-- [ ] claim `SKIP LOCKED`;
-- [ ] lease + heartbeat + recovery;
-- [ ] retry/backoff/jitter;
-- [ ] handler registry controlado;
-- [ ] worker runner com graceful shutdown;
-- [ ] observabilidade de baixa cardinalidade;
-- [ ] Outbox Dispatcher real;
-- [ ] publisher confirm antes de `markPublished`;
-- [ ] segurança/RLS/least privilege;
-- [ ] testes unitários, integração e arquitetura verdes;
-- [ ] CI verde;
-- [ ] Staging evidenciado;
-- [ ] rollback/restore;
-- [ ] Production protegida e evidenciada;
-- [ ] Issue #110 e Confluence sincronizados.
+**Vercel HTTP/serverless não é considerado runtime contínuo do JobWorker.** A aplicação web pode permanecer na Vercel, mas `JobWorker.runForever()` exige processo/serviço de worker com lifecycle apropriado.
+
+A fase 025 não será marcada `EVIDENCED / CONCLUDED` apenas porque unit/CI passou. É necessário provisionar e provar um runtime dedicado real em Staging e Production.
 
 ## Fora do escopo
 
@@ -452,10 +514,31 @@ Release:
 UI administrativa de jobs
 execução de código arbitrário
 cron arbitrário fornecido por usuário
-Kubernetes orchestration
+BYPASSRLS para worker
 Redis/BullMQ como dependência obrigatória
 exactly-once fim a fim
 ```
+
+## Critérios de aceite
+
+- [x] contratos internos de Jobs provider-neutral implementados;
+- [x] migration PostgreSQL de jobs implementada;
+- [x] tenant/system scope explícito e fisicamente segregado;
+- [x] state machine e constraints implementadas;
+- [x] claim `SKIP LOCKED` implementado;
+- [x] lease + heartbeat + recovery implementados;
+- [x] retry/backoff/jitter implementados;
+- [x] Handler Registry controlado implementado;
+- [x] worker runner com shutdown cooperativo implementado;
+- [x] observabilidade de baixa cardinalidade implementada;
+- [x] Outbox Dispatcher implementado;
+- [x] publisher confirm antes de `markPublished` implementado;
+- [x] application runtime e worker DB principals separados no contrato;
+- [ ] CI completo verde;
+- [ ] Staging com migration + worker dedicado evidenciado;
+- [ ] rollback/restore;
+- [ ] Production protegida e evidenciada;
+- [ ] Issue #110 / Confluence / docs finais sincronizados.
 
 ## Próxima etapa após conclusão
 

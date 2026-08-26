@@ -1,7 +1,7 @@
--- Moventra TMS — PostgreSQL runtime access contract
--- P0 hardening after G2 audit, extended through phase 023 Transactional Outbox.
+-- Moventra TMS — PostgreSQL application runtime access contract
+-- P0 hardening after G2 audit, extended through phase 025 Durable Jobs.
 -- Apply with psql -v runtime_role=<NOLOGIN authorization role> -f db/runtime/runtime-access.sql
--- The runtime role name is deliberately supplied by the environment; no secret is stored here.
+-- Worker-only cross-tenant/system capabilities live in db/runtime/worker-access.sql.
 
 \set ON_ERROR_STOP on
 \if :{?runtime_role}
@@ -10,16 +10,14 @@
   \quit 3
 \endif
 
--- Runtime may resolve objects but may never create objects in application schemas.
-GRANT USAGE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox TO :"runtime_role";
-REVOKE CREATE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox FROM :"runtime_role";
+-- Application runtime may resolve objects but may never create objects in application schemas.
+GRANT USAGE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox, jobs TO :"runtime_role";
+REVOKE CREATE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox, jobs FROM :"runtime_role";
 
--- Migration metadata is an administrative boundary and is never visible to runtime.
 REVOKE ALL PRIVILEGES ON SCHEMA moventra_meta FROM :"runtime_role";
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA moventra_meta FROM :"runtime_role";
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA moventra_meta FROM :"runtime_role";
 
--- Reset current application-table ACLs first so reruns converge instead of accumulating grants.
 REVOKE ALL PRIVILEGES ON
   organization.tenants,
   organization.companies,
@@ -42,30 +40,32 @@ REVOKE ALL PRIVILEGES ON
   feature_flags.rules,
   feature_flags.rule_versions,
   idempotency.records,
-  outbox.events
+  outbox.events,
+  jobs.jobs,
+  jobs.system_jobs
 FROM :"runtime_role";
 
--- Organization lifecycle repositories use reads plus append/update with optimistic locking.
+-- Converge worker-only function grants away from the HTTP/application principal.
+REVOKE EXECUTE ON FUNCTION outbox.claim_system_batch(INTEGER, BIGINT, UUID) FROM :"runtime_role";
+REVOKE EXECUTE ON FUNCTION outbox.mark_system_published(UUID, UUID) FROM :"runtime_role";
+
 GRANT SELECT, INSERT, UPDATE ON
   organization.tenants,
   organization.companies,
   organization.branches
 TO :"runtime_role";
 
--- Global identity and tenant memberships are mutable through application workflows.
 GRANT SELECT, INSERT, UPDATE ON
   identity.users,
   identity.memberships,
   identity.external_identities
 TO :"runtime_role";
 
--- Platform-owned global catalogs are read-only to normal application runtime.
 GRANT SELECT ON security.permissions TO :"runtime_role";
 GRANT SELECT ON configuration.definitions TO :"runtime_role";
 GRANT SELECT ON feature_flags.flags TO :"runtime_role";
 GRANT SELECT ON feature_flags.environment_policies TO :"runtime_role";
 
--- Tenant-owned authorization/configuration/feature-flag/idempotency state is mutable but never hard-deleted by runtime.
 GRANT SELECT, INSERT, UPDATE ON
   security.roles,
   security.role_permissions,
@@ -77,24 +77,42 @@ GRANT SELECT, INSERT, UPDATE ON
   idempotency.records
 TO :"runtime_role";
 
--- Transactional Outbox append is allowed, while operational mutation is column-scoped.
--- Payload, metadata, tenant, aggregate identity and event contract columns are immutable to runtime after INSERT.
+-- Application runtime may append/read tenant-scoped Outbox events, but it does not
+-- receive the cross-tenant dispatcher capability owned by the dedicated worker role.
 GRANT SELECT, INSERT ON outbox.events TO :"runtime_role";
 GRANT UPDATE (attempt_count, last_attempt_at, claim_token, claimed_at, published_at)
   ON outbox.events TO :"runtime_role";
 
--- Domain histories are append-only. Runtime may read tenant-scoped history and append new versions.
+-- Authorized tenant workflows may schedule and inspect their own jobs through RLS.
+-- Lifecycle mutation remains column-scoped; immutable ownership/contract fields are protected.
+GRANT SELECT, INSERT ON jobs.jobs TO :"runtime_role";
+GRANT UPDATE (
+  status,
+  available_at,
+  attempt_count,
+  lease_token,
+  leased_at,
+  lease_expires_at,
+  last_heartbeat_at,
+  last_error_code,
+  last_error_class,
+  last_completed_at,
+  completed_at,
+  cancelled_at,
+  updated_at
+) ON jobs.jobs TO :"runtime_role";
+
+-- System schedules are invisible and non-mutable to the normal application runtime.
+REVOKE ALL PRIVILEGES ON jobs.system_jobs FROM :"runtime_role";
+
 GRANT SELECT, INSERT ON configuration.setting_versions TO :"runtime_role";
 GRANT SELECT, INSERT ON feature_flags.rule_versions TO :"runtime_role";
 
--- Central audit is append-only. SELECT is column-limited to satisfy INSERT ... RETURNING id, occurred_at.
 GRANT INSERT ON audit.audit_events TO :"runtime_role";
 GRANT SELECT (id, occurred_at) ON audit.audit_events TO :"runtime_role";
 
--- RLS tenant resolution is explicit; backend authorization remains mandatory.
 GRANT EXECUTE ON FUNCTION security.current_tenant_id() TO :"runtime_role";
 
--- Explicit negative boundary: runtime performs no hard delete on current application/audit/outbox tables.
 REVOKE DELETE ON
   organization.tenants,
   organization.companies,
@@ -117,10 +135,11 @@ REVOKE DELETE ON
   feature_flags.rules,
   feature_flags.rule_versions,
   idempotency.records,
-  outbox.events
+  outbox.events,
+  jobs.jobs,
+  jobs.system_jobs
 FROM :"runtime_role";
 
--- Platform-owned catalogs and append-only trails must not be mutated beyond their narrow contract.
 REVOKE INSERT, UPDATE ON security.permissions FROM :"runtime_role";
 REVOKE INSERT, UPDATE ON configuration.definitions FROM :"runtime_role";
 REVOKE INSERT, UPDATE ON feature_flags.flags FROM :"runtime_role";

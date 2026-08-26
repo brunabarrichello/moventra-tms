@@ -27,6 +27,13 @@ function runProcess(command, args, { env = {}, input = '' } = {}) {
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', reject);
+    child.stdin.on('error', (error) => {
+      // A fast mock/failed child can close its read end before Node flushes stdin.
+      // The exit status/stdout/stderr remain the authoritative subprocess result.
+      if (error?.code !== 'EPIPE') {
+        reject(error);
+      }
+    });
     child.on('close', (code, signal) => { resolve({ code, signal, stdout, stderr }); });
     child.stdin.end(input);
   });

@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 022 remains materialized after conclusion through Outbox 023 and Messaging 024', () => {
+test('phase 022 remains materialized after conclusion through Outbox 023, Messaging 024 and Jobs 025', () => {
   for (const path of [
     'db/migrations/0014_idempotency.sql',
     'db/validation/0014_idempotency_validation.sql',
@@ -20,12 +20,15 @@ test('phase 022 remains materialized after conclusion through Outbox 023 and Mes
     'src/modules/outbox/outbox-service.js',
     'docs/implementation/024-mensageria.md',
     'src/modules/messaging/message-envelope.js',
+    'docs/implementation/025-jobs.md',
+    'db/migrations/0016_jobs.sql',
+    'src/modules/jobs/job-worker.js',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
   }
 
   assert.equal(existsSync(new URL('../../db/migrations/0016_messaging.sql', import.meta.url)), false);
-  assert.equal(existsSync(new URL('../../src/modules/jobs/', import.meta.url)), false);
+  assert.equal(existsSync(new URL('../../src/modules/dlq/', import.meta.url)), false);
 
   const idempotencyDoc = read('docs/implementation/022-idempotencia.md');
   assert.match(idempotencyDoc, /^# 022 — Idempotência/m);
@@ -38,7 +41,10 @@ test('phase 022 remains materialized after conclusion through Outbox 023 and Mes
 
   const messagingDoc = read('docs/implementation/024-mensageria.md');
   assert.match(messagingDoc, /^# 024 — Mensageria/m);
-  assert.match(messagingDoc, /## Estado\s+`ACTIVE \/ DEFINED`/i);
+
+  const jobsDoc = read('docs/implementation/025-jobs.md');
+  assert.match(jobsDoc, /^# 025 — Jobs/m);
+  assert.match(jobsDoc, /`ACTIVE \/ IMPLEMENTED \/ AWAITING CI\+RELEASE EVIDENCE`/i);
 });
 
 test('idempotency persistence has tenant uniqueness, RLS, expiry and no plaintext client key column', () => {

@@ -1,0 +1,186 @@
+name: Moventra Jobs Contract
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moventra-jobs-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jobs-contract:
+    name: Durable Jobs + Outbox Dispatcher contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: moventra_jobs_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: moventra-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d moventra_jobs_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      rabbitmq:
+        image: rabbitmq:4.3.5-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: moventra_ci
+          RABBITMQ_DEFAULT_PASS: moventra-ci-only
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: moventra_jobs_ci
+      PGUSER: postgres
+      PGPASSWORD: moventra-ci-only
+      WORKER_APP_ROLE: moventra_worker_app_ci
+      WORKER_CI_PASSWORD: moventra-worker-ci-only
+      MOVENTRA_ENV: ci
+      MESSAGING_PROVIDER: rabbitmq
+      MESSAGING_EXCHANGE: moventra.events.jobsci
+      MESSAGING_PREFETCH: 20
+      MESSAGING_PUBLISH_CONFIRM_TIMEOUT_MS: 5000
+      RABBITMQ_CI_USER: moventra_ci
+      RABBITMQ_CI_PASSWORD: moventra-ci-only
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Build ephemeral CI database connection
+        run: |
+          set -euo pipefail
+          scheme='postgresql:'
+          slashes='//'
+          printf 'DATABASE_URL=%s%s%s:%s@%s:%s/%s\n' \
+            "$scheme" "$slashes" "$PGUSER" "$PGPASSWORD" "$PGHOST" "$PGPORT" "$PGDATABASE" >> "$GITHUB_ENV"
+
+      - name: Install locked runtime dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
+
+      - name: Apply complete migration history
+        run: node scripts/db/migrate.mjs
+
+      - name: Validate Jobs schema and separated principals
+        id: schema_and_access
+        run: |
+          set -euo pipefail
+          psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0016_jobs_validation.sql
+          bash scripts/ci/runtime-access-contract.sh
+          bash scripts/ci/worker-access-contract.sh
+
+      - name: Validate PostgreSQL concurrent claims and lease ownership
+        id: jobs_concurrency
+        run: node scripts/db/validate-jobs-concurrency.mjs
+
+      - name: Validate Jobs unit and architecture contracts
+        id: jobs_tests
+        run: >-
+          node --test
+          tests/unit/jobs-contract.test.js
+          tests/unit/jobs-worker.test.js
+          tests/unit/outbox-dispatcher-job.test.js
+          tests/architecture/jobs-phase.test.js
+
+      - name: Validate real Outbox to RabbitMQ dispatch under worker principal
+        id: rabbitmq_dispatch
+        run: |
+          set -euo pipefail
+          export MESSAGING_RABBITMQ_URL="amqp://${RABBITMQ_CI_USER}:${RABBITMQ_CI_PASSWORD}@127.0.0.1:5672/"
+          node scripts/ci/validate-jobs-outbox-dispatcher.mjs
+
+      - name: Smoke dedicated worker runtime under dedicated login principal
+        id: worker_runtime
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          scheme='postgresql:'
+          slashes='//'
+          export DATABASE_URL="${scheme}${slashes}${WORKER_APP_ROLE}:${WORKER_CI_PASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+          export MESSAGING_RABBITMQ_URL="amqp://${RABBITMQ_CI_USER}:${RABBITMQ_CI_PASSWORD}@127.0.0.1:5672/"
+
+          node src/worker.js > evidence/jobs-worker-runtime.log 2>&1 &
+          worker_pid=$!
+          sleep 3
+
+          if ! kill -0 "$worker_pid" 2>/dev/null; then
+            cat evidence/jobs-worker-runtime.log
+            wait "$worker_pid" || true
+            exit 1
+          fi
+
+          kill -TERM "$worker_pid"
+          if ! wait "$worker_pid"; then
+            cat evidence/jobs-worker-runtime.log
+            exit 1
+          fi
+
+          grep -q '"event":"jobs.worker.started"' evidence/jobs-worker-runtime.log
+          grep -q '"event":"jobs.worker.stopped"' evidence/jobs-worker-runtime.log
+          if grep -q '"event":"jobs.worker.failed"' evidence/jobs-worker-runtime.log; then
+            cat evidence/jobs-worker-runtime.log
+            exit 1
+          fi
+
+      - name: Record contract evidence
+        if: always()
+        env:
+          SCHEMA_ACCESS_OUTCOME: ${{ steps.schema_and_access.outcome }}
+          CONCURRENCY_OUTCOME: ${{ steps.jobs_concurrency.outcome }}
+          TESTS_OUTCOME: ${{ steps.jobs_tests.outcome }}
+          RABBITMQ_OUTCOME: ${{ steps.rabbitmq_dispatch.outcome }}
+          WORKER_RUNTIME_OUTCOME: ${{ steps.worker_runtime.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/jobs-contract.txt <<EOF
+          product=Moventra TMS
+          phase=025-jobs
+          commit_sha=${GITHUB_SHA}
+          workflow_run_id=${GITHUB_RUN_ID}
+          workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
+          postgres_and_principal_contract=${SCHEMA_ACCESS_OUTCOME}
+          jobs_concurrency=${CONCURRENCY_OUTCOME}
+          unit_and_architecture=${TESTS_OUTCOME}
+          rabbitmq_outbox_dispatch=${RABBITMQ_OUTCOME}
+          dedicated_worker_runtime=${WORKER_RUNTIME_OUTCOME}
+          EOF
+
+      - name: Upload Jobs contract evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jobs-contract-${{ github.sha }}
+          path: evidence/jobs-contract.txt
+          if-no-files-found: error
+          retention-days: 90

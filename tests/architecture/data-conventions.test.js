@@ -9,6 +9,7 @@ const conventionsPath = path.join(root, 'docs/data/DATA-CONVENTIONS.md');
 const migrationsDirectory = path.join(root, 'db/migrations');
 
 const snakeCaseIdentifier = /^[a-z][a-z0-9_]*$/;
+const sqlExpressionKeywords = new Set(['and', 'between', 'in', 'is', 'not', 'or']);
 
 function sqlCodeLines(sql) {
   return sql
@@ -100,7 +101,7 @@ test('SQL migrations obey machine-checkable data conventions', async () => {
       }
 
       const timestampMatch = /^([a-z][a-z0-9_]*_at)\s+([a-z][a-z0-9_]*(?:\([^)]*\))?)(?:\s|,|$)/i.exec(line);
-      if (timestampMatch) {
+      if (timestampMatch && !sqlExpressionKeywords.has(timestampMatch[2].toLowerCase())) {
         assert.match(
           timestampMatch[2],
           /^timestamptz\b/i,
