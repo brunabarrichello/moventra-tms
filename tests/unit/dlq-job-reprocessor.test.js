@@ -53,6 +53,7 @@ function source(overrides = {}) {
     maxAttempts: 3,
     scheduleKey: null,
     recurrenceIntervalMs: null,
+    ...overrides,
   });
 }
 
@@ -78,25 +79,36 @@ function child(overrides = {}) {
   });
 }
 
-function createHarness({
-  current = entry(),
-  requested = entry({ status: 'reprocess_pending', version: 5 }),
-  claimed = entry({
+function createHarness(options = {}) {
+  const current = options.current ?? entry();
+  const requested = options.requested ?? Object.freeze({
+    ...current,
+    status: 'reprocess_pending',
+    version: current.version + 1,
+  });
+  const claimed = options.claimed ?? Object.freeze({
+    ...requested,
     status: 'reprocessing',
-    version: 6,
-    reprocessCount: 1,
+    version: requested.version + 1,
+    reprocessCount: current.reprocessCount + 1,
     reprocessClaimToken: CLAIM_TOKEN,
-  }),
-  authoritativeJob = source(),
-  rescheduledJob = child(),
-  completed = entry({
-    status: 'resolved',
-    version: 7,
-    reprocessCount: 1,
-    resolutionCode: 'job_reprocessed',
-  }),
-  registryError = null,
-} = {}) {
+  });
+  const authoritativeJob = Object.hasOwn(options, 'authoritativeJob')
+    ? options.authoritativeJob
+    : source();
+  const rescheduledJob = Object.hasOwn(options, 'rescheduledJob')
+    ? options.rescheduledJob
+    : child();
+  const completed = Object.hasOwn(options, 'completed')
+    ? options.completed
+    : Object.freeze({
+      ...claimed,
+      status: 'resolved',
+      version: claimed.version + 1,
+      resolutionCode: 'job_reprocessed',
+    });
+  const registryError = options.registryError ?? null;
+
   const calls = {
     request: [],
     claim: [],
@@ -126,9 +138,9 @@ function createHarness({
     async failReprocess(input) {
       calls.fail.push(input);
       return entry({
+        ...claimed,
         status: 'quarantined',
-        version: 7,
-        reprocessCount: claimed?.reprocessCount ?? 1,
+        version: claimed.version + 1,
         nextReprocessAt: input.nextReprocessAt,
         lastFailureCode: input.failureCode,
       });
@@ -167,7 +179,7 @@ function createHarness({
     maxDelayMs: 10_000,
   });
 
-  return { service, calls };
+  return { service, calls, fixtures: { current, requested, claimed, authoritativeJob, rescheduledJob } };
 }
 
 test('reprocessa Job terminal por releitura autoritativa e cria somente Job filho durável', async () => {
@@ -192,9 +204,8 @@ test('reprocessa Job terminal por releitura autoritativa e cria somente Job filh
 });
 
 test('retoma reprocess_pending com optimistic concurrency sem repetir request', async () => {
-  const { service, calls } = createHarness({
-    current: entry({ status: 'reprocess_pending', version: 5 }),
-  });
+  const pending = entry({ status: 'reprocess_pending', version: 5 });
+  const { service, calls } = createHarness({ current: pending });
 
   await service.reprocess({ id: ENTRY_ID, expectedVersion: 5 });
 
@@ -203,10 +214,13 @@ test('retoma reprocess_pending com optimistic concurrency sem repetir request', 
   assert.equal(calls.reschedule.length, 1);
 });
 
-test('rejeita snapshot/job autoritativo divergente antes de reschedule', async () => {
-  const { service, calls } = createHarness({
-    authoritativeJob: source({ jobType: 'freight.other_job' }),
-  });
+test('rejeita Job autoritativo divergente antes de reschedule', async () => {
+  const mismatchedJob = source({ jobType: 'freight.other_job' });
+  assert.notEqual(mismatchedJob.jobType, entry().sourceType);
+
+  const { service, calls, fixtures } = createHarness({ authoritativeJob: mismatchedJob });
+  assert.equal(fixtures.claimed.sourceType, 'freight.recalculate_eta');
+  assert.equal(fixtures.authoritativeJob.jobType, 'freight.other_job');
 
   await assert.rejects(
     service.reprocess({ id: ENTRY_ID, expectedVersion: 4 }),
@@ -219,9 +233,11 @@ test('rejeita snapshot/job autoritativo divergente antes de reschedule', async (
 });
 
 test('rejeita Job que deixou de estar failed_terminal', async () => {
-  const { service, calls } = createHarness({
-    authoritativeJob: source({ status: 'succeeded' }),
-  });
+  const nonTerminalJob = source({ status: 'succeeded' });
+  assert.equal(nonTerminalJob.status, 'succeeded');
+
+  const { service, calls, fixtures } = createHarness({ authoritativeJob: nonTerminalJob });
+  assert.equal(fixtures.authoritativeJob.status, 'succeeded');
 
   await assert.rejects(
     service.reprocess({ id: ENTRY_ID, expectedVersion: 4 }),
@@ -310,14 +326,16 @@ test('suporta system-scoped internamente sem representar tenant nulo em tabela t
     tenantId: null,
     jobType: 'system.outbox_dispatch',
   });
-  const { service, calls } = createHarness({
+  const { service, calls, fixtures } = createHarness({
     current: systemEntry,
-    requested: systemEntry,
-    claimed: Object.freeze({ ...systemEntry, status: 'reprocessing', reprocessCount: 1 }),
     authoritativeJob: systemSource,
     rescheduledJob: systemChild,
-    completed: Object.freeze({ ...systemEntry, status: 'resolved' }),
   });
+
+  assert.equal(fixtures.claimed.scope, 'system');
+  assert.equal(fixtures.claimed.sourceType, 'system.outbox_dispatch');
+  assert.equal(fixtures.authoritativeJob.scope, 'system');
+  assert.equal(fixtures.authoritativeJob.jobType, 'system.outbox_dispatch');
 
   const result = await service.reprocess({ id: ENTRY_ID, expectedVersion: 4 });
 
