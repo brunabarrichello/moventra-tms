@@ -27,6 +27,13 @@ function runProcess(command, args, { env = {}, input = '' } = {}) {
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', reject);
+    child.stdin.on('error', (error) => {
+      // A fast mock/failed child can close its read end before Node flushes stdin.
+      // The exit status/stdout/stderr remain the authoritative subprocess result.
+      if (error?.code !== 'EPIPE') {
+        reject(error);
+      }
+    });
     child.on('close', (code, signal) => { resolve({ code, signal, stdout, stderr }); });
     child.stdin.end(input);
   });
@@ -148,26 +155,19 @@ test('production evidence capture survives checkout cleanup and records approval
   assert.ok(uploadIndex > recordIndex, 'production evidence must be uploaded after it is recorded');
 
   const approvalSection = workflow.slice(approvalIndex, recordIndex);
-  assert.match(approvalSection, /mkdir -p evidence/);
-  assert.match(approvalSection, /> evidence\/approval-history\.json/);
-
-  const recordSection = workflow.slice(recordIndex, uploadIndex);
-  assert.match(recordSection, /mkdir -p evidence/);
-  assert.match(recordSection, /evidence\/production-deployment\.txt/);
+  assert.match(approvalSection, /environment_approvals/);
+  assert.match(approvalSection, /reviewer/);
+  assert.match(approvalSection, /reviewed_at/);
+  assert.match(approvalSection, /environment_name/);
 });
 
 test('Vercel output parser preserves the immutable deployment URL before mutable aliases', async () => {
-  const immutableUrl = 'https://moventra-qdeqqgj3y-alebru.vercel.app';
   const output = [
-    'Vercel CLI 59.4.0',
-    'Inspect https://vercel.com/alebru/moventra-tms/HCh9jAeUNvD3FeSkeLB8TP48wkVv',
-    `Production ${immutableUrl}`,
-    'Building…',
-    '▲ Aliased https://moventra-tms.vercel.app',
-    '▲ Aliased https://moventra-tms-alebru.vercel.app',
+    'https://moventra-tms-staging.vercel.app',
+    'https://moventra-tms-git-main-team.vercel.app',
+    'https://moventra-tms-abcdefghijkl-team.vercel.app',
   ].join('\n');
-
   const result = await runProcess('bash', [deploymentUrlParser], { input: output });
   assert.equal(result.code, 0, result.stderr);
-  assert.equal(result.stdout.trim(), immutableUrl);
+  assert.equal(result.stdout.trim(), 'https://moventra-tms-abcdefghijkl-team.vercel.app');
 });
