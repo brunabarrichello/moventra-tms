@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${DATABASE_URL:?DATABASE_URL is required for governed database migration promotion}"
+: "${MIGRATIONS_DATABASE_URL:?MIGRATIONS_DATABASE_URL is required for governed database migration promotion}"
+
+# Runtime credentials must never be promoted to DDL authority. The existing migration
+# runner consumes DATABASE_URL internally, so scope it only to this process from the
+# protected migration credential. MIGRATIONS_DATABASE_URL must never be synchronized
+# to Vercel, Railway or any application runtime.
+export DATABASE_URL="$MIGRATIONS_DATABASE_URL"
 
 mapfile -t migration_files < <(find db/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9][0-9]_*.sql' -print | sort)
 test "${#migration_files[@]}" -gt 0 || {
