@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 
 const MIGRATION_PATTERN = /^(\d{4})_([a-z0-9_]+)\.sql$/;
 const MIGRATION_LOCK_NAMESPACE = 6006;
+const SAFE_ROLE_OPTION_PATTERN = /^-c\s+role=([a-z_][a-z0-9_]{0,62})$/;
 const root = process.cwd();
 const migrationsDirectory = resolve(root, 'db/migrations');
 const statusOnly = process.argv.includes('--status');
@@ -50,6 +51,7 @@ function buildConnectionEnvironment() {
   const environment = { ...process.env };
   const databaseUrl = environment.DATABASE_URL;
   delete environment.DATABASE_URL;
+  delete environment.PGOPTIONS;
 
   if (databaseUrl) {
     const parsed = new URL(databaseUrl);
@@ -70,6 +72,7 @@ function buildConnectionEnvironment() {
 
     const sslMode = parsed.searchParams.get('sslmode');
     const channelBinding = parsed.searchParams.get('channel_binding');
+    const options = parsed.searchParams.get('options');
 
     if (sslMode) {
       environment.PGSSLMODE = sslMode;
@@ -77,6 +80,16 @@ function buildConnectionEnvironment() {
 
     if (channelBinding) {
       environment.PGCHANNELBINDING = channelBinding;
+    }
+
+    if (options) {
+      const roleOption = SAFE_ROLE_OPTION_PATTERN.exec(options);
+
+      if (!roleOption) {
+        throw new Error('DATABASE_URL options only supports -c role=<safe_role_name>');
+      }
+
+      environment.PGOPTIONS = `-c role=${roleOption[1]}`;
     }
   }
 
