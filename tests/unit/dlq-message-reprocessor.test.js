@@ -262,16 +262,22 @@ test('mismatch entre DLQ imutável e Outbox autoritativo impede publicação', a
 });
 
 test('snapshot witness divergente bloqueia publicação sem usar snapshot como source', async () => {
+  const mismatchedSnapshot = Object.freeze({
+    messageId: SOURCE_ID,
+    eventId: SOURCE_ID,
+    tenantId: TENANT_ID,
+    eventType: 'freight.wrong_event',
+    schemaVersion: 1,
+    payload: { staleSnapshot: true },
+  });
   const { service, calls } = createHarness({
-    current: entry({
-      snapshot: Object.freeze({
-        messageId: SOURCE_ID,
-        eventId: SOURCE_ID,
-        tenantId: TENANT_ID,
-        eventType: 'freight.wrong_event',
-        schemaVersion: 1,
-        payload: { staleSnapshot: true },
-      }),
+    current: entry({ snapshot: mismatchedSnapshot }),
+    claimed: entry({
+      status: 'reprocessing',
+      version: 9,
+      reprocessCount: 1,
+      reprocessClaimToken: CLAIM_TOKEN,
+      snapshot: mismatchedSnapshot,
     }),
   });
 
