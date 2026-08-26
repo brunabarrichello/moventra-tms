@@ -50,6 +50,8 @@ try {
       publisher: messagingAdapter,
       batchSize: integerSetting('OUTBOX_DISPATCH_BATCH_SIZE', 50, 1, 500),
       claimTtlMs: integerSetting('OUTBOX_DISPATCH_CLAIM_TTL_MS', 60_000, 1_000, 3_600_000),
+      idleBackoffBaseMs: integerSetting('OUTBOX_DISPATCH_IDLE_BACKOFF_BASE_MS', 1_000, 100, 60_000),
+      idleBackoffMaxMs: integerSetting('OUTBOX_DISPATCH_IDLE_BACKOFF_MAX_MS', 10_000, 100, 60_000),
     }),
   });
   const worker = new JobWorker({
