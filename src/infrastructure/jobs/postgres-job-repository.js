@@ -151,13 +151,16 @@ export class PostgresJobRepository {
     return result.rowCount === 1;
   }
 
-  async completeSuccess({ jobId, leaseToken }) {
+  async completeSuccess({ jobId, leaseToken, nextRunDelayMs = null }) {
+    const normalizedNextRunDelayMs = optionalDelay(nextRunDelayMs);
     const result = await this.query(
       `UPDATE ${this.table}
           SET status = CASE WHEN recurrence_interval_ms IS NULL THEN 'succeeded' ELSE 'scheduled' END,
               available_at = CASE
                 WHEN recurrence_interval_ms IS NULL THEN available_at
-                ELSE clock_timestamp() + (recurrence_interval_ms * interval '1 millisecond')
+                ELSE clock_timestamp() + (
+                  COALESCE($3::bigint, recurrence_interval_ms) * interval '1 millisecond'
+                )
               END,
               attempt_count = CASE WHEN recurrence_interval_ms IS NULL THEN attempt_count ELSE 0 END,
               lease_token = NULL,
@@ -171,7 +174,7 @@ export class PostgresJobRepository {
               updated_at = clock_timestamp()
         WHERE id = $1 AND lease_token = $2 AND status = 'running'
        RETURNING *`,
-      [jobId, leaseToken],
+      [jobId, leaseToken, normalizedNextRunDelayMs],
     );
     return result.rowCount === 1 ? mapJob(result.rows[0], this.scope) : null;
   }
@@ -219,6 +222,17 @@ export class PostgresJobRepository {
     );
     return result.rowCount === 1 ? mapJob(result.rows[0], 'tenant') : null;
   }
+}
+
+function optionalDelay(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 100 || number > 3600000) {
+    throw repositoryError('MVT_JOB_NEXT_RUN_DELAY_INVALID', 'Job next-run delay is invalid');
+  }
+  return number;
 }
 
 function mapJob(row, scope) {
