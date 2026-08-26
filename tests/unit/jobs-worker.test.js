@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JobHandlerRegistry } from '../../src/modules/jobs/job-handler-registry.js';
-import { JobWorker } from '../../src/modules/jobs/job-worker.js';
+import { calculateIdlePollDelay, JobWorker } from '../../src/modules/jobs/job-worker.js';
 
 const JOB = Object.freeze({
   id: '01990250-0000-7000-8000-000000000010',
@@ -131,4 +131,22 @@ test('worker schedules retry only for retryable handler errors', async () => {
   assert.equal(result.retryScheduled, 1);
   assert.equal(repository.state.failed[0].retryable, true);
   assert.equal(repository.state.failed[0].delayMs, 1000);
+});
+
+test('idle polling doubles after empty cycles and is capped by the configured maximum', () => {
+  assert.equal(calculateIdlePollDelay({ currentMs: 1000, baseMs: 1000, maxMs: 5000 }), 2000);
+  assert.equal(calculateIdlePollDelay({ currentMs: 2000, baseMs: 1000, maxMs: 5000 }), 4000);
+  assert.equal(calculateIdlePollDelay({ currentMs: 4000, baseMs: 1000, maxMs: 5000 }), 5000);
+  assert.equal(calculateIdlePollDelay({ currentMs: 5000, baseMs: 1000, maxMs: 5000 }), 5000);
+});
+
+test('worker rejects an idle polling ceiling below the base interval', () => {
+  const repository = fakeRepository();
+  const registry = new JobHandlerRegistry().register({
+    jobType: JOB.jobType, scope: 'system', handler: async () => {},
+  });
+  assert.throws(
+    () => new JobWorker({ repository, registry, idlePollMs: 2000, idlePollMaxMs: 1000 }),
+    /idlePollMaxMs must be an integer between 2000 and 300000/,
+  );
 });
