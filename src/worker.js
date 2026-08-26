@@ -54,7 +54,12 @@ try {
   });
 
   const idlePollMs = integerSetting('JOBS_IDLE_POLL_MS', 1_000, 100, 60_000);
-  const idlePollMaxMs = integerSetting('JOBS_IDLE_POLL_MAX_MS', 5_000, idlePollMs, 300_000);
+  const idlePollMaxMs = integerSetting(
+    'JOBS_IDLE_POLL_MAX_MS',
+    Math.max(5_000, idlePollMs),
+    idlePollMs,
+    300_000,
+  );
   const worker = new JobWorker({
     repository: jobRepository,
     registry,
