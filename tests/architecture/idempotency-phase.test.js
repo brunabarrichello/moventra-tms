@@ -44,7 +44,7 @@ test('phase 022 remains materialized after conclusion through Outbox 023, Messag
 
   const jobsDoc = read('docs/implementation/025-jobs.md');
   assert.match(jobsDoc, /^# 025 — Jobs/m);
-  assert.match(jobsDoc, /`ACTIVE \/ DEFINED`/i);
+  assert.match(jobsDoc, /`ACTIVE \/ IMPLEMENTED \/ AWAITING CI\+RELEASE EVIDENCE`/i);
 });
 
 test('idempotency persistence has tenant uniqueness, RLS, expiry and no plaintext client key column', () => {
@@ -74,21 +74,32 @@ test('runtime least privilege grants idempotency mutation without DELETE or sche
 test('fingerprints are versioned SHA-256 values and strip transport-only metadata', () => {
   const fingerprint = read('src/modules/idempotency/fingerprint.js');
   assert.match(fingerprint, /createHash\('sha256'\)/);
-  assert.match(fingerprint, /fingerprintVersion/);
-  assert.doesNotMatch(fingerprint, /authorization|cookie|requestId|correlationId/i);
+  assert.match(fingerprint, /IDEMPOTENCY_FINGERPRINT_VERSION = 1/);
+  assert.match(fingerprint, /IDEMPOTENCY_KEY_HASH_VERSION = 1/);
+  assert.match(fingerprint, /TRANSPORT_ONLY_KEYS/);
+  for (const forbiddenTransportField of ['authorization', 'cookie', 'requestid', 'correlationid', 'traceid']) {
+    assert.match(fingerprint, new RegExp(`'${forbiddenTransportField}'`));
+  }
 });
 
 test('authorized tenant pipeline shares its transaction with idempotency and skips duplicate SUCCESS audit on replay', () => {
   const authorized = read('src/modules/security/authorized-tenant-operation.js');
-  assert.match(authorized, /executeIdempotentOperation/);
-  assert.match(authorized, /operationContext/);
-  assert.match(authorized, /replayed/);
-  assert.match(authorized, /audit/);
+  assert.match(authorized, /createIdempotencyService/);
+  assert.match(authorized, /new PostgresIdempotencyRepository\(\{ query \}\)/);
+  assert.match(authorized, /execute: \(\) => operation\(operationContext\)/);
+  assert.match(authorized, /if \(!idempotentResult\.replayed\)/);
+  assert.match(authorized, /components\.audit\.append/);
 });
 
 test('idempotency telemetry uses only controlled operation/outcome dimensions', () => {
-  const observability = read('src/modules/idempotency/idempotency-observability.js');
-  assert.match(observability, /idempotency_operations_total/);
-  assert.match(observability, /idempotency_operation_duration_ms/);
-  assert.doesNotMatch(observability, /tenantId|keyHash|fingerprint|requestId|correlationId/);
+  const metrics = read('src/infrastructure/observability/metrics.js');
+  const service = read('src/modules/idempotency/idempotency-service.js');
+
+  assert.match(metrics, /idempotency_requests_total/);
+  assert.match(metrics, /idempotency_duration_ms/);
+  assert.match(metrics, /normalizeIdempotencyOperationKey/);
+  assert.doesNotMatch(metrics, /keyHash|key_hash|fingerprint|idempotencyKey|tenantId|userId/);
+
+  assert.match(service, /event: 'idempotency\.operation\.completed'/);
+  assert.match(service, /operationKey,\n\s+outcome,\n\s+durationMs/);
 });
