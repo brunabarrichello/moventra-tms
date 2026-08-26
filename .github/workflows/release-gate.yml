@@ -155,6 +155,7 @@ jobs:
       - name: Validate protected staging credentials
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MIGRATIONS_DATABASE_URL: ${{ secrets.MIGRATIONS_DATABASE_URL }}
           MESSAGING_RABBITMQ_URL: ${{ secrets.MESSAGING_RABBITMQ_URL }}
         run: |
           set -euo pipefail
@@ -162,6 +163,7 @@ jobs:
           test -n "$VERCEL_ORG_ID" || { echo '::error::VERCEL_ORG_ID is required'; exit 1; }
           test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
           test -n "$DATABASE_URL" || { echo '::error::DATABASE_URL is required in the protected GitHub staging environment'; exit 1; }
+          test -n "$MIGRATIONS_DATABASE_URL" || { echo '::error::MIGRATIONS_DATABASE_URL is required in the protected GitHub staging environment'; exit 1; }
           test -n "$MESSAGING_RABBITMQ_URL" || { echo '::error::MESSAGING_RABBITMQ_URL is required in the protected GitHub staging environment'; exit 1; }
 
       - name: Converge staging Vercel project
@@ -223,7 +225,7 @@ jobs:
       - name: Apply governed staging database migrations
         id: migration
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MIGRATIONS_DATABASE_URL: ${{ secrets.MIGRATIONS_DATABASE_URL }}
         run: |
           set -euo pipefail
           result="$(bash scripts/release/apply-database-migrations.sh)"
