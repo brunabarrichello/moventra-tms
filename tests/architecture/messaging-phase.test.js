@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 024 remains materialized provider-neutral while Jobs 025 is active', () => {
+test('phase 024 remains materialized provider-neutral after Jobs 025 conclusion', () => {
   for (const path of [
     'src/modules/messaging/message-envelope.js',
     'src/modules/messaging/messaging-ports.js',
@@ -74,12 +74,12 @@ test('messaging observability uses only controlled low-cardinality dimensions', 
   assert.doesNotMatch(observability, /tenantId|messageId|eventId|correlationId|routingKey|queueName|payload/);
 });
 
-test('phase 025 owns recurring execution and administrative DLQ 026 remains inactive', () => {
+test('phase 025 is concluded and administrative DLQ 026 remains inactive', () => {
   const messagingDoc = read('docs/implementation/024-mensageria.md');
   const jobsDoc = read('docs/implementation/025-jobs.md');
   assert.match(messagingDoc, /^# 024 — Mensageria/m);
   assert.match(jobsDoc, /^# 025 — Jobs/m);
-  assert.match(jobsDoc, /`ACTIVE \/ IMPLEMENTED \/ AWAITING CI\+RELEASE EVIDENCE`/i);
+  assert.match(jobsDoc, /`EVIDENCED \/ CONCLUDED`/i);
   assert.match(jobsDoc, /Outbox Dispatcher/i);
   assert.match(jobsDoc, /026 — DLQ.*NOT ACTIVE/is);
   assert.match(messagingDoc, /at-least-once/i);
