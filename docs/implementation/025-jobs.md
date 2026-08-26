@@ -2,11 +2,15 @@
 
 ## Estado
 
-`ACTIVE / IMPLEMENTED / AWAITING CI+RELEASE EVIDENCE`
+`EVIDENCED / CONCLUDED`
 
-A fase 024 — Mensageria foi concluída e evidenciada em Production para a revisão funcional `93354cce0119cad56a39c29e4adf237043183da1`. A fase 025 — Jobs é a etapa oficial ativa. A fase 026 — DLQ e posteriores permanecem `NOT ACTIVE`.
+A fase 024 — Mensageria está concluída e a fase 025 — Jobs foi implementada, validada em CI, evidenciada em Staging, promovida de forma protegida para Production e comprovada em runtime real na revisão canônica `d6fcf32e56d812cc8df90fc9a4ef2191c18a4173`.
+
+A fase 026 — DLQ é a próxima etapa oficial, porém permanece `NOT ACTIVE` até ativação explícita em uma execução subsequente.
 
 Issue oficial: #110.
+
+Página Confluence de conclusão: `025 — Jobs — Conclusão e Evidências` (page ID `6225921`).
 
 ## Objetivo
 
@@ -120,7 +124,7 @@ updated_at               timestamptz NOT NULL
 RLS:
 
 ```text
-USING     tenant_id = security.current_tenant_id()
+USING      tenant_id = security.current_tenant_id()
 WITH CHECK tenant_id = security.current_tenant_id()
 ```
 
@@ -396,7 +400,7 @@ DATABASE_URL=<worker PostgreSQL credential, secret>
 MESSAGING_RABBITMQ_URL=<worker RabbitMQ credential, secret>
 ```
 
-Production e Staging devem usar credenciais segregadas por ambiente. A credencial PostgreSQL do worker não deve ser a mesma do runtime web.
+Production e Staging usam credenciais segregadas por ambiente. A credencial PostgreSQL do worker não é a mesma do runtime web.
 
 ## Observabilidade
 
@@ -485,26 +489,114 @@ system job volta a scheduled
 
 A evidência só é válida se todo o fluxo passar sob o principal dedicado de worker; executar como owner/admin não é suficiente.
 
-### Release
+## Release e evidências finais
 
-Para concluir a fase:
+Critérios de release concluídos:
 
 - CI completo verde;
-- migration 0016 aplicada em Staging;
-- worker PostgreSQL role/credential de menor privilégio em Staging;
-- runtime dedicado de worker executando continuamente em Staging;
-- broker real de Staging;
+- migration 0016 aplicada em Staging e Production;
+- worker PostgreSQL role/credential de menor privilégio em Staging e Production;
+- runtime dedicado de worker executando continuamente em Staging e Production;
+- broker real segregado por ambiente;
 - Outbox Dispatcher observado em execução real;
-- rollback/restore comprovado;
+- rollback/restore comprovado em Staging;
 - mesma arquitetura/segregação em Production;
 - aprovação humana explícita de Production;
-- evidence artifact sem secrets/payloads.
+- evidências sem secrets/payloads sensíveis.
 
-## Risco operacional ainda aberto
+### Revisão e CI
 
-**Vercel HTTP/serverless não é considerado runtime contínuo do JobWorker.** A aplicação web pode permanecer na Vercel, mas `JobWorker.runForever()` exige processo/serviço de worker com lifecycle apropriado.
+```text
+PR técnica                    = #112 = MERGED
+Production/main SHA           = d6fcf32e56d812cc8df90fc9a4ef2191c18a4173
+Foundation CI                 = 32925652721 = success
+Moventra Jobs Contract        = 32925652826 = success
+Moventra CI                   = 32925652778 = success
+Production Promotion          = 32925970284 = success
+```
 
-A fase 025 não será marcada `EVIDENCED / CONCLUDED` apenas porque unit/CI passou. É necessário provisionar e provar um runtime dedicado real em Staging e Production.
+### Migrations Production
+
+```text
+0015_outbox.sql checksum = d04165f94f2d3f073754d4b45f12fde66b0685abc418c197e35a75ee9303f845
+0016_jobs.sql checksum   = 1c3f6681dd17ae39d5720396b661cd5d4691168af9c55c8b8f92f0e0b753188e
+migration history        = 1–16 contiguous
+backup branch            = pre-production-025-20260826 / br-autumn-paper-auh5hx3a
+```
+
+### Runtime Production
+
+```text
+Railway project          = moventra-tms-production
+Railway service          = moventra-worker-production
+Production deployment    = a6e55b5d-7807-460b-97e4-427f1e33dcc7 = SUCCESS
+source                    = brunabarrichello/moventra-tms / main
+runtime                   = exec node src/worker.js
+region                    = iad / 1 replica
+DB principal              = moventra_worker_app_production
+handler                   = system.outbox_dispatch
+```
+
+O build de Production fixa e verifica o SHA canônico antes de gerar o artefato do worker. Secrets de banco e RabbitMQ permanecem apenas nos stores protegidos e nunca são registrados em documentação/log operacional.
+
+### Smoke real Outbox → RabbitMQ Production
+
+Evento sintético controlado:
+
+```text
+event id       = 01a03c25-0000-7000-8000-000000000026
+event type     = system.production_smoke
+attempt_count  = 1
+claim_token    = NULL
+claimed_at     = NULL
+published_at   = 2026-08-26T03:37:16.877Z
+```
+
+Sequência observada:
+
+```text
+Outbox claim success
+→ Messaging connect success
+→ Messaging publish success
+→ publisher confirm
+→ Outbox mark_published success
+→ system.outbox_dispatch execute success
+```
+
+Revalidação posterior manteve `attempt_count=1` e o mesmo `published_at`. Isso comprova ausência de uma segunda transição de publicação observada, sem alterar a garantia oficial **at-least-once**.
+
+### Lease recovery Production
+
+O schedule `system.outbox_dispatch` foi colocado de forma controlada em `running` com lease já expirado. O worker recuperou automaticamente e retornou para:
+
+```text
+status             = scheduled
+attempt_count      = 0
+lease_token        = NULL
+leased_at          = NULL
+lease_expires_at   = NULL
+last_heartbeat_at  = NULL
+last_completed_at  = advancing
+```
+
+### Rollback / restore / shutdown
+
+Em Staging foram comprovados o rollback operacional sem down-migration, a durabilidade de evento enquanto o worker esteve indisponível, o restore da revisão aprovada, a recuperação do Outbox pendente e graceful SIGTERM do processo Node direto.
+
+Uma repetição adicional de `redeploy` exclusivamente para repetir SIGTERM em Production foi bloqueada pelo controle de segurança do conector e não foi contornada. O comportamento já está coberto por testes/CI e por evidência operacional de Staging sobre o mesmo entrypoint/runtime aprovado.
+
+## Riscos e hardenings não bloqueantes
+
+O risco estrutural de usar Vercel serverless como loop contínuo foi resolvido: o worker possui runtime dedicado em Railway, separado da aplicação web.
+
+Hardenings registrados para evolução:
+
+- tornar a intenção TLS PostgreSQL explicitamente `verify-full` antes de futura mudança major do `pg`/`pg-connection-string`;
+- ajustar `serviceVersion` da telemetria do worker para refletir o SHA de release em vez de `development`;
+- evoluir o plano de hosting do worker para oferta com SLA/redundância compatíveis com Production empresarial quando a operação comercial exigir HA superior a uma réplica;
+- manter shutdown da observabilidade fail-soft, sem permitir que exporter/SDK altere a correção do Job.
+
+Nenhum desses itens altera a correção do scheduler, lease, Outbox Dispatcher, publisher confirm, isolamento tenant ou least privilege comprovados nesta fase.
 
 ## Fora do escopo
 
@@ -534,14 +626,20 @@ exactly-once fim a fim
 - [x] Outbox Dispatcher implementado;
 - [x] publisher confirm antes de `markPublished` implementado;
 - [x] application runtime e worker DB principals separados no contrato;
-- [ ] CI completo verde;
-- [ ] Staging com migration + worker dedicado evidenciado;
-- [ ] rollback/restore;
-- [ ] Production protegida e evidenciada;
-- [ ] Issue #110 / Confluence / docs finais sincronizados.
+- [x] CI completo verde;
+- [x] Staging com migration + worker dedicado evidenciado;
+- [x] rollback/restore evidenciado;
+- [x] Production protegida e evidenciada;
+- [x] Issue #110 atualizada com evidências finais;
+- [x] Confluence final sincronizado;
+- [x] documentação final da 025 sincronizada.
 
 ## Próxima etapa após conclusão
 
-Somente depois da conclusão formal da 025 poderá ser ativada:
+A fase 025 está formalmente `EVIDENCED / CONCLUDED`.
+
+A próxima etapa oficial é:
 
 `026 — DLQ`
+
+A 026 permanece `NOT ACTIVE` neste fechamento e deverá ser ativada em execução própria, preservando a governança e a sequência oficial do projeto.
