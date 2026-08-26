@@ -49,6 +49,8 @@ reprocessing
                            ou exhausted no limite
 ```
 
+Uma operação interrompida depois de persistir `reprocess_pending` e antes de adquirir o claim pode ser retomada a partir desse estado, desde que o chamador apresente a **versão corrente**. A retomada não repete a transição `quarantined → reprocess_pending` e não ignora optimistic concurrency.
+
 ## Fonte autoritativa
 
 Para `source_kind=message`, `source_id` corresponde ao `outbox.events.id` original.
@@ -96,7 +98,7 @@ completeReprocess(claimToken)
 failReprocess(claimToken, failureCode, nextReprocessAt)
 ```
 
-A solicitação exige `version` esperada e somente aceita `status=quarantined` dentro do limite de tentativas.
+A solicitação exige `version` esperada e somente aceita `status=quarantined` dentro do limite de tentativas. `reprocess_pending` somente pode ser retomado se a `expectedVersion` coincidir com a versão já persistida.
 
 O SQL de `requestReprocess` passa a exigir também:
 
@@ -157,7 +159,7 @@ Responsabilidades:
 ```text
 DlqMessageReprocessor
   → valida entrada tenant/message
-  → solicita transição com expectedVersion
+  → solicita transição com expectedVersion ou retoma pending com versão corrente
   → adquire claim bounded
   → relê Outbox autoritativo
   → valida identidade imutável
@@ -199,11 +201,14 @@ Cobertura adicionada para:
 ```text
 sucesso com payload somente do Outbox autoritativo
 messageId/eventId estáveis
+retomada de reprocess_pending com versão corrente
+retomada pending com versão obsoleta rejeitada
 source_kind=job rejeitado antes de mutação
 optimistic concurrency conflict
 claim conflict sem efeito externo
 Outbox source ausente
 mismatch DLQ ↔ Outbox
+snapshot witness divergente
 publisher sem confirmação
 provider error
 conflito de conclusão após publisher confirm
