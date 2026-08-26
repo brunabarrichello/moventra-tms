@@ -88,7 +88,7 @@ function createHarness({
   };
 
   const dlqRepository = {
-    async findById(input) {
+    async findById() {
       return current;
     },
     async requestReprocess(input) {
@@ -174,6 +174,35 @@ test('reprocessa mensagem usando somente Outbox autoritativo e preserva identida
   assert.equal(calls.fail.length, 0);
 });
 
+test('retoma reprocess_pending com a versão corrente sem repetir request transition', async () => {
+  const { service, calls } = createHarness({
+    current: entry({ status: 'reprocess_pending', version: 8 }),
+  });
+
+  const result = await service.reprocess({ id: ENTRY_ID, expectedVersion: 8 });
+
+  assert.equal(result.confirmed, true);
+  assert.equal(calls.request.length, 0);
+  assert.equal(calls.claim.length, 1);
+  assert.equal(calls.source.length, 1);
+  assert.equal(calls.publish.length, 1);
+});
+
+test('retomada de reprocess_pending preserva optimistic concurrency', async () => {
+  const { service, calls } = createHarness({
+    current: entry({ status: 'reprocess_pending', version: 8 }),
+  });
+
+  await assert.rejects(
+    service.reprocess({ id: ENTRY_ID, expectedVersion: 7 }),
+    (error) => error.code === 'MVT_DLQ_REPROCESS_CONFLICT' && error.retryable === false,
+  );
+
+  assert.equal(calls.request.length, 0);
+  assert.equal(calls.claim.length, 0);
+  assert.equal(calls.publish.length, 0);
+});
+
 test('rejeita source_kind job antes de qualquer mutação de reprocessamento', async () => {
   const { service, calls } = createHarness({ current: entry({ sourceKind: 'job' }) });
 
@@ -230,6 +259,30 @@ test('mismatch entre DLQ imutável e Outbox autoritativo impede publicação', a
   assert.equal(calls.publish.length, 0);
   assert.equal(calls.fail.length, 1);
   assert.equal(calls.fail[0].failureCode, 'MVT_DLQ_SOURCE_MISMATCH');
+});
+
+test('snapshot witness divergente bloqueia publicação sem usar snapshot como source', async () => {
+  const { service, calls } = createHarness({
+    current: entry({
+      snapshot: Object.freeze({
+        messageId: SOURCE_ID,
+        eventId: SOURCE_ID,
+        tenantId: TENANT_ID,
+        eventType: 'freight.wrong_event',
+        schemaVersion: 1,
+        payload: { staleSnapshot: true },
+      }),
+    }),
+  });
+
+  await assert.rejects(
+    service.reprocess({ id: ENTRY_ID, expectedVersion: 7 }),
+    (error) => error.code === 'MVT_DLQ_SNAPSHOT_MISMATCH' && error.retryable === false,
+  );
+
+  assert.equal(calls.publish.length, 0);
+  assert.equal(calls.fail.length, 1);
+  assert.equal(calls.fail[0].failureCode, 'MVT_DLQ_SNAPSHOT_MISMATCH');
 });
 
 test('publisher sem confirmação retorna entrada para ciclo bounded e não resolve', async () => {
