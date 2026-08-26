@@ -11,6 +11,9 @@ import { PostgresJobRepository } from './infrastructure/jobs/postgres-job-reposi
 import { SystemOutboxRepository } from './infrastructure/outbox/system-outbox-repository.js';
 import { RabbitMqMessagingAdapter } from './infrastructure/messaging/rabbitmq/rabbitmq-adapter.js';
 import { resolveMessagingConfig } from './infrastructure/messaging/rabbitmq/rabbitmq-config.js';
+import { SystemDlqIngestionRepository } from './infrastructure/dlq/system-dlq-ingestion-repository.js';
+import { resolveRabbitMqDlqConfig } from './infrastructure/dlq/rabbitmq-dlq-config.js';
+import { RabbitMqDlqIngestionConsumer } from './infrastructure/dlq/rabbitmq-dlq-ingestion.js';
 import { JobHandlerRegistry } from './modules/jobs/job-handler-registry.js';
 import { JobWorker } from './modules/jobs/job-worker.js';
 import {
@@ -20,9 +23,11 @@ import {
 import { OutboxService } from './modules/outbox/outbox-service.js';
 
 const workerLogger = createLogger('jobs-worker');
+const dlqLogger = createLogger('dlq-ingestion');
 const shutdownController = new AbortController();
 let shutdownSignal = null;
 let messagingAdapter = null;
+let dlqConsumer = null;
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.once(signal, () => requestShutdown(signal));
@@ -34,6 +39,16 @@ try {
   const principal = await verifyWorkerDatabasePrincipal();
   const messagingConfig = requireRabbitMqWorkerConfig();
   messagingAdapter = new RabbitMqMessagingAdapter({ config: messagingConfig });
+
+  const dlqRepository = new SystemDlqIngestionRepository({ query: queryDatabase });
+  const dlqConfig = resolveRabbitMqDlqConfig(process.env);
+  dlqConsumer = new RabbitMqDlqIngestionConsumer({
+    messagingAdapter,
+    repository: dlqRepository,
+    config: dlqConfig,
+    logger: dlqLogger,
+  });
+  await dlqConsumer.start();
 
   const jobRepository = new PostgresJobRepository({
     query: queryDatabase,
@@ -80,6 +95,8 @@ try {
     handlers: registry.listTypes(),
     idlePollMs,
     idlePollMaxMs,
+    dlqIngestion: true,
+    dlqQueue: dlqConfig.queue,
   });
 
   await worker.runForever({ signal: shutdownController.signal });
@@ -133,6 +150,9 @@ async function verifyWorkerDatabasePrincipal() {
       has_column_privilege(current_user, 'jobs.system_jobs', 'last_completed_at', 'UPDATE') AS can_update_last_completed,
       has_table_privilege(current_user, 'jobs.jobs', 'SELECT') AS can_read_tenant_jobs,
       has_table_privilege(current_user, 'outbox.events', 'SELECT') AS can_read_outbox_directly,
+      has_table_privilege(current_user, 'dlq.entries', 'SELECT') AS can_read_tenant_dlq_directly,
+      has_table_privilege(current_user, 'dlq.system_entries', 'SELECT') AS can_read_system_dlq_directly,
+      has_schema_privilege(current_user, 'dlq', 'USAGE') AS can_use_dlq_schema,
       has_function_privilege(
         current_user,
         'outbox.claim_system_batch(integer,bigint,uuid)',
@@ -142,7 +162,12 @@ async function verifyWorkerDatabasePrincipal() {
         current_user,
         'outbox.mark_system_published(uuid,uuid)',
         'EXECUTE'
-      ) AS can_mark_outbox
+      ) AS can_mark_outbox,
+      has_function_privilege(
+        current_user,
+        'dlq.quarantine_outbox_message(uuid,text,text,jsonb,smallint)',
+        'EXECUTE'
+      ) AS can_quarantine_dlq
     FROM pg_catalog.pg_roles AS role
     WHERE role.rolname = current_user
   `);
@@ -163,8 +188,12 @@ async function verifyWorkerDatabasePrincipal() {
     && row.can_update_last_completed === true
     && row.can_read_tenant_jobs === false
     && row.can_read_outbox_directly === false
+    && row.can_read_tenant_dlq_directly === false
+    && row.can_read_system_dlq_directly === false
+    && row.can_use_dlq_schema === true
     && row.can_claim_outbox === true
-    && row.can_mark_outbox === true;
+    && row.can_mark_outbox === true
+    && row.can_quarantine_dlq === true;
 
   if (!safe) {
     const error = new Error('Dedicated Jobs worker database principal violates least-privilege contract');
@@ -198,6 +227,10 @@ function integerSetting(name, fallback, minimum, maximum) {
 }
 
 async function closeResources() {
+  if (dlqConsumer) {
+    await dlqConsumer.close();
+    dlqConsumer = null;
+  }
   if (messagingAdapter) {
     await messagingAdapter.close();
     messagingAdapter = null;

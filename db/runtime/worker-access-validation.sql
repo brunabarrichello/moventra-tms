@@ -1,4 +1,5 @@
--- Moventra TMS — Phase 025 dedicated worker access validation
+-- Moventra TMS — dedicated worker access validation
+-- Phase 025 Jobs/Outbox + Phase 026 DLQ ingestion.
 -- Requires psql variables worker_role and worker_app_role.
 \set ON_ERROR_STOP on
 \if :{?worker_role}
@@ -21,44 +22,36 @@ DECLARE
   worker_app_role TEXT := current_setting('moventra.validation_worker_app_role');
 BEGIN
   IF NOT EXISTS (
-    SELECT 1
-      FROM pg_roles
+    SELECT 1 FROM pg_roles
      WHERE rolname = worker_role
-       AND NOT rolcanlogin
-       AND NOT rolsuper
-       AND NOT rolcreatedb
-       AND NOT rolcreaterole
-       AND NOT rolreplication
-       AND NOT rolbypassrls
+       AND NOT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb
+       AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls
   ) THEN
-    RAISE EXCEPTION 'worker authorization role must be NOLOGIN and NOBYPASSRLS without elevated attributes';
+    RAISE EXCEPTION 'worker authorization role must be NOLOGIN/NOBYPASSRLS and non-elevated';
   END IF;
 
   IF NOT EXISTS (
-    SELECT 1
-      FROM pg_roles
+    SELECT 1 FROM pg_roles
      WHERE rolname = worker_app_role
-       AND rolcanlogin
-       AND NOT rolsuper
-       AND NOT rolcreatedb
-       AND NOT rolcreaterole
-       AND NOT rolreplication
-       AND NOT rolbypassrls
+       AND rolcanlogin AND NOT rolsuper AND NOT rolcreatedb
+       AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls
   ) THEN
-    RAISE EXCEPTION 'worker application role must be LOGIN and NOBYPASSRLS without elevated attributes';
+    RAISE EXCEPTION 'worker application role must be LOGIN/NOBYPASSRLS and non-elevated';
   END IF;
 
   IF NOT pg_has_role(worker_app_role, worker_role, 'MEMBER') THEN
-    RAISE EXCEPTION 'worker application role must inherit the dedicated worker authorization role';
+    RAISE EXCEPTION 'worker application role must inherit worker authorization role';
   END IF;
 
   IF NOT has_schema_privilege(worker_role, 'jobs', 'USAGE')
-     OR NOT has_schema_privilege(worker_role, 'outbox', 'USAGE') THEN
-    RAISE EXCEPTION 'worker lacks required jobs/outbox schema USAGE';
+     OR NOT has_schema_privilege(worker_role, 'outbox', 'USAGE')
+     OR NOT has_schema_privilege(worker_role, 'dlq', 'USAGE') THEN
+    RAISE EXCEPTION 'worker lacks required jobs/outbox/dlq schema USAGE';
   END IF;
   IF has_schema_privilege(worker_role, 'jobs', 'CREATE')
-     OR has_schema_privilege(worker_role, 'outbox', 'CREATE') THEN
-    RAISE EXCEPTION 'worker must not CREATE in jobs/outbox schemas';
+     OR has_schema_privilege(worker_role, 'outbox', 'CREATE')
+     OR has_schema_privilege(worker_role, 'dlq', 'CREATE') THEN
+    RAISE EXCEPTION 'worker must not CREATE in jobs/outbox/dlq schemas';
   END IF;
 
   IF NOT has_table_privilege(worker_role, 'jobs.system_jobs', 'SELECT') THEN
@@ -87,7 +80,7 @@ BEGIN
      OR has_table_privilege(worker_role, 'jobs.jobs', 'INSERT')
      OR has_table_privilege(worker_role, 'jobs.jobs', 'UPDATE')
      OR has_table_privilege(worker_role, 'jobs.jobs', 'DELETE') THEN
-    RAISE EXCEPTION 'phase-025 system worker must not access tenant jobs directly';
+    RAISE EXCEPTION 'system worker must not access tenant jobs directly';
   END IF;
 
   IF has_table_privilege(worker_role, 'outbox.events', 'SELECT')
@@ -97,9 +90,27 @@ BEGIN
     RAISE EXCEPTION 'worker must not access Outbox table directly';
   END IF;
 
+  IF has_table_privilege(worker_role, 'dlq.entries', 'SELECT')
+     OR has_table_privilege(worker_role, 'dlq.entries', 'INSERT')
+     OR has_table_privilege(worker_role, 'dlq.entries', 'UPDATE')
+     OR has_table_privilege(worker_role, 'dlq.entries', 'DELETE')
+     OR has_table_privilege(worker_role, 'dlq.system_entries', 'SELECT')
+     OR has_table_privilege(worker_role, 'dlq.system_entries', 'INSERT')
+     OR has_table_privilege(worker_role, 'dlq.system_entries', 'UPDATE')
+     OR has_table_privilege(worker_role, 'dlq.system_entries', 'DELETE') THEN
+    RAISE EXCEPTION 'worker must not access DLQ tables directly';
+  END IF;
+
   IF NOT has_function_privilege(worker_role, 'outbox.claim_system_batch(integer,bigint,uuid)', 'EXECUTE')
      OR NOT has_function_privilege(worker_role, 'outbox.mark_system_published(uuid,uuid)', 'EXECUTE') THEN
     RAISE EXCEPTION 'worker lacks narrow Outbox dispatcher capabilities';
+  END IF;
+  IF NOT has_function_privilege(
+       worker_role,
+       'dlq.quarantine_outbox_message(uuid,text,text,jsonb,smallint)',
+       'EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'worker lacks narrow DLQ ingestion capability';
   END IF;
 
   IF has_schema_privilege(worker_role, 'organization', 'USAGE')
@@ -120,31 +131,44 @@ BEGIN
     INSERT INTO jobs.system_jobs (job_type, payload, metadata)
     VALUES ('system.unauthorized_worker_schedule', '{}'::jsonb, '{}'::jsonb);
     RAISE EXCEPTION 'worker created a system schedule';
-  EXCEPTION WHEN insufficient_privilege THEN
-    NULL;
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 
   BEGIN
-    UPDATE jobs.system_jobs
-       SET payload = '{"changed":true}'::jsonb
+    UPDATE jobs.system_jobs SET payload = '{"changed":true}'::jsonb
      WHERE job_type = 'system.outbox_dispatch';
     RAISE EXCEPTION 'worker changed immutable system payload';
-  EXCEPTION WHEN insufficient_privilege THEN
-    NULL;
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 
   BEGIN
     SELECT 1 FROM jobs.jobs LIMIT 1;
     RAISE EXCEPTION 'worker read tenant jobs directly';
-  EXCEPTION WHEN insufficient_privilege THEN
-    NULL;
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 
   BEGIN
     SELECT 1 FROM outbox.events LIMIT 1;
     RAISE EXCEPTION 'worker read Outbox directly';
-  EXCEPTION WHEN insufficient_privilege THEN
-    NULL;
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  BEGIN
+    SELECT 1 FROM dlq.entries LIMIT 1;
+    RAISE EXCEPTION 'worker read tenant DLQ directly';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  BEGIN
+    INSERT INTO dlq.system_entries (
+      source_kind, source_id, source_type, source_schema_version,
+      failure_code, failure_class, snapshot
+    ) VALUES (
+      'message', uuidv7(), 'system.unauthorized', 1,
+      'UNAUTHORIZED_WRITE', 'security', '{}'::jsonb
+    );
+    RAISE EXCEPTION 'worker inserted system DLQ directly';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 END
 $negative$;

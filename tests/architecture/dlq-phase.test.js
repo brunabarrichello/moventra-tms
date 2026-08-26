@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const migration = fs.readFileSync('db/migrations/0017_dlq.sql', 'utf8');
+const ingestionMigration = fs.readFileSync('db/migrations/0018_dlq_worker_ingestion.sql', 'utf8');
 const runtimeAccess = fs.readFileSync('db/runtime/runtime-access.sql', 'utf8');
 const workerAccess = fs.readFileSync('db/runtime/worker-access.sql', 'utf8');
 const domain = fs.readFileSync('src/modules/dlq/dlq-contract.js', 'utf8');
 const repository = fs.readFileSync('src/infrastructure/dlq/postgres-dlq-repository.js', 'utf8');
+const ingestionRepository = fs.readFileSync('src/infrastructure/dlq/system-dlq-ingestion-repository.js', 'utf8');
+const ingestionAdapter = fs.readFileSync('src/infrastructure/dlq/rabbitmq-dlq-ingestion.js', 'utf8');
 const documentation = fs.readFileSync('docs/implementation/026-dlq.md', 'utf8');
 
 test('026 mantém tenant e system DLQ fisicamente separados', () => {
@@ -40,16 +43,31 @@ test('normal application runtime não pode inserir DLQ nem acessar system_entrie
   assert.match(runtimeAccess, /REVOKE UPDATE \([\s\S]*snapshot,[\s\S]*metadata,[\s\S]*\) ON dlq\.entries/);
 });
 
-test('worker permanece fail-closed para DLQ antes da capability estreita', () => {
-  assert.match(workerAccess, /REVOKE ALL PRIVILEGES ON SCHEMA dlq/);
+test('worker recebe somente capability estreita de ingestão e nenhum acesso direto à DLQ', () => {
+  assert.match(workerAccess, /GRANT USAGE ON SCHEMA jobs, outbox, dlq/);
   assert.match(workerAccess, /REVOKE ALL PRIVILEGES ON dlq\.entries/);
   assert.match(workerAccess, /REVOKE ALL PRIVILEGES ON dlq\.system_entries/);
+  assert.match(workerAccess, /GRANT EXECUTE ON FUNCTION dlq\.quarantine_outbox_message/);
+  assert.match(ingestionMigration, /SECURITY DEFINER/);
+  assert.match(ingestionMigration, /FROM outbox\.events AS event/);
+  assert.doesNotMatch(
+    ingestionMigration.split('CREATE OR REPLACE FUNCTION dlq.quarantine_outbox_message')[1].split(')\nRETURNS')[0],
+    /tenant/i,
+  );
 });
 
-test('domínio DLQ é provider-neutral e não depende de pg/amqplib', () => {
+test('trust boundary de ingestão nunca deriva Tenant de headers ou x-death', () => {
+  assert.doesNotMatch(ingestionRepository, /tenantId\s*[,}]/);
+  assert.match(ingestionAdapter, /x-death/);
+  assert.match(ingestionAdapter, /never trusted to select a tenant|never here/i);
+  assert.match(ingestionMigration, /never trusted to select a tenant/i);
+});
+
+test('domínio DLQ é provider-neutral e provider-specific fica em infrastructure', () => {
   assert.doesNotMatch(domain, /from ['"]pg['"]/);
   assert.doesNotMatch(domain, /from ['"]amqplib['"]/);
   assert.doesNotMatch(repository, /from ['"]amqplib['"]/);
+  assert.doesNotMatch(ingestionRepository, /from ['"]amqplib['"]/);
   assert.match(documentation, /provider-neutral/i);
   assert.match(documentation, /Production somente após gate humano explícito/i);
 });
