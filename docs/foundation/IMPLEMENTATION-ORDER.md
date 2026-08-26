@@ -46,7 +46,7 @@ Este documento é a **linha canônica de implantação do Moventra TMS**. Estado
 | 023 — Transactional Outbox | **CONCLUDED** | intenção de publicação atômica |
 | 024 — Mensageria | **CONCLUDED** | RabbitMQ atrás de portas provider-neutral, at-least-once, confirms e ack/nack |
 | 025 — Jobs / Outbox Dispatcher | **EVIDENCED / CONCLUDED** | Jobs duráveis PostgreSQL + Worker Railway + dispatcher Outbox |
-| 026 — DLQ | **ACTIVE / PARTIALLY EVIDENCED IN PRODUCTION / NOT CONCLUDED** | Batch 2 promovido e validado em Production; Batch 3 `jobs.failed_terminal → DLQ` em execução; governança/reprocess/admin ainda pendentes |
+| 026 — DLQ | **ACTIVE / PARTIALLY EVIDENCED IN PRODUCTION / NOT CONCLUDED** | Batch 2 em Production; Batch 3 `jobs.failed_terminal → DLQ` integrado em `main` com CI verde e aguardando release; reprocess/admin ainda pendentes |
 | 027+ | **NOT ACTIVE** | preservar a ordem oficial |
 
 ## Baseline 025 — identidade e runtime validado
@@ -87,6 +87,24 @@ Railway serviceVersion         = 9a0380cb9bd8600c345fc894a0d9d08fb7c62687
 
 A promoção do Batch 2 encerrou o antigo estado `AWAITING RELEASE EVIDENCE`, mas **não conclui a fase 026**. A Issue #115 continua aberta até que todos os critérios funcionais e operacionais de DLQ sejam satisfeitos.
 
+## Batch 3 da 026 — integrado em `main`, release pendente
+
+```text
+PR                             = #121
+main revision                  = 9863a0c87c423775ba6f6a7c3ac6bd0b032162d8
+Foundation CI                  = 32991010191 SUCCESS
+Moventra CI                    = 32991010398 SUCCESS
+Jobs Contract                  = 32991010259 SUCCESS
+Security CI                    = 32991010239 SUCCESS
+DLQ Contract                   = 32991010146 SUCCESS
+Production DB max migration    = 0018
+Production has 0019            = false
+```
+
+O Batch 3 materializa a captura transacional `jobs.failed_terminal → DLQ` para `jobs.jobs` e `jobs.system_jobs`. A validação em PostgreSQL 18 real comprovou captura tenant/system, dedupe, minimização de snapshot e preservação dos contratos de segurança. A integração em `main` **não equivale a release**: Staging, rollback/restore e eventual Production protegida permanecem pendentes.
+
+Antes do release, Production foi consultado e possuía zero Jobs `failed_terminal` tenant/system e zero entradas DLQ de `source_kind=job`; portanto não existe backlog terminal anterior a reconciliar na janela entre 0018 e 0019.
+
 ## Banco — estado operacional de Production após o Batch 2 da 026
 
 Provider: **Neon PostgreSQL 18.6**.
@@ -114,7 +132,7 @@ Aplicado em Production:
 0018_dlq_worker_ingestion.sql
 ```
 
-A migration `0019_dlq_job_terminal_capture.sql` pertence ao Batch 3 em desenvolvimento. Ela existe somente na branch da unidade de trabalho enquanto não passar por PR/CI/release; **não está autorizada em Production**.
+A migration `0019_dlq_job_terminal_capture.sql` está integrada em `main` pela PR #121 e validada em CI, porém **ainda não está aplicada em Production**. Sua promoção deve seguir os gates de release vigentes e não pode ser aplicada manualmente fora do pipeline aprovado.
 
 ## Boundary consolidado até 025
 
@@ -186,7 +204,7 @@ Invariantes:
 
 ### Batch 3 — captura atômica de Jobs terminais
 
-Unidade ativa atual:
+Materializado em `main` e com CI verde:
 
 ```text
 jobs.jobs / jobs.system_jobs
@@ -198,19 +216,25 @@ trigger PostgreSQL na mesma transação
 dlq.entries / dlq.system_entries
 ```
 
-Regras:
+Regras validadas:
 
-- captura deve ser atômica com a transição terminal;
+- captura atômica com a transição terminal;
 - tenant vem exclusivamente de `jobs.jobs.tenant_id`;
 - system Job nunca usa `tenant_id NULL` em tabela tenant-scoped;
 - raw Job payload não é copiado automaticamente ao snapshot DLQ;
 - dedupe usa o contrato existente por `source_kind=job + source_id`;
 - funções de trigger são `SECURITY DEFINER` com `PUBLIC EXECUTE` revogado;
-- CI deve provar os dois escopos em PostgreSQL real.
+- CI prova os dois escopos em PostgreSQL 18 real.
+
+Estado do Batch 3:
+
+```text
+MAIN + CI EVIDENCED / RELEASE PENDING
+```
 
 ## Pendências obrigatórias para concluir 026
 
-1. concluir Batch 3 e evidenciar `jobs.failed_terminal → DLQ`;
+1. evidenciar o Batch 3 em Staging, rollback/restore e Production protegida;
 2. reprocessamento governado de mensagens;
 3. reprocessamento governado de Jobs;
 4. APIs administrativas protegidas por RBAC/tenant scope;
@@ -219,13 +243,10 @@ Regras:
 7. Audit before/after/ator/correlation das ações humanas;
 8. testes de concorrência de operadores/workers;
 9. observabilidade operacional com redução do ruído de polling vazio;
-10. CI completo;
-11. Staging;
-12. rollback/restore;
-13. aprovação humana explícita para qualquer nova Production;
-14. smoke/evidência final;
-15. documentação/Issue/Confluence sincronizados;
-16. somente então `026 = EVIDENCED / CONCLUDED`.
+10. CI completo do escopo restante;
+11. smoke/evidência final;
+12. documentação/Issue/Confluence sincronizados;
+13. somente então `026 = EVIDENCED / CONCLUDED`.
 
 ## Gates macro
 
@@ -246,4 +267,4 @@ G3+                   = NOT REACHED
 
 ## Próxima transição permitida
 
-Prosseguir exclusivamente com a **fase 026 — DLQ**, concluindo primeiro o Batch 3 `jobs.failed_terminal → DLQ`; depois seguir para reprocessamento governado e superfícies administrativas mínimas. A fase 027 continua bloqueada.
+Prosseguir exclusivamente com a **fase 026 — DLQ**: primeiro evidenciar o Batch 3 pela cadeia de release controlada; depois seguir para reprocessamento governado e superfícies administrativas mínimas. A fase 027 continua bloqueada.

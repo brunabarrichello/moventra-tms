@@ -24,7 +24,9 @@ G2 — Security Ready   = APPROVED / REVALIDATED
 
 A baseline 025 permanece concluída. O Batch 2 da fase 026 foi integrado na `main` pela PR #120, revisão `9a0380cb9bd8600c345fc894a0d9d08fb7c62687`, e sua promoção protegida para Production foi concluída com sucesso pelo workflow run `32938457243`.
 
-Isto **não** conclui a fase 026. Permanecem obrigatórios o fluxo durável `jobs.failed_terminal → DLQ`, reprocessamento governado de mensagens/jobs, APIs administrativas protegidas, auditoria das ações, idempotência/concorrência, smoke final e sincronização de governança.
+O Batch 3 `jobs.failed_terminal → DLQ` foi integrado na `main` pela PR #121, revisão `9863a0c87c423775ba6f6a7c3ac6bd0b032162d8`, com CI completo da PR verde. A migration `0019_dlq_job_terminal_capture.sql` ainda precisa passar pelos gates de Staging, rollback/restore e Production protegida antes de ser considerada evidenciada em runtime.
+
+Isto **não** conclui a fase 026. Permanecem obrigatórios reprocessamento governado de mensagens/jobs, APIs administrativas protegidas, auditoria das ações, idempotência/concorrência, testes finais, smoke final e sincronização de governança.
 
 A fase 027 — Object Storage permanece `NOT ACTIVE`.
 
@@ -101,6 +103,7 @@ Revisões relevantes:
 025 revision-identity hardening    = 3d0ac7864d784e9bd74046cd995fab5ca6321b15
 025 reconciliation main revision   = b3808c9e3ca3c6896e9ea32bcd96bbf7a5e15ceb
 026 Batch 2 production revision    = 9a0380cb9bd8600c345fc894a0d9d08fb7c62687
+026 Batch 3 main revision          = 9863a0c87c423775ba6f6a7c3ac6bd0b032162d8
 MOV-P1-OBS-001                     = RESOLVED / PRODUCTION VALIDATED
 ```
 
@@ -136,9 +139,12 @@ applied_migrations = 18
 max_version        = 18
 has_0017           = true
 has_0018           = true
+has_0019           = false
 ```
 
-A migration `0019_dlq_job_terminal_capture.sql` pertence ao Batch 3 em desenvolvimento e **não está autorizada/aplicada em Production** enquanto não passar pelos gates de CI, Staging, rollback/restore e aprovação humana explícita.
+A migration `0019_dlq_job_terminal_capture.sql` está integrada em `main` e validada em CI, mas **não está autorizada/aplicada em Production** enquanto não passar pelos gates de Staging, rollback/restore e aprovação humana explícita.
+
+Antes do release do Batch 3, Production foi consultado e possuía zero Jobs `failed_terminal` tenant/system e zero entradas DLQ de `source_kind=job`, eliminando a necessidade de backfill para a janela anterior à 0019.
 
 ## Fases 024 e 025
 
@@ -174,6 +180,7 @@ A arquitetura da 026 trata DLQ como subsistema durável e auditável, e não ape
 Documentação e issue:
 
 - `docs/implementation/026-dlq.md`;
+- `docs/implementation/026-dlq-batch3-job-terminal-capture.md`;
 - GitHub Issue #115;
 - `docs/governance/025-POST-AUDIT-CORRECTIONS.md`;
 - `docs/foundation/IMPLEMENTATION-ORDER.md`.
@@ -207,9 +214,9 @@ Inclui:
 
 ### Batch 3 — Jobs `failed_terminal → DLQ`
 
-**Em execução na fase 026.**
+**Estado:** `MAIN + CI EVIDENCED / RELEASE PENDING`.
 
-Objetivo:
+Implementado pela migration `0019_dlq_job_terminal_capture.sql`:
 
 ```text
 job transition → failed_terminal
@@ -219,11 +226,21 @@ DLQ durable quarantine
 mesma transação PostgreSQL
 ```
 
-O contrato deve cobrir `jobs.jobs` e `jobs.system_jobs`, derivar Tenant apenas do registro autoritativo do Job, deduplicar por origem e persistir snapshot minimizado sem copiar payload arbitrário.
+O contrato cobre `jobs.jobs` e `jobs.system_jobs`, deriva Tenant apenas do registro autoritativo do Job, deduplica por origem e persiste snapshot minimizado sem copiar payload arbitrário.
+
+Evidências da PR #121:
+
+```text
+Foundation CI          = 32991010191 SUCCESS
+Moventra CI            = 32991010398 SUCCESS
+Jobs Contract          = 32991010259 SUCCESS
+Security CI            = 32991010239 SUCCESS
+DLQ Contract           = 32991010146 SUCCESS
+```
 
 Para concluir 026 ainda são obrigatórios:
 
-- concluir e evidenciar o Batch 3;
+- evidenciar o Batch 3 em Staging/rollback/Production protegida;
 - reprocessamento governado de mensagens;
 - reprocessamento governado de Jobs;
 - APIs administrativas com RBAC/tenant scope;
