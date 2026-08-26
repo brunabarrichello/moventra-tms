@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   impact:
-    name: Classify release impact
+    name: Resolve upstream release evidence
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -35,15 +35,17 @@ jobs:
       requires_release: ${{ steps.classify.outputs.requires_release }}
       classification: ${{ steps.classify.outputs.classification }}
     steps:
-      - name: Checkout exact candidate revision
+      - name: Checkout release governance utilities
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
-          fetch-depth: 2
           persist-credentials: false
 
-      - name: Classify application release impact
+      - name: Classify from trusted upstream evidence
         id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.release_gate_run_id }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
@@ -53,16 +55,11 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-          head_sha='${{ github.event.workflow_run.head_sha }}'
-          base_sha="$(git rev-parse "${head_sha}^")"
-          result="$(bash scripts/release/classify-release-impact.sh "$base_sha" "$head_sha")"
+          result="$(bash scripts/release/classify-upstream-release-evidence.sh "$UPSTREAM_RUN_ID" staging-deployment-)"
           printf '%s\n' "$result"
           while IFS='=' read -r key value; do
             case "$key" in
-              requires_release|classification)
-                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
-                ;;
+              requires_release|classification) printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT" ;;
             esac
           done <<< "$result"
 
@@ -101,13 +98,13 @@ jobs:
           test "$(jq -r '.name' <<< "$run_json")" = 'Moventra Release Gate'
           test "$(jq -r '.conclusion' <<< "$run_json")" = success
           test "$(jq -r '.head_branch' <<< "$run_json")" = main
-          if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
-            test "${{ github.event.workflow_run.event }}" = workflow_run || {
-              echo '::error::Automatic rollback only accepts Release Gate runs triggered by workflow_run.'
-              exit 1
-            }
-          fi
+          upstream_event="$(jq -r '.event' <<< "$run_json")"
+          case "$upstream_event" in
+            workflow_run|workflow_dispatch) ;;
+            *) echo "::error::Unsupported Release Gate source event: ${upstream_event}"; exit 1 ;;
+          esac
           printf 'release_gate_run_id=%s\n' "$RELEASE_GATE_RUN_ID" >> "$GITHUB_OUTPUT"
+          printf 'release_gate_event=%s\n' "$upstream_event" >> "$GITHUB_OUTPUT"
 
       - name: Download trusted staging evidence
         env:
@@ -138,10 +135,18 @@ jobs:
           restore_artifact_name="$(awk -F= '$1=="github_artifact_name" {print $2}' "$evidence")"
           staging_digest="$(awk -F= '$1=="artifact_sha256" {print $2}' "$evidence")"
           staging_result="$(awk -F= '$1=="result" {print $2}' "$evidence")"
+          migration_max="$(awk -F= '$1=="database_migration_max" {print $2}' "$evidence")"
+          migration_name="$(awk -F= '$1=="database_migration_name" {print $2}' "$evidence")"
+          migration_checksum="$(awk -F= '$1=="database_migration_checksum" {print $2}' "$evidence")"
+          migration_promotion="$(awk -F= '$1=="database_migration_promotion" {print $2}' "$evidence")"
 
           [[ "$restore_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$restore_run_id" =~ ^[0-9]+$ ]]
           [[ "$staging_digest" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$migration_max" =~ ^[0-9]{4}$ ]]
+          [[ "$migration_name" =~ ^[0-9]{4}_[a-z0-9_]+\.sql$ ]]
+          [[ "$migration_checksum" =~ ^[0-9a-f]{64}$ ]]
+          test "$migration_promotion" = success
           test "$restore_artifact_name" = "moventra-tms-${restore_sha}"
           test "$staging_result" = success
 
@@ -188,6 +193,9 @@ jobs:
             printf 'restore_artifact_name=%s\n' "$restore_artifact_name"
             printf 'restore_sha=%s\n' "$restore_sha"
             printf 'staging_artifact_sha256=%s\n' "$staging_digest"
+            printf 'database_migration_max=%s\n' "$migration_max"
+            printf 'database_migration_name=%s\n' "$migration_name"
+            printf 'database_migration_checksum=%s\n' "$migration_checksum"
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact restoration revision
@@ -295,7 +303,7 @@ jobs:
             esac
           done <<< "$result"
 
-      - name: Smoke test rolled-back revision
+      - name: Smoke rolled-back revision against forward schema
         id: rollback_smoke
         env:
           DEPLOYMENT_URL: ${{ steps.rollback.outputs.deployment_url }}
@@ -304,6 +312,8 @@ jobs:
           set -euo pipefail
           bash scripts/release/smoke-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
           bash scripts/release/smoke-health.sh "$STAGING_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-database-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-database-health.sh "$STAGING_URL" "$EXPECTED_SHA"
 
       - name: Restore current prebuilt artifact
         id: restore
@@ -318,7 +328,7 @@ jobs:
             esac
           done <<< "$result"
 
-      - name: Smoke test restored revision
+      - name: Smoke restored revision against promoted schema
         id: restore_smoke
         if: always() && steps.restore.outcome == 'success'
         env:
@@ -328,6 +338,8 @@ jobs:
           set -euo pipefail
           bash scripts/release/smoke-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
           bash scripts/release/smoke-health.sh "$STAGING_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-database-health.sh "$DEPLOYMENT_URL" "$EXPECTED_SHA"
+          bash scripts/release/smoke-database-health.sh "$STAGING_URL" "$EXPECTED_SHA"
 
       - name: Record rollback evidence
         if: always()
@@ -351,9 +363,14 @@ jobs:
           gate=rollback-prebuilt-drill
           trigger=${GITHUB_EVENT_NAME}
           release_gate_run_id=${RELEASE_GATE_RUN_ID}
+          release_gate_event=${{ steps.gate.outputs.release_gate_event }}
           workflow_actor=${GITHUB_ACTOR}
           workflow_run_id=${GITHUB_RUN_ID}
           workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
+          database_migration_max=${{ steps.source.outputs.database_migration_max }}
+          database_migration_name=${{ steps.source.outputs.database_migration_name }}
+          database_migration_checksum=${{ steps.source.outputs.database_migration_checksum }}
+          forward_schema_rollback_compatibility=${ROLLBACK_SMOKE}
           rollback_source_run=${{ steps.source.outputs.rollback_run_id }}
           rollback_github_artifact=${{ steps.source.outputs.rollback_artifact_name }}
           rollback_commit_sha=${ROLLBACK_SHA}
