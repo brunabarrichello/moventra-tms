@@ -47,3 +47,26 @@ test('outbox dispatcher never marks event when broker confirm fails', async () =
   await assert.rejects(handler, /broker down/);
   assert.equal(marked, false);
 });
+
+test('outbox dispatcher leaves event recoverable when worker aborts during broker operation', async () => {
+  let marked = false;
+  const controller = new AbortController();
+  const timeout = new Error('dispatcher timed out');
+  timeout.code = 'MVT_JOB_HANDLER_TIMEOUT';
+  timeout.retryable = true;
+  const handler = createOutboxDispatcherHandler({
+    outboxService: {
+      async claimBatch() { return { claimToken: '01990250-0000-7000-8000-000000000040', events: [EVENT] }; },
+      async markPublished() { marked = true; },
+    },
+    publisher: {
+      async publish({ envelope }) {
+        controller.abort(timeout);
+        return { messageId: envelope.messageId, confirmed: true };
+      },
+    },
+  });
+
+  await assert.rejects(() => handler({ signal: controller.signal }), /dispatcher timed out/);
+  assert.equal(marked, false);
+});
