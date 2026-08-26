@@ -4,6 +4,8 @@
 -- Adds explicit relational lineage from a reprocessed Job to both the terminal source Job
 -- and the DLQ decision that authorized the replay. One DLQ entry may create at most one
 -- logical child Job, which is the database-level idempotency guard for ambiguous retries.
+-- Tenant lineage is enforced with composite foreign keys so a compromised runtime cannot
+-- link a tenant Job to another tenant's source/DLQ record even if it knows foreign UUIDs.
 
 ALTER TABLE jobs.jobs
   ADD COLUMN IF NOT EXISTS reprocessed_from_job_id UUID NULL,
@@ -12,6 +14,12 @@ ALTER TABLE jobs.jobs
 ALTER TABLE jobs.system_jobs
   ADD COLUMN IF NOT EXISTS reprocessed_from_job_id UUID NULL,
   ADD COLUMN IF NOT EXISTS reprocessed_from_dlq_entry_id UUID NULL;
+
+-- PostgreSQL requires a unique referenced key for composite tenant-aware foreign keys.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_jobs_tenant_id_id
+  ON jobs.jobs (tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_dlq_entries_tenant_id_id
+  ON dlq.entries (tenant_id, id);
 
 DO $constraints$
 BEGIN
@@ -22,8 +30,8 @@ BEGIN
   ) THEN
     ALTER TABLE jobs.jobs
       ADD CONSTRAINT fk_jobs_jobs_reprocessed_from_job
-      FOREIGN KEY (reprocessed_from_job_id)
-      REFERENCES jobs.jobs(id)
+      FOREIGN KEY (tenant_id, reprocessed_from_job_id)
+      REFERENCES jobs.jobs(tenant_id, id)
       ON UPDATE RESTRICT ON DELETE RESTRICT;
   END IF;
 
@@ -34,8 +42,8 @@ BEGIN
   ) THEN
     ALTER TABLE jobs.jobs
       ADD CONSTRAINT fk_jobs_jobs_reprocessed_from_dlq
-      FOREIGN KEY (reprocessed_from_dlq_entry_id)
-      REFERENCES dlq.entries(id)
+      FOREIGN KEY (tenant_id, reprocessed_from_dlq_entry_id)
+      REFERENCES dlq.entries(tenant_id, id)
       ON UPDATE RESTRICT ON DELETE RESTRICT;
   END IF;
 
