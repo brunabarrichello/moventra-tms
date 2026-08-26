@@ -91,13 +91,19 @@ jobs:
         run: node scripts/db/migrate.mjs
 
       - name: Validate Jobs schema and separated principals
+        id: schema_and_access
         run: |
           set -euo pipefail
           psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0016_jobs_validation.sql
           bash scripts/ci/runtime-access-contract.sh
           bash scripts/ci/worker-access-contract.sh
 
+      - name: Validate PostgreSQL concurrent claims and lease ownership
+        id: jobs_concurrency
+        run: node scripts/db/validate-jobs-concurrency.mjs
+
       - name: Validate Jobs unit and architecture contracts
+        id: jobs_tests
         run: >-
           node --test
           tests/unit/jobs-contract.test.js
@@ -106,6 +112,7 @@ jobs:
           tests/architecture/jobs-phase.test.js
 
       - name: Validate real Outbox to RabbitMQ dispatch under worker principal
+        id: rabbitmq_dispatch
         run: |
           set -euo pipefail
           export MESSAGING_RABBITMQ_URL="amqp://${RABBITMQ_CI_USER}:${RABBITMQ_CI_PASSWORD}@127.0.0.1:5672/"
@@ -113,6 +120,11 @@ jobs:
 
       - name: Record contract evidence
         if: always()
+        env:
+          SCHEMA_ACCESS_OUTCOME: ${{ steps.schema_and_access.outcome }}
+          CONCURRENCY_OUTCOME: ${{ steps.jobs_concurrency.outcome }}
+          TESTS_OUTCOME: ${{ steps.jobs_tests.outcome }}
+          RABBITMQ_OUTCOME: ${{ steps.rabbitmq_dispatch.outcome }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -122,11 +134,10 @@ jobs:
           commit_sha=${GITHUB_SHA}
           workflow_run_id=${GITHUB_RUN_ID}
           workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
-          postgres_contract=executed
-          application_runtime_least_privilege=executed
-          dedicated_worker_least_privilege=executed
-          jobs_concurrency=executed
-          rabbitmq_outbox_dispatch=executed
+          postgres_and_principal_contract=${SCHEMA_ACCESS_OUTCOME}
+          jobs_concurrency=${CONCURRENCY_OUTCOME}
+          unit_and_architecture=${TESTS_OUTCOME}
+          rabbitmq_outbox_dispatch=${RABBITMQ_OUTCOME}
           EOF
 
       - name: Upload Jobs contract evidence
