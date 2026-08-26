@@ -2,9 +2,13 @@
 
 ## Estado
 
-`IMPLEMENTED IN BRANCH / CI, STAGING, ROLLBACK AND PRODUCTION EVIDENCE PENDING`
+`IMPLEMENTED IN BRANCH / EXACT-HEAD CI REVALIDATION REQUIRED / STAGING, ROLLBACK AND PRODUCTION EVIDENCE PENDING`
 
 Este documento descreve o delta de reprocessamento governado de Jobs da fase 026. Ele não conclui a fase e não ativa a 027.
+
+### Nota de revalidação do CI
+
+A primeira suíte de PR executou o delta funcional, mas o job geral de testes expôs fixtures unitários que não preservavam corretamente a identidade imutável da entrada DLQ ao simular transições de estado. Os fixtures foram corrigidos para derivar `reprocess_pending` e `reprocessing` do mesmo registro lógico. Como o GitHub não emitiu nova check suite para o commit corrigido após atualizações feitas pelo conector, a governança exige uma nova revisão com SHA inédito e CI completo antes de qualquer merge. Nenhuma evidência do head anterior será reutilizada para aprovar o head corrigido.
 
 ## Objetivo
 
@@ -107,7 +111,7 @@ O delta inclui:
 Este Batch só passa a `PRODUCTION EVIDENCED` após:
 
 ```text
-PR CI green
+PR CI green no SHA exato
 → main CI green
 → Release Gate / Staging green
 → Rollback Drill green
