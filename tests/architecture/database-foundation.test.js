@@ -71,3 +71,14 @@ test('migration runner keeps database credentials out of command arguments', asy
   assert.match(runner, /environment\.PGPASSWORD/);
   assert.doesNotMatch(runner, /spawnSync\('psql',[\s\S]*databaseUrl/);
 });
+
+test('migration runner propagates only a safe role startup option to libpq', async () => {
+  const runner = await readFile(path.join(root, 'scripts/db/migrate.mjs'), 'utf8');
+
+  assert.match(runner, /delete environment\.PGOPTIONS/);
+  assert.match(runner, /const options = parsed\.searchParams\.get\('options'\)/);
+  assert.match(runner, /SAFE_ROLE_OPTION_PATTERN/);
+  assert.match(runner, /environment\.PGOPTIONS = `-c role=\$\{roleOption\[1\]\}`/);
+  assert.match(runner, /DATABASE_URL options only supports -c role=<safe_role_name>/);
+  assert.doesNotMatch(runner, /environment\.PGOPTIONS = options/);
+});
