@@ -52,6 +52,7 @@ jobs:
       PGUSER: postgres
       PGPASSWORD: moventra-ci-only
       WORKER_APP_ROLE: moventra_worker_app_ci
+      WORKER_CI_PASSWORD: moventra-worker-ci-only
       MOVENTRA_ENV: ci
       MESSAGING_PROVIDER: rabbitmq
       MESSAGING_EXCHANGE: moventra.events.jobsci
@@ -118,6 +119,39 @@ jobs:
           export MESSAGING_RABBITMQ_URL="amqp://${RABBITMQ_CI_USER}:${RABBITMQ_CI_PASSWORD}@127.0.0.1:5672/"
           node scripts/ci/validate-jobs-outbox-dispatcher.mjs
 
+      - name: Smoke dedicated worker runtime under dedicated login principal
+        id: worker_runtime
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          scheme='postgresql:'
+          slashes='//'
+          export DATABASE_URL="${scheme}${slashes}${WORKER_APP_ROLE}:${WORKER_CI_PASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+          export MESSAGING_RABBITMQ_URL="amqp://${RABBITMQ_CI_USER}:${RABBITMQ_CI_PASSWORD}@127.0.0.1:5672/"
+
+          node src/worker.js > evidence/jobs-worker-runtime.log 2>&1 &
+          worker_pid=$!
+          sleep 3
+
+          if ! kill -0 "$worker_pid" 2>/dev/null; then
+            cat evidence/jobs-worker-runtime.log
+            wait "$worker_pid" || true
+            exit 1
+          fi
+
+          kill -TERM "$worker_pid"
+          if ! wait "$worker_pid"; then
+            cat evidence/jobs-worker-runtime.log
+            exit 1
+          fi
+
+          grep -q '"event":"jobs.worker.started"' evidence/jobs-worker-runtime.log
+          grep -q '"event":"jobs.worker.stopped"' evidence/jobs-worker-runtime.log
+          if grep -q '"event":"jobs.worker.failed"' evidence/jobs-worker-runtime.log; then
+            cat evidence/jobs-worker-runtime.log
+            exit 1
+          fi
+
       - name: Record contract evidence
         if: always()
         env:
@@ -125,6 +159,7 @@ jobs:
           CONCURRENCY_OUTCOME: ${{ steps.jobs_concurrency.outcome }}
           TESTS_OUTCOME: ${{ steps.jobs_tests.outcome }}
           RABBITMQ_OUTCOME: ${{ steps.rabbitmq_dispatch.outcome }}
+          WORKER_RUNTIME_OUTCOME: ${{ steps.worker_runtime.outcome }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -138,6 +173,7 @@ jobs:
           jobs_concurrency=${CONCURRENCY_OUTCOME}
           unit_and_architecture=${TESTS_OUTCOME}
           rabbitmq_outbox_dispatch=${RABBITMQ_OUTCOME}
+          dedicated_worker_runtime=${WORKER_RUNTIME_OUTCOME}
           EOF
 
       - name: Upload Jobs contract evidence
