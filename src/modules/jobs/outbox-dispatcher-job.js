@@ -8,6 +8,8 @@ export function createOutboxDispatcherHandler({
   publisher,
   batchSize = 50,
   claimTtlMs = 60000,
+  idleBackoffBaseMs = 1000,
+  idleBackoffMaxMs = 10000,
 } = {}) {
   if (!outboxService || typeof outboxService.claimBatch !== 'function' || typeof outboxService.markPublished !== 'function') {
     throw new TypeError('Outbox dispatcher requires an OutboxService');
@@ -15,6 +17,14 @@ export function createOutboxDispatcherHandler({
   const messagingPublisher = assertMessagingPublisher(publisher);
   const normalizedBatchSize = boundedInteger(batchSize, 1, 500, 'batchSize');
   const normalizedClaimTtlMs = boundedInteger(claimTtlMs, 1000, 3600000, 'claimTtlMs');
+  const normalizedIdleBackoffBaseMs = boundedInteger(idleBackoffBaseMs, 100, 60000, 'idleBackoffBaseMs');
+  const normalizedIdleBackoffMaxMs = boundedInteger(
+    idleBackoffMaxMs,
+    normalizedIdleBackoffBaseMs,
+    60000,
+    'idleBackoffMaxMs',
+  );
+  let consecutiveEmptyRuns = 0;
 
   return async function outboxDispatcher({ signal } = {}) {
     signal?.throwIfAborted?.();
@@ -23,8 +33,20 @@ export function createOutboxDispatcherHandler({
       claimTtlMs: normalizedClaimTtlMs,
     });
     if (claim.events.length === 0) {
-      return Object.freeze({ claimed: 0, published: 0 });
+      consecutiveEmptyRuns += 1;
+      return Object.freeze({
+        claimed: 0,
+        published: 0,
+        nextRunDelayMs: calculateIdleDelay({
+          consecutiveEmptyRuns,
+          baseDelayMs: normalizedIdleBackoffBaseMs,
+          maxDelayMs: normalizedIdleBackoffMaxMs,
+        }),
+      });
     }
+
+    // Work became available: return to the canonical recurrence interval after this run.
+    consecutiveEmptyRuns = 0;
 
     let published = 0;
     let firstFailure = null;
@@ -55,6 +77,12 @@ export function createOutboxDispatcherHandler({
     }
     return Object.freeze({ claimed: claim.events.length, published });
   };
+}
+
+function calculateIdleDelay({ consecutiveEmptyRuns, baseDelayMs, maxDelayMs }) {
+  // Cap the exponent before applying Math.pow to avoid numeric overflow on very long idle periods.
+  const exponent = Math.min(Math.max(0, consecutiveEmptyRuns - 1), 30);
+  return Math.min(maxDelayMs, baseDelayMs * (2 ** exponent));
 }
 
 function retryableError(code, message) {
