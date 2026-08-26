@@ -49,6 +49,21 @@ export class PostgresOutboxRepository {
     return mapEvent(result.rows[0]);
   }
 
+  async findById({ id }) {
+    const result = await this.query(
+      `SELECT
+         id, tenant_id, aggregate_type, aggregate_id, event_type, schema_version,
+         payload, metadata, dedupe_key, occurred_at, available_at, published_at,
+         attempt_count, last_attempt_at, claim_token, claimed_at, created_at
+       FROM outbox.events
+       WHERE id = $1
+       LIMIT 1`,
+      [id],
+    );
+
+    return result.rowCount === 1 ? mapEvent(result.rows[0]) : null;
+  }
+
   async claimBatch({ limit, claimTtlMs, claimToken }) {
     const result = await this.query(
       `WITH eligible AS (
