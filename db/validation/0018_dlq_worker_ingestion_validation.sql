@@ -44,11 +44,22 @@ $validation$;
 
 -- The capability must derive tenant identity from Outbox and return no row for an unknown
 -- source id. This proves callers cannot manufacture tenant ownership through parameters.
-SELECT count(*) = 0 AS unknown_source_is_fail_closed
-  FROM dlq.quarantine_outbox_message(
-    '01990260-0000-7000-8000-00000000ffff'::uuid,
-    'MESSAGING_DEAD_LETTERED',
-    'consumer_terminal',
-    '{}'::jsonb,
-    5::smallint
-  );
+DO $fail_closed$
+DECLARE
+  returned_rows INTEGER;
+BEGIN
+  SELECT count(*)
+    INTO returned_rows
+    FROM dlq.quarantine_outbox_message(
+      '01990260-0000-7000-8000-00000000ffff'::uuid,
+      'MESSAGING_DEAD_LETTERED',
+      'consumer_terminal',
+      '{}'::jsonb,
+      5::smallint
+    );
+
+  IF returned_rows <> 0 THEN
+    RAISE EXCEPTION 'unknown Outbox source unexpectedly produced a DLQ row';
+  END IF;
+END
+$fail_closed$;
