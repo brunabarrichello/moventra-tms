@@ -133,7 +133,7 @@ export class JobWorker {
     }, this.heartbeatMs);
 
     try {
-      await handler(Object.freeze({
+      const handlerResult = await handler(Object.freeze({
         jobId: job.id,
         tenantId: job.tenantId,
         scope: job.scope,
@@ -148,7 +148,12 @@ export class JobWorker {
       if (leaseLost) {
         throw leaseError();
       }
-      const completed = await this.repository.completeSuccess({ jobId: job.id, leaseToken: job.leaseToken });
+      const nextRunDelayMs = normalizeOptionalNextRunDelay(handlerResult?.nextRunDelayMs);
+      const completed = await this.repository.completeSuccess({
+        jobId: job.id,
+        leaseToken: job.leaseToken,
+        nextRunDelayMs,
+      });
       if (!completed) {
         throw leaseError();
       }
@@ -208,6 +213,13 @@ function sleep(milliseconds, signal) {
     }
     signal?.addEventListener?.('abort', onAbort, { once: true });
   });
+}
+
+function normalizeOptionalNextRunDelay(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return boundedInteger(value, 100, 3600000, 'nextRunDelayMs');
 }
 
 function safeToken(value, fallback) {
