@@ -18,6 +18,7 @@ test('phase 025 materializes durable provider-neutral Jobs without administrativ
     'src/modules/jobs/outbox-dispatcher-job.js',
     'src/infrastructure/jobs/postgres-job-repository.js',
     'src/infrastructure/outbox/system-outbox-repository.js',
+    'src/worker.js',
     'docs/implementation/025-jobs.md',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
@@ -43,6 +44,22 @@ test('phase 025 materializes durable provider-neutral Jobs without administrativ
   assert.match(worker, /runForever/);
   assert.match(worker, /AbortController/);
   assert.doesNotMatch(worker, /eval\(|new Function\(/);
+});
+
+test('phase 025 provides a dedicated non-HTTP worker composition root', () => {
+  const runtime = read('src/worker.js');
+  const packageJson = JSON.parse(read('package.json'));
+
+  assert.equal(packageJson.scripts['start:worker'], 'node src/worker.js');
+  assert.match(runtime, /new PostgresJobRepository\([\s\S]*scope: 'system'/);
+  assert.match(runtime, /OUTBOX_DISPATCH_JOB_TYPE/);
+  assert.match(runtime, /worker\.runForever\(\{ signal: shutdownController\.signal \}\)/);
+  assert.match(runtime, /verifyWorkerDatabasePrincipal/);
+  assert.match(runtime, /rolbypassrls/);
+  assert.match(runtime, /has_function_privilege/);
+  assert.match(runtime, /closeDatabasePool/);
+  assert.match(runtime, /shutdownObservability/);
+  assert.doesNotMatch(runtime, /createServer|requestHandler|server\.listen/);
 });
 
 test('Outbox Dispatcher preserves confirm-before-markPublished invariant', () => {
