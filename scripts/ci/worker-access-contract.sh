@@ -21,6 +21,10 @@ BEGIN
   GRANT moventra_worker_runtime_ci TO moventra_worker_app_ci;
 END
 $roles$;
+
+-- Ephemeral credential for the disposable CI PostgreSQL service only. Production/staging
+-- credentials are provisioned outside the repository and are never represented here.
+ALTER ROLE moventra_worker_app_ci PASSWORD 'moventra-worker-ci-only';
 SQL
 
 psql -X --no-psqlrc -v ON_ERROR_STOP=1 \
