@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 024 remains materialized provider-neutral after Jobs 025 conclusion', () => {
+test('phase 024 remains materialized provider-neutral while active DLQ 026 extends dead-letter governance', () => {
   for (const path of [
     'src/modules/messaging/message-envelope.js',
     'src/modules/messaging/messaging-ports.js',
@@ -18,13 +18,15 @@ test('phase 024 remains materialized provider-neutral after Jobs 025 conclusion'
     'docs/implementation/024-mensageria.md',
     'docs/architecture/024-messaging-provider-decision.md',
     'docs/implementation/025-jobs.md',
+    'docs/implementation/025-post-audit-reconciliation.md',
+    'docs/implementation/026-dlq.md',
     'src/modules/jobs/job-worker.js',
+    'src/modules/dlq/dlq-contract.js',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
   }
 
   assert.equal(existsSync(new URL('../../db/migrations/0016_messaging.sql', import.meta.url)), false);
-  assert.equal(existsSync(new URL('../../src/modules/dlq/', import.meta.url)), false);
 
   const packageJson = JSON.parse(read('package.json'));
   assert.equal(packageJson.dependencies.amqplib, '2.0.1');
@@ -74,13 +76,18 @@ test('messaging observability uses only controlled low-cardinality dimensions', 
   assert.doesNotMatch(observability, /tenantId|messageId|eventId|correlationId|routingKey|queueName|payload/);
 });
 
-test('phase 025 is concluded and administrative DLQ 026 remains inactive', () => {
+test('phase 025 is concluded and DLQ 026 is officially active without changing at-least-once semantics', () => {
   const messagingDoc = read('docs/implementation/024-mensageria.md');
   const jobsDoc = read('docs/implementation/025-jobs.md');
+  const reconciliation = read('docs/implementation/025-post-audit-reconciliation.md');
+  const dlqDoc = read('docs/implementation/026-dlq.md');
+
   assert.match(messagingDoc, /^# 024 — Mensageria/m);
   assert.match(jobsDoc, /^# 025 — Jobs/m);
   assert.match(jobsDoc, /`EVIDENCED \/ CONCLUDED`/i);
   assert.match(jobsDoc, /Outbox Dispatcher/i);
-  assert.match(jobsDoc, /026 — DLQ.*NOT ACTIVE/is);
+  assert.match(reconciliation, /026 — DLQ = ACTIVE \/ DEFINED/i);
+  assert.match(dlqDoc, /`ACTIVE \/ DEFINED`/i);
+  assert.match(dlqDoc, /at-least-once/i);
   assert.match(messagingDoc, /at-least-once/i);
 });
