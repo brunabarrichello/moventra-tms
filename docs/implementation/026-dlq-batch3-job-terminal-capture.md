@@ -2,7 +2,7 @@
 
 ## Estado
 
-`ACTIVE / IMPLEMENTED IN BRANCH / AWAITING CI`
+`ACTIVE / IMPLEMENTED IN PR #121 / AWAITING CI`
 
 Este Batch pertence exclusivamente à fase **026 — DLQ**. A fase **027 — Object Storage permanece NOT ACTIVE**.
 
@@ -221,7 +221,7 @@ Como a migration é forward-only no framework canônico, rollback operacional de
 - [x] snapshot minimizado sem payload bruto;
 - [x] validation SQL materializada na branch;
 - [x] DLQ Contract CI atualizado para executar a validation 0019;
-- [ ] PR aberta;
+- [x] PR #121 aberta;
 - [ ] CI completo verde;
 - [ ] merge na `main`;
 - [ ] Staging evidenciado;
