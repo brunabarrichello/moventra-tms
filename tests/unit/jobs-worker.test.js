@@ -17,13 +17,17 @@ const JOB = Object.freeze({
 });
 
 function fakeRepository(job = JOB) {
-  const state = { completed: 0, failed: [], claimLimit: null };
+  const state = { completed: 0, successInputs: [], failed: [], claimLimit: null };
   return {
     state,
     async reapExpiredExhausted() { return 0; },
     async claimBatch({ limit }) { state.claimLimit = limit; return [job]; },
     async heartbeat() { return true; },
-    async completeSuccess() { state.completed += 1; return { ...job, status: 'succeeded' }; },
+    async completeSuccess(input) {
+      state.completed += 1;
+      state.successInputs.push(input);
+      return { ...job, status: 'succeeded' };
+    },
     async completeFailure(input) {
       state.failed.push(input);
       return { ...job, status: input.retryable ? 'retry_scheduled' : 'failed_terminal' };
@@ -41,6 +45,7 @@ test('worker claims, resolves handler and completes success conditionally by lea
   assert.equal(result.claimed, 1);
   assert.equal(result.succeeded, 1);
   assert.equal(repository.state.completed, 1);
+  assert.equal(repository.state.successInputs[0].nextRunDelayMs, null);
 });
 
 test('worker never leases more jobs than it can start concurrently', async () => {
@@ -131,4 +136,36 @@ test('worker schedules retry only for retryable handler errors', async () => {
   assert.equal(result.retryScheduled, 1);
   assert.equal(repository.state.failed[0].retryable, true);
   assert.equal(repository.state.failed[0].delayMs, 1000);
+});
+
+test('worker forwards a bounded trusted next-run delay returned by a handler', async () => {
+  const repository = fakeRepository();
+  const registry = new JobHandlerRegistry().register({
+    jobType: JOB.jobType,
+    scope: 'system',
+    handler: async () => ({ nextRunDelayMs: 8000 }),
+  });
+  const worker = new JobWorker({ repository, registry, heartbeatMs: 500, handlerTimeoutMs: 2000 });
+
+  const result = await worker.runOnce();
+
+  assert.equal(result.succeeded, 1);
+  assert.equal(repository.state.successInputs[0].nextRunDelayMs, 8000);
+});
+
+test('worker rejects an invalid handler next-run delay instead of persisting unsafe scheduling data', async () => {
+  const repository = fakeRepository();
+  const registry = new JobHandlerRegistry().register({
+    jobType: JOB.jobType,
+    scope: 'system',
+    handler: async () => ({ nextRunDelayMs: -1 }),
+  });
+  const worker = new JobWorker({ repository, registry, heartbeatMs: 500, handlerTimeoutMs: 2000 });
+
+  const result = await worker.runOnce();
+
+  assert.equal(result.succeeded, 0);
+  assert.equal(result.failedTerminal, 1);
+  assert.equal(repository.state.completed, 0);
+  assert.equal(repository.state.failed[0].retryable, false);
 });
