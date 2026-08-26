@@ -39,10 +39,14 @@ export class JobWorker {
   async runOnce({ signal } = {}) {
     signal?.throwIfAborted?.();
     await this.repository.reapExpiredExhausted?.();
+    signal?.throwIfAborted?.();
+
     const leaseToken = randomUUID();
     const startedAt = performance.now();
     const jobs = await this.repository.claimBatch({
-      limit: this.batchSize,
+      // Never lease more work than this worker can start immediately. Otherwise jobs waiting
+      // in an in-memory chunk can expire before their heartbeat starts and be double-claimed.
+      limit: Math.min(this.batchSize, this.concurrency),
       leaseMs: this.leaseMs,
       leaseToken,
     });
@@ -54,12 +58,9 @@ export class JobWorker {
       return Object.freeze({ claimed: 0, succeeded: 0, retryScheduled: 0, failedTerminal: 0 });
     }
 
-    const results = [];
-    for (let offset = 0; offset < jobs.length; offset += this.concurrency) {
-      signal?.throwIfAborted?.();
-      const chunk = jobs.slice(offset, offset + this.concurrency);
-      results.push(...await Promise.all(chunk.map((job) => this.executeJob(job, signal))));
-    }
+    // Once rows are leased, shutdown stops future claims but lets the current bounded batch
+    // settle. Killing already leased handlers on SIGTERM would create false terminal failures.
+    const results = await Promise.all(jobs.map((job) => this.executeJob(job)));
 
     return Object.freeze({
       claimed: jobs.length,
@@ -70,15 +71,35 @@ export class JobWorker {
   }
 
   async runForever({ signal } = {}) {
-    while (!signal?.aborted) {
-      const result = await this.runOnce({ signal });
+    while (true) {
+      if (signal?.aborted) {
+        return;
+      }
+
+      let result;
+      try {
+        result = await this.runOnce({ signal });
+      } catch (error) {
+        if (signal?.aborted) {
+          return;
+        }
+        throw error;
+      }
+
       if (result.claimed === 0) {
-        await sleep(this.idlePollMs, signal);
+        try {
+          await sleep(this.idlePollMs, signal);
+        } catch (error) {
+          if (signal?.aborted) {
+            return;
+          }
+          throw error;
+        }
       }
     }
   }
 
-  async executeJob(job, parentSignal) {
+  async executeJob(job) {
     const startedAt = performance.now();
     let handler;
     try {
@@ -93,8 +114,6 @@ export class JobWorker {
     }
 
     const controller = new AbortController();
-    const abortFromParent = () => controller.abort(parentSignal?.reason ?? new Error('Worker shutdown'));
-    parentSignal?.addEventListener?.('abort', abortFromParent, { once: true });
     const timeout = setTimeout(() => controller.abort(timeoutError()), this.handlerTimeoutMs);
     let leaseLost = false;
     const heartbeat = setInterval(() => {
@@ -125,6 +144,7 @@ export class JobWorker {
         attempt: job.attemptCount,
         signal: controller.signal,
       }));
+      controller.signal.throwIfAborted?.();
       if (leaseLost) {
         throw leaseError();
       }
@@ -150,7 +170,6 @@ export class JobWorker {
     } finally {
       clearInterval(heartbeat);
       clearTimeout(timeout);
-      parentSignal?.removeEventListener?.('abort', abortFromParent);
     }
   }
 
