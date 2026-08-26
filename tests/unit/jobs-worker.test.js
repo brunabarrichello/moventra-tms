@@ -92,7 +92,9 @@ test('worker does not record success after handler timeout even if handler ignor
     jobType: JOB.jobType,
     scope: 'system',
     handler: async () => {
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 300);
+      });
     },
   });
   const worker = new JobWorker({
