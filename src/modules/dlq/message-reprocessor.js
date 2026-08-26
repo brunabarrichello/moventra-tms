@@ -56,16 +56,20 @@ export class DlqMessageReprocessor {
     }
     assertMessageEntry(current);
 
-    const requested = await this.dlqRepository.requestReprocess({
-      id: entryId,
-      expectedVersion: version,
-    });
-    if (!requested) {
-      throw reprocessError(
-        'MVT_DLQ_REPROCESS_CONFLICT',
-        'DLQ entry is not eligible for reprocessing at the expected version',
-        false,
-      );
+    if (current.status === 'quarantined') {
+      const requested = await this.dlqRepository.requestReprocess({
+        id: entryId,
+        expectedVersion: version,
+      });
+      if (!requested) {
+        throw conflictError();
+      }
+    } else if (current.status === 'reprocess_pending') {
+      if (current.version !== version) {
+        throw conflictError();
+      }
+    } else {
+      throw conflictError();
     }
 
     const claimed = await this.dlqRepository.claimReprocess({
@@ -216,6 +220,14 @@ function assertAuthoritativeSource(entry, source) {
       );
     }
   }
+}
+
+function conflictError() {
+  return reprocessError(
+    'MVT_DLQ_REPROCESS_CONFLICT',
+    'DLQ entry is not eligible for reprocessing at the expected version',
+    false,
+  );
 }
 
 function normalizedComparable(value) {
