@@ -79,7 +79,7 @@ test('phase 025 owns recurring execution and administrative DLQ 026 remains inac
   const jobsDoc = read('docs/implementation/025-jobs.md');
   assert.match(messagingDoc, /^# 024 — Mensageria/m);
   assert.match(jobsDoc, /^# 025 — Jobs/m);
-  assert.match(jobsDoc, /`ACTIVE \/ DEFINED`/i);
+  assert.match(jobsDoc, /`ACTIVE \/ IMPLEMENTED \/ AWAITING CI\+RELEASE EVIDENCE`/i);
   assert.match(jobsDoc, /Outbox Dispatcher/i);
   assert.match(jobsDoc, /026 — DLQ.*NOT ACTIVE/is);
   assert.match(messagingDoc, /at-least-once/i);
