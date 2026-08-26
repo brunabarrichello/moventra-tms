@@ -2,7 +2,7 @@
 
 ## Estado
 
-`ACTIVE / IMPLEMENTED IN PR #121 / AWAITING CI`
+`MAIN + CI EVIDENCED / RELEASE PENDING`
 
 Este Batch pertence exclusivamente à fase **026 — DLQ**. A fase **027 — Object Storage permanece NOT ACTIVE**.
 
@@ -209,6 +209,29 @@ reapExpiredExhausted()
 
 sem duplicar lógica de DLQ no domínio/worker.
 
+## Integração e evidências em `main`
+
+PR integrada:
+
+```text
+PR                 = #121
+main revision      = 9863a0c87c423775ba6f6a7c3ac6bd0b032162d8
+```
+
+Gates da revisão da PR:
+
+```text
+Foundation CI          = 32991010191 SUCCESS
+Moventra CI            = 32991010398 SUCCESS
+Moventra Jobs Contract = 32991010259 SUCCESS
+Moventra Security CI   = 32991010239 SUCCESS
+Moventra DLQ Contract  = 32991010146 SUCCESS
+```
+
+O `Moventra DLQ Contract` aplicou a história completa de migrations em PostgreSQL 18 real e validou explicitamente a captura terminal tenant/system, além de manter verdes o contrato de ingestão RabbitMQ → PostgreSQL e o smoke do Worker dedicado.
+
+Antes do release, o Neon Production foi consultado e não possuía nenhum Job `failed_terminal` tenant/system nem entrada DLQ de `source_kind=job`; `max_migration=0018`. Portanto não existe backlog terminal anterior a ser reconciliado nesta janela de implantação.
+
 ## Rollback
 
 Como a migration é forward-only no framework canônico, rollback operacional de release deve impedir promoção ou restaurar a revisão/runtime conforme os gates vigentes. Uma eventual correção de schema posterior deve ser feita por nova migration forward-fix; migrations aplicadas não são editadas retroativamente.
@@ -217,13 +240,12 @@ Como a migration é forward-only no framework canônico, rollback operacional de
 
 - [x] design transacional definido;
 - [x] tenant/system fisicamente separados;
-- [x] migration 0019 materializada na branch;
+- [x] migration 0019 materializada;
 - [x] snapshot minimizado sem payload bruto;
-- [x] validation SQL materializada na branch;
-- [x] DLQ Contract CI atualizado para executar a validation 0019;
-- [x] PR #121 aberta;
-- [ ] CI completo verde;
-- [ ] merge na `main`;
+- [x] validation SQL materializada;
+- [x] DLQ Contract CI executa a validation 0019;
+- [x] PR #121 integrada;
+- [x] CI completo da PR verde;
 - [ ] Staging evidenciado;
 - [ ] rollback/restore evidenciado quando aplicável;
 - [ ] Production somente após aprovação humana explícita;
