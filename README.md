@@ -15,16 +15,18 @@ O Moventra TMS é uma plataforma SaaS empresarial **multi-tenant, multiempresa e
 
 ```text
 001–025 = CONCLUDED
-026 — DLQ = ACTIVE / IMPLEMENTED / AWAITING RELEASE EVIDENCE
+026 — DLQ = ACTIVE / PARTIALLY EVIDENCED IN PRODUCTION / NOT CONCLUDED
 027+ = NOT ACTIVE
 
 G1 — Foundation Ready = APPROVED
 G2 — Security Ready   = APPROVED / REVALIDATED
 ```
 
-A reconciliação pós-auditoria da baseline 025 foi concluída pela PR #118, integrada em `main` no commit `b3808c9e3ca3c6896e9ea32bcd96bbf7a5e15ceb`, com CI de `main` verde e Production ainda sem a migration `0017_dlq.sql` no momento do fechamento do gate.
+A baseline 025 permanece concluída. O Batch 2 da fase 026 foi integrado na `main` pela PR #120, revisão `9a0380cb9bd8600c345fc894a0d9d08fb7c62687`, e sua promoção protegida para Production foi concluída com sucesso pelo workflow run `32938457243`.
 
-A fase 026 está liberada para continuidade técnica, mas `ACTIVE / IMPLEMENTED` **não significa `CONCLUDED` nem autorização de Production**.
+Isto **não** conclui a fase 026. Permanecem obrigatórios o fluxo durável `jobs.failed_terminal → DLQ`, reprocessamento governado de mensagens/jobs, APIs administrativas protegidas, auditoria das ações, idempotência/concorrência, smoke final e sincronização de governança.
+
+A fase 027 — Object Storage permanece `NOT ACTIVE`.
 
 ## Fundação consolidada até a fase 025
 
@@ -53,9 +55,9 @@ Princípios invariantes:
 - Outbox elimina a janela entre commit do negócio e intenção de publicação;
 - Mensageria e Jobs trabalham com semântica **at-least-once** e exigem idempotência;
 - nenhuma role de aplicação/worker deve usar `BYPASSRLS` para simplificar acesso;
-- fase `ACTIVE` não equivale a approval de Production.
+- fase `ACTIVE` não equivale a conclusão nem a autorização implícita de Production.
 
-## Runtime atual validado da baseline 025
+## Runtime atual validado
 
 ### HTTP/API
 
@@ -70,13 +72,16 @@ DB readiness = /api/database-health
 ### Worker assíncrono
 
 ```text
-Runtime       = Railway
-Service       = moventra-worker-production
-Entrypoint    = node src/worker.js
-Job handler   = system.outbox_dispatch
-Persistence   = Neon PostgreSQL
-Messaging     = RabbitMQ / AMQP 0-9-1
-Delivery      = at-least-once
+Runtime        = Railway
+Project        = moventra-tms-production
+Service        = moventra-worker-production
+Entrypoint     = node src/worker.js
+Job handler    = system.outbox_dispatch
+Persistence    = Neon PostgreSQL
+Messaging      = RabbitMQ / AMQP 0-9-1
+Delivery       = at-least-once
+Deployment     = 5f95e401-5b12-4e36-a817-dead641a9acb
+serviceVersion = 9a0380cb9bd8600c345fc894a0d9d08fb7c62687
 ```
 
 O Worker usa principal PostgreSQL dedicado de menor privilégio. A identidade de revisão observável segue:
@@ -95,10 +100,11 @@ Revisões relevantes:
 025 conclusion/docs revision       = d110360473f011ab2c586ad32006278063281f55
 025 revision-identity hardening    = 3d0ac7864d784e9bd74046cd995fab5ca6321b15
 025 reconciliation main revision   = b3808c9e3ca3c6896e9ea32bcd96bbf7a5e15ceb
+026 Batch 2 production revision    = 9a0380cb9bd8600c345fc894a0d9d08fb7c62687
 MOV-P1-OBS-001                     = RESOLVED / PRODUCTION VALIDATED
 ```
 
-## Banco — Production no fechamento da reconciliação 025
+## Banco — Production após promoção do Batch 2 da 026
 
 Provider oficial: **Neon PostgreSQL 18.6**.
 
@@ -119,17 +125,20 @@ db/migrations/0013_feature_flags.sql
 db/migrations/0014_idempotency.sql
 db/migrations/0015_outbox.sql
 db/migrations/0016_jobs.sql
+db/migrations/0017_dlq.sql
+db/migrations/0018_dlq_worker_ingestion.sql
 ```
 
-Consulta executada após merge + CI de `main`:
+Estado operacional verificado:
 
 ```text
-applied_migrations = 16
-max_version        = 16
-has_0017           = false
+applied_migrations = 18
+max_version        = 18
+has_0017           = true
+has_0018           = true
 ```
 
-A migration `0017_dlq.sql` existe em source control como parte da implementação técnica da fase 026, porém **não estava aplicada em Production na ativação formal da fase**.
+A migration `0019_dlq_job_terminal_capture.sql` pertence ao Batch 3 em desenvolvimento e **não está autorizada/aplicada em Production** enquanto não passar pelos gates de CI, Staging, rollback/restore e aprovação humana explícita.
 
 ## Fases 024 e 025
 
@@ -158,9 +167,9 @@ Inclui:
 
 ## Fase 026 — DLQ
 
-**Estado:** `ACTIVE / IMPLEMENTED / AWAITING RELEASE EVIDENCE`.
+**Estado:** `ACTIVE / PARTIALLY EVIDENCED IN PRODUCTION / NOT CONCLUDED`.
 
-A arquitetura da 026 trata DLQ como subsistema durável e auditável, e não apenas como fila opaca do broker. A implementação em source control deve ser validada através dos gates próprios da fase.
+A arquitetura da 026 trata DLQ como subsistema durável e auditável, e não apenas como fila opaca do broker.
 
 Documentação e issue:
 
@@ -169,22 +178,61 @@ Documentação e issue:
 - `docs/governance/025-POST-AUDIT-CORRECTIONS.md`;
 - `docs/foundation/IMPLEMENTATION-ORDER.md`.
 
+### Batch 1 — modelo e quarentena
+
+Inclui:
+
+- `0017_dlq.sql`;
+- `dlq.entries` tenant-scoped com RLS;
+- `dlq.system_entries` fisicamente separado;
+- state machine de quarentena/reprocessamento;
+- dedupe por origem;
+- permissões `dlq.read`, `dlq.reprocess`, `dlq.resolve`, `dlq.discard`;
+- repository provider-neutral/PostgreSQL.
+
+### Batch 2 — RabbitMQ DLX/DLQ e ingestão durável
+
+Inclui:
+
+- `0018_dlq_worker_ingestion.sql`;
+- dead-letter exchange/queue duráveis;
+- consumer dedicado no Worker;
+- ACK somente após persistência PostgreSQL;
+- capability estreita `dlq.quarantine_outbox_message(...)`;
+- Tenant/source derivados do Outbox autoritativo;
+- retry/redelivery bounded;
+- dedupe e poison-loop protection;
+- PostgreSQL 18 + RabbitMQ real no DLQ Contract CI;
+- Staging, rollback/restore e Production evidenciados.
+
+### Batch 3 — Jobs `failed_terminal → DLQ`
+
+**Em execução na fase 026.**
+
+Objetivo:
+
+```text
+job transition → failed_terminal
+        +
+DLQ durable quarantine
+        =
+mesma transação PostgreSQL
+```
+
+O contrato deve cobrir `jobs.jobs` e `jobs.system_jobs`, derivar Tenant apenas do registro autoritativo do Job, deduplicar por origem e persistir snapshot minimizado sem copiar payload arbitrário.
+
 Para concluir 026 ainda são obrigatórios:
 
-- migration/validation SQL;
-- RLS/least privilege;
-- state machine e concorrência segura;
-- idempotência de reprocessamento;
-- integração RabbitMQ DLX/DLQ real;
+- concluir e evidenciar o Batch 3;
+- reprocessamento governado de mensagens;
+- reprocessamento governado de Jobs;
 - APIs administrativas com RBAC/tenant scope;
-- auditoria/observabilidade;
-- CI completo;
-- Staging;
-- rollback/restore;
-- **aprovação humana explícita para Production**;
-- smoke/evidências de conclusão.
-
-A fase 027 — Object Storage permanece `NOT ACTIVE`.
+- `Idempotency-Key` e optimistic concurrency nas mutações;
+- Audit das ações administrativas;
+- testes finais de concorrência/reprocessamento;
+- smoke/evidência final;
+- sincronização final GitHub/Confluence;
+- fechamento da Issue #115.
 
 ## Segurança e configuração
 
@@ -195,15 +243,6 @@ O Security CI inclui:
 ```text
 Dependency vulnerability gate = npm audit --audit-level=high --omit=dev
 SAST                           = CodeQL JavaScript/TypeScript
-```
-
-## CI da reconciliação 025 em `main`
-
-```text
-Foundation CI          32935498433 = SUCCESS
-Moventra CI            32935498446 = SUCCESS
-Moventra Jobs Contract 32935498527 = SUCCESS
-Moventra Security CI   32935498444 = SUCCESS
 ```
 
 ## CI/CD e gates de Production

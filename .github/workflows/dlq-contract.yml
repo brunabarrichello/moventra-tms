@@ -101,12 +101,13 @@ jobs:
       - name: Apply complete migration history
         run: node scripts/db/migrate.mjs
 
-      - name: Validate DLQ schema and worker capability
+      - name: Validate DLQ schema, worker capability and terminal Job capture
         id: schema
         run: |
           set -euo pipefail
           psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0017_dlq_validation.sql
           psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0018_dlq_worker_ingestion_validation.sql
+          psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0019_dlq_job_terminal_capture_validation.sql
           bash scripts/ci/worker-access-contract.sh
 
       - name: Validate DLQ unit and architecture contracts
@@ -170,11 +171,11 @@ jobs:
           cat > evidence/dlq-contract.txt <<EOF
           product=Moventra TMS
           phase=026-dlq
-          batch=2-rabbitmq-ingestion
+          batch=2-3-durable-ingestion-and-job-terminal-capture
           commit_sha=${GITHUB_SHA}
           workflow_run_id=${GITHUB_RUN_ID}
           workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
-          postgres_worker_capability=${SCHEMA_OUTCOME}
+          postgres_schema_worker_and_job_capture=${SCHEMA_OUTCOME}
           unit_and_architecture=${TESTS_OUTCOME}
           rabbitmq_to_postgres_ingestion=${INTEGRATION_OUTCOME}
           dedicated_worker_runtime=${WORKER_OUTCOME}

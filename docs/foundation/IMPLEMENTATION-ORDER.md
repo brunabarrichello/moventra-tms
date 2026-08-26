@@ -46,32 +46,8 @@ Este documento é a **linha canônica de implantação do Moventra TMS**. Estado
 | 023 — Transactional Outbox | **CONCLUDED** | intenção de publicação atômica |
 | 024 — Mensageria | **CONCLUDED** | RabbitMQ atrás de portas provider-neutral, at-least-once, confirms e ack/nack |
 | 025 — Jobs / Outbox Dispatcher | **EVIDENCED / CONCLUDED** | Jobs duráveis PostgreSQL + Worker Railway + dispatcher Outbox |
-| 026 — DLQ | **ACTIVE / IMPLEMENTED / AWAITING RELEASE EVIDENCE** | gate pós-auditoria 1–14 concluído; artefatos técnicos já materializados; release próprio ainda pendente |
+| 026 — DLQ | **ACTIVE / PARTIALLY EVIDENCED IN PRODUCTION / NOT CONCLUDED** | Batch 2 promovido e validado em Production; Batch 3 `jobs.failed_terminal → DLQ` em execução; governança/reprocess/admin ainda pendentes |
 | 027+ | **NOT ACTIVE** | preservar a ordem oficial |
-
-## Fechamento da reconciliação pós-auditoria 025
-
-```text
-Gate 1–14                  = CONCLUDED
-PR de reconciliação        = #118
-main revision reconciliada = b3808c9e3ca3c6896e9ea32bcd96bbf7a5e15ceb
-Foundation CI              = 32935498433 SUCCESS
-Moventra CI                = 32935498446 SUCCESS
-Jobs Contract              = 32935498527 SUCCESS
-Security CI                = 32935498444 SUCCESS
-Production DB max migration= 0016
-Production has 0017        = false
-```
-
-O histórico completo e a matriz dos 14 itens estão em `docs/governance/025-POST-AUDIT-CORRECTIONS.md`.
-
-## Gates macro
-
-```text
-G1 — Foundation Ready = APPROVED
-G2 — Security Ready   = APPROVED / REVALIDATED AFTER P0 + P1
-G3+                   = NOT REACHED
-```
 
 ## Baseline 025 — identidade e runtime validado
 
@@ -88,7 +64,30 @@ messaging                         = RabbitMQ / AMQP 0-9-1 / TLS em staging+produ
 serviceVersion precedence         = MOVENTRA_RELEASE_SHA → APP_VERSION → VERCEL_GIT_COMMIT_SHA → development
 ```
 
-## Banco — estado operacional de Production no momento da ativação 026
+## Batch 2 da 026 — Production evidenciada
+
+```text
+main revision                  = 9a0380cb9bd8600c345fc894a0d9d08fb7c62687
+PR                             = #120
+Foundation CI                  = 32938081748 SUCCESS
+Moventra CI                    = 32938081754 SUCCESS
+Jobs Contract                  = 32938081788 SUCCESS
+Security CI                    = 32938081746 SUCCESS
+DLQ Contract                   = 32938081753 SUCCESS
+Release Gate / Staging         = 32938178973 SUCCESS
+Rollback Drill                 = 32938286136 SUCCESS
+Production Promotion           = 32938457243 SUCCESS
+Production DB applied          = 18 migrations
+Production DB max migration    = 0018
+Production has 0017            = true
+Production has 0018            = true
+Railway deployment             = 5f95e401-5b12-4e36-a817-dead641a9acb
+Railway serviceVersion         = 9a0380cb9bd8600c345fc894a0d9d08fb7c62687
+```
+
+A promoção do Batch 2 encerrou o antigo estado `AWAITING RELEASE EVIDENCE`, mas **não conclui a fase 026**. A Issue #115 continua aberta até que todos os critérios funcionais e operacionais de DLQ sejam satisfeitos.
+
+## Banco — estado operacional de Production após o Batch 2 da 026
 
 Provider: **Neon PostgreSQL 18.6**.
 
@@ -111,9 +110,11 @@ Aplicado em Production:
 0014_idempotency.sql
 0015_outbox.sql
 0016_jobs.sql
+0017_dlq.sql
+0018_dlq_worker_ingestion.sql
 ```
 
-A migration `0017_dlq.sql` existe em source control como parte da implementação técnica da fase 026, mas **não estava aplicada em Production no momento da ativação formal desta fase**.
+A migration `0019_dlq_job_terminal_capture.sql` pertence ao Batch 3 em desenvolvimento. Ela existe somente na branch da unidade de trabalho enquanto não passar por PR/CI/release; **não está autorizada em Production**.
 
 ## Boundary consolidado até 025
 
@@ -138,44 +139,111 @@ Outbox Dispatcher = job de sistema dedicado no Worker Railway
 
 ## Fase ativa — 026 DLQ
 
-A 026 está liberada para continuidade técnica sob o contrato de `docs/implementation/026-dlq.md` e issue #115.
+A 026 está liberada exclusivamente para continuidade técnica sob `docs/implementation/026-dlq.md` e Issue #115.
 
 Estado correto:
 
 ```text
-ACTIVE / IMPLEMENTED / AWAITING RELEASE EVIDENCE
+ACTIVE / PARTIALLY EVIDENCED IN PRODUCTION / NOT CONCLUDED
 ```
 
-Isto significa:
+### Batch 1 — foundation de quarentena
 
-- modelo/migration/código já existem em source control;
-- a fase pode prosseguir com validação e release controlado;
-- **não** significa `EVIDENCED` ou `CONCLUDED`;
-- **não** autoriza promoção direta a Production.
+Materializado por `0017_dlq.sql`:
 
-Antes de concluir 026 permanecem obrigatórios:
+- `dlq.entries` tenant-scoped + RLS;
+- `dlq.system_entries` fisicamente separado;
+- source `message | job`;
+- dedupe por origem;
+- state machine de reprocessamento;
+- optimistic `version`;
+- limites de tentativa/claim;
+- permissions `dlq.read`, `dlq.reprocess`, `dlq.resolve`, `dlq.discard`.
 
-1. validation SQL/RLS/least privilege;
-2. state machine e concorrência de quarentena/reprocessamento;
-3. idempotência de reprocessamento;
-4. RabbitMQ DLX/DLQ real;
-5. APIs administrativas protegidas por RBAC/tenant scope;
-6. auditoria e observabilidade seguras;
-7. CI completo;
-8. Staging;
-9. rollback/restore;
-10. aprovação humana explícita para Production;
-11. smoke/evidências após eventual Production;
-12. documentação de conclusão e somente então liberação da fase 027.
+### Batch 2 — RabbitMQ DLX/DLQ + ingestão durável
+
+Materializado e evidenciado em Production:
+
+```text
+primary consumer queue
+→ nack(requeue=false)
+→ RabbitMQ DLX
+→ durable DLQ ingestion queue
+→ dedicated Worker consumer
+→ narrow SECURITY DEFINER capability
+→ dlq.entries
+```
+
+Invariantes:
+
+- Worker continua `NOBYPASSRLS`;
+- sem leitura direta de `outbox.events`/DLQ tenant-scoped;
+- Tenant/source derivados do Outbox autoritativo;
+- ACK somente após persistência durável;
+- retry/redelivery bounded;
+- poison-loop protection;
+- ingestão repetida deduplicada.
+
+### Batch 3 — captura atômica de Jobs terminais
+
+Unidade ativa atual:
+
+```text
+jobs.jobs / jobs.system_jobs
+        ↓
+transição para failed_terminal
+        ↓
+trigger PostgreSQL na mesma transação
+        ↓
+dlq.entries / dlq.system_entries
+```
+
+Regras:
+
+- captura deve ser atômica com a transição terminal;
+- tenant vem exclusivamente de `jobs.jobs.tenant_id`;
+- system Job nunca usa `tenant_id NULL` em tabela tenant-scoped;
+- raw Job payload não é copiado automaticamente ao snapshot DLQ;
+- dedupe usa o contrato existente por `source_kind=job + source_id`;
+- funções de trigger são `SECURITY DEFINER` com `PUBLIC EXECUTE` revogado;
+- CI deve provar os dois escopos em PostgreSQL real.
+
+## Pendências obrigatórias para concluir 026
+
+1. concluir Batch 3 e evidenciar `jobs.failed_terminal → DLQ`;
+2. reprocessamento governado de mensagens;
+3. reprocessamento governado de Jobs;
+4. APIs administrativas protegidas por RBAC/tenant scope;
+5. `Idempotency-Key` nas mutações;
+6. optimistic concurrency de decisões administrativas;
+7. Audit before/after/ator/correlation das ações humanas;
+8. testes de concorrência de operadores/workers;
+9. observabilidade operacional com redução do ruído de polling vazio;
+10. CI completo;
+11. Staging;
+12. rollback/restore;
+13. aprovação humana explícita para qualquer nova Production;
+14. smoke/evidência final;
+15. documentação/Issue/Confluence sincronizados;
+16. somente então `026 = EVIDENCED / CONCLUDED`.
+
+## Gates macro
+
+```text
+G1 — Foundation Ready = APPROVED
+G2 — Security Ready   = APPROVED / REVALIDATED AFTER P0 + P1
+G3+                   = NOT REACHED
+```
 
 ## Regras de progressão
 
 - `027 — Object Storage` permanece **NOT ACTIVE** até 026 ser `EVIDENCED / CONCLUDED`;
-- nenhuma aprovação de Production pode ser inferida da ativação documental;
+- nenhuma aprovação de Production pode ser inferida da ativação documental ou de uma promoção anterior;
 - nenhuma migration em Production pode ser aplicada fora do release gate aprovado;
 - revisões de Worker devem usar SHA explicitamente selecionado e comprovar o mesmo SHA em `serviceVersion`;
-- secrets nunca são versionados nem usados como evidência documental.
+- secrets nunca são versionados nem usados como evidência documental;
+- documentos históricos preservam contexto, mas runtime/código + decisão vigente + evidência real têm precedência em caso de conflito.
 
 ## Próxima transição permitida
 
-Prosseguir exclusivamente com a **fase 026 — DLQ**, buscando `EVIDENCED / CONCLUDED`. A fase 027 continua bloqueada.
+Prosseguir exclusivamente com a **fase 026 — DLQ**, concluindo primeiro o Batch 3 `jobs.failed_terminal → DLQ`; depois seguir para reprocessamento governado e superfícies administrativas mínimas. A fase 027 continua bloqueada.
