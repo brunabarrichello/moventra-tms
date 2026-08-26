@@ -113,6 +113,7 @@ export class PostgresDlqRepository {
           AND version = $2
           AND status = 'quarantined'
           AND reprocess_count < max_reprocess_attempts
+          AND (next_reprocess_at IS NULL OR next_reprocess_at <= clock_timestamp())
        RETURNING *`,
       [id, expectedVersion, nextReprocessAt],
     );
