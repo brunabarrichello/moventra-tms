@@ -143,7 +143,10 @@ function sanitizeError(error) {
 }
 
 function runtimeVersion() {
-  return process.env.APP_VERSION?.trim() || process.env.VERCEL_GIT_COMMIT_SHA?.trim() || 'development';
+  return process.env.MOVENTRA_RELEASE_SHA?.trim()
+    || process.env.APP_VERSION?.trim()
+    || process.env.VERCEL_GIT_COMMIT_SHA?.trim()
+    || 'development';
 }
 
 function runtimeEnvironment() {

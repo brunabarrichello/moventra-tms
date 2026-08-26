@@ -21,6 +21,31 @@ function databaseUrl(user, password, host, path = 'db') {
   return ['postgresql', '://', user, ':', password, '@', host, '/', path].join('');
 }
 
+function withEnvironment(overrides, callback) {
+  const previous = new Map();
+
+  for (const [key, value] of Object.entries(overrides)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 test('structured logger redacts common secret material and connection strings', () => {
   const safe = sanitizeLogMetadata({
     authorization: 'Bearer secret-token',
@@ -62,4 +87,38 @@ test('structured logger attaches request correlation context without serializing
   assert.equal(records[0].password, '[REDACTED]');
   assert.equal(records[0].circular.self.self, '[TRUNCATED]');
   assert.doesNotMatch(JSON.stringify(records[0]), /must-not-appear/);
+});
+
+test('structured logger prefers Moventra release SHA and preserves version fallbacks', () => {
+  const { records, sink } = captureSink();
+  const logger = createLogger('revision-identity', { sink });
+
+  withEnvironment({
+    MOVENTRA_RELEASE_SHA: ' release-sha ',
+    APP_VERSION: 'app-version',
+    VERCEL_GIT_COMMIT_SHA: 'vercel-sha',
+  }, () => logger.info('release'));
+
+  withEnvironment({
+    MOVENTRA_RELEASE_SHA: undefined,
+    APP_VERSION: ' app-version ',
+    VERCEL_GIT_COMMIT_SHA: 'vercel-sha',
+  }, () => logger.info('app-version'));
+
+  withEnvironment({
+    MOVENTRA_RELEASE_SHA: undefined,
+    APP_VERSION: undefined,
+    VERCEL_GIT_COMMIT_SHA: ' vercel-sha ',
+  }, () => logger.info('vercel'));
+
+  withEnvironment({
+    MOVENTRA_RELEASE_SHA: undefined,
+    APP_VERSION: undefined,
+    VERCEL_GIT_COMMIT_SHA: undefined,
+  }, () => logger.info('development'));
+
+  assert.deepEqual(
+    records.map((record) => record.serviceVersion),
+    ['release-sha', 'app-version', 'vercel-sha', 'development'],
+  );
 });
