@@ -6,7 +6,7 @@ function read(path) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 }
 
-test('phase 025 materializes durable provider-neutral Jobs without administrative DLQ', () => {
+test('phase 025 remains durable/provider-neutral while active DLQ 026 extends terminal-failure governance', () => {
   for (const path of [
     'db/migrations/0016_jobs.sql',
     'db/validation/0016_jobs_validation.sql',
@@ -20,11 +20,13 @@ test('phase 025 materializes durable provider-neutral Jobs without administrativ
     'src/infrastructure/outbox/system-outbox-repository.js',
     'src/worker.js',
     'docs/implementation/025-jobs.md',
+    'docs/implementation/025-post-audit-reconciliation.md',
+    'docs/implementation/026-dlq.md',
+    'db/migrations/0017_dlq.sql',
+    'src/modules/dlq/dlq-contract.js',
   ]) {
     assert.equal(existsSync(new URL(`../../${path}`, import.meta.url)), true, `${path} must exist`);
   }
-  assert.equal(existsSync(new URL('../../src/modules/dlq/', import.meta.url)), false);
-  assert.equal(existsSync(new URL('../../db/migrations/0017_dlq.sql', import.meta.url)), false);
 
   const migration = read('db/migrations/0016_jobs.sql');
   assert.match(migration, /CREATE TABLE jobs\.jobs[\s\S]*tenant_id UUID NOT NULL/);
@@ -44,6 +46,12 @@ test('phase 025 materializes durable provider-neutral Jobs without administrativ
   assert.match(worker, /runForever/);
   assert.match(worker, /AbortController/);
   assert.doesNotMatch(worker, /eval\(|new Function\(/);
+
+  const reconciliation = read('docs/implementation/025-post-audit-reconciliation.md');
+  const dlqDoc = read('docs/implementation/026-dlq.md');
+  assert.match(reconciliation, /025 — Jobs = EVIDENCED \/ CONCLUDED/i);
+  assert.match(reconciliation, /026 — DLQ = ACTIVE \/ DEFINED/i);
+  assert.match(dlqDoc, /failed_terminal/i);
 });
 
 test('phase 025 provides a dedicated non-HTTP worker composition root', () => {

@@ -1,5 +1,5 @@
 -- Moventra TMS — PostgreSQL application runtime access contract
--- P0 hardening after G2 audit, extended through phase 025 Durable Jobs.
+-- P0 hardening after G2 audit, extended through phase 026 DLQ.
 -- Apply with psql -v runtime_role=<NOLOGIN authorization role> -f db/runtime/runtime-access.sql
 -- Worker-only cross-tenant/system capabilities live in db/runtime/worker-access.sql.
 
@@ -11,8 +11,8 @@
 \endif
 
 -- Application runtime may resolve objects but may never create objects in application schemas.
-GRANT USAGE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox, jobs TO :"runtime_role";
-REVOKE CREATE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox, jobs FROM :"runtime_role";
+GRANT USAGE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox, jobs, dlq TO :"runtime_role";
+REVOKE CREATE ON SCHEMA organization, identity, security, audit, configuration, feature_flags, idempotency, outbox, jobs, dlq FROM :"runtime_role";
 
 REVOKE ALL PRIVILEGES ON SCHEMA moventra_meta FROM :"runtime_role";
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA moventra_meta FROM :"runtime_role";
@@ -42,7 +42,9 @@ REVOKE ALL PRIVILEGES ON
   idempotency.records,
   outbox.events,
   jobs.jobs,
-  jobs.system_jobs
+  jobs.system_jobs,
+  dlq.entries,
+  dlq.system_entries
 FROM :"runtime_role";
 
 -- Converge worker-only function grants away from the HTTP/application principal.
@@ -105,6 +107,42 @@ GRANT UPDATE (
 -- System schedules are invisible and non-mutable to the normal application runtime.
 REVOKE ALL PRIVILEGES ON jobs.system_jobs FROM :"runtime_role";
 
+-- DLQ administrative surfaces use the normal tenant runtime under RLS, but cannot create
+-- or rewrite quarantined payloads/source identity. Only lifecycle fields required by
+-- governed reprocessing/resolution are mutable. System DLQ entries remain invisible.
+GRANT SELECT ON dlq.entries TO :"runtime_role";
+GRANT UPDATE (
+  status,
+  reprocess_count,
+  next_reprocess_at,
+  reprocess_claim_token,
+  reprocess_claimed_at,
+  reprocess_claim_expires_at,
+  last_reprocess_at,
+  last_failure_code,
+  resolved_at,
+  resolved_by_membership_id,
+  resolution_code,
+  version,
+  updated_at
+) ON dlq.entries TO :"runtime_role";
+REVOKE INSERT, DELETE ON dlq.entries FROM :"runtime_role";
+REVOKE UPDATE (
+  tenant_id,
+  source_kind,
+  source_id,
+  source_type,
+  source_schema_version,
+  failure_code,
+  failure_class,
+  snapshot,
+  metadata,
+  quarantined_at,
+  max_reprocess_attempts,
+  created_at
+) ON dlq.entries FROM :"runtime_role";
+REVOKE ALL PRIVILEGES ON dlq.system_entries FROM :"runtime_role";
+
 GRANT SELECT, INSERT ON configuration.setting_versions TO :"runtime_role";
 GRANT SELECT, INSERT ON feature_flags.rule_versions TO :"runtime_role";
 
@@ -137,7 +175,9 @@ REVOKE DELETE ON
   idempotency.records,
   outbox.events,
   jobs.jobs,
-  jobs.system_jobs
+  jobs.system_jobs,
+  dlq.entries,
+  dlq.system_entries
 FROM :"runtime_role";
 
 REVOKE INSERT, UPDATE ON security.permissions FROM :"runtime_role";

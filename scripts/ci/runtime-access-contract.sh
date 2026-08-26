@@ -47,7 +47,12 @@ psql -X --no-psqlrc -v ON_ERROR_STOP=1 \
   -v app_role="$APP_ROLE" \
   -f db/runtime/jobs-runtime-access-validation.sql
 
+psql -X --no-psqlrc -v ON_ERROR_STOP=1 \
+  -v runtime_role="$RUNTIME_ROLE" \
+  -v app_role="$APP_ROLE" \
+  -f db/runtime/dlq-runtime-access-validation.sql
+
 node scripts/db/validate-outbox-concurrency.mjs
 node scripts/db/validate-jobs-concurrency.mjs
 
-echo "Runtime PostgreSQL access contract passed for synthetic non-owner principal ${APP_ROLE}, including Transactional Outbox and Durable Jobs."
+echo "Runtime PostgreSQL access contract passed for synthetic non-owner principal ${APP_ROLE}, including Transactional Outbox, Durable Jobs and tenant-scoped DLQ lifecycle access."
