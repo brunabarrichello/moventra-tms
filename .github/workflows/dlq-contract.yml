@@ -1,0 +1,190 @@
+name: Moventra DLQ Contract
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moventra-dlq-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dlq-contract:
+    name: DLQ durable ingestion contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: moventra_dlq_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: moventra-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d moventra_dlq_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      rabbitmq:
+        image: rabbitmq:4.3.5-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: moventra_ci
+          RABBITMQ_DEFAULT_PASS: moventra-ci-only
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: moventra_dlq_ci
+      PGUSER: postgres
+      PGPASSWORD: moventra-ci-only
+      WORKER_APP_ROLE: moventra_worker_app_ci
+      WORKER_CI_PASSWORD: moventra-worker-ci-only
+      MOVENTRA_ENV: ci
+      MESSAGING_PROVIDER: rabbitmq
+      MESSAGING_EXCHANGE: moventra.events.dlqci
+      MESSAGING_PREFETCH: 20
+      MESSAGING_PUBLISH_CONFIRM_TIMEOUT_MS: 5000
+      DLQ_RABBITMQ_DLX: moventra.dlx.dlqci
+      DLQ_RABBITMQ_QUEUE: moventra.dlq.ingest.dlqci
+      DLQ_RABBITMQ_PREFETCH: 10
+      DLQ_INGEST_PERSIST_RETRIES: 3
+      DLQ_INGEST_RETRY_BASE_MS: 100
+      DLQ_INGEST_RETRY_MAX_MS: 500
+      DLQ_CI_SOURCE_QUEUE: moventra.dlq.source.dlqci
+      RABBITMQ_CI_USER: moventra_ci
+      RABBITMQ_CI_PASSWORD: moventra-ci-only
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Build ephemeral database connections
+        run: |
+          set -euo pipefail
+          scheme='postgresql:'
+          slashes='//'
+          printf 'DATABASE_URL=%s%s%s:%s@%s:%s/%s\n' \
+            "$scheme" "$slashes" "$PGUSER" "$PGPASSWORD" "$PGHOST" "$PGPORT" "$PGDATABASE" >> "$GITHUB_ENV"
+          printf 'WORKER_DATABASE_URL=%s%s%s:%s@%s:%s/%s\n' \
+            "$scheme" "$slashes" "$WORKER_APP_ROLE" "$WORKER_CI_PASSWORD" "$PGHOST" "$PGPORT" "$PGDATABASE" >> "$GITHUB_ENV"
+
+      - name: Install locked runtime dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
+
+      - name: Apply complete migration history
+        run: node scripts/db/migrate.mjs
+
+      - name: Validate DLQ schema and worker capability
+        id: schema
+        run: |
+          set -euo pipefail
+          psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0017_dlq_validation.sql
+          psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0018_dlq_worker_ingestion_validation.sql
+          bash scripts/ci/worker-access-contract.sh
+
+      - name: Validate DLQ unit and architecture contracts
+        id: tests
+        run: >-
+          node --test
+          tests/unit/dlq-contract.test.js
+          tests/unit/postgres-dlq-repository.test.js
+          tests/unit/dlq-ingestion-config.test.js
+          tests/unit/system-dlq-ingestion-repository.test.js
+          tests/unit/rabbitmq-dlq-ingestion.test.js
+          tests/architecture/dlq-phase.test.js
+
+      - name: Validate real RabbitMQ DLX to durable PostgreSQL quarantine
+        id: integration
+        run: |
+          set -euo pipefail
+          export MESSAGING_RABBITMQ_URL="amqp://${RABBITMQ_CI_USER}:${RABBITMQ_CI_PASSWORD}@127.0.0.1:5672/"
+          node scripts/ci/validate-dlq-ingestion.mjs
+
+      - name: Smoke dedicated worker with DLQ ingestion enabled
+        id: worker
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          export DATABASE_URL="$WORKER_DATABASE_URL"
+          export MESSAGING_RABBITMQ_URL="amqp://${RABBITMQ_CI_USER}:${RABBITMQ_CI_PASSWORD}@127.0.0.1:5672/"
+          node src/worker.js > evidence/dlq-worker-runtime.log 2>&1 &
+          worker_pid=$!
+          sleep 3
+
+          if ! kill -0 "$worker_pid" 2>/dev/null; then
+            cat evidence/dlq-worker-runtime.log
+            wait "$worker_pid" || true
+            exit 1
+          fi
+
+          kill -TERM "$worker_pid"
+          if ! wait "$worker_pid"; then
+            cat evidence/dlq-worker-runtime.log
+            exit 1
+          fi
+
+          grep -q '"event":"dlq.ingestion.started"' evidence/dlq-worker-runtime.log
+          grep -q '"event":"jobs.worker.started"' evidence/dlq-worker-runtime.log
+          if grep -q '"event":"jobs.worker.failed"' evidence/dlq-worker-runtime.log; then
+            cat evidence/dlq-worker-runtime.log
+            exit 1
+          fi
+
+      - name: Record DLQ contract evidence
+        if: always()
+        env:
+          SCHEMA_OUTCOME: ${{ steps.schema.outcome }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          INTEGRATION_OUTCOME: ${{ steps.integration.outcome }}
+          WORKER_OUTCOME: ${{ steps.worker.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/dlq-contract.txt <<EOF
+          product=Moventra TMS
+          phase=026-dlq
+          batch=2-rabbitmq-ingestion
+          commit_sha=${GITHUB_SHA}
+          workflow_run_id=${GITHUB_RUN_ID}
+          workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
+          postgres_worker_capability=${SCHEMA_OUTCOME}
+          unit_and_architecture=${TESTS_OUTCOME}
+          rabbitmq_to_postgres_ingestion=${INTEGRATION_OUTCOME}
+          dedicated_worker_runtime=${WORKER_OUTCOME}
+          EOF
+
+      - name: Upload DLQ contract evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dlq-contract-${{ github.sha }}
+          path: evidence/dlq-contract.txt
+          if-no-files-found: error
+          retention-days: 90
