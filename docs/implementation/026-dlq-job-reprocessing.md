@@ -3,7 +3,7 @@
 ## Estado
 
 `IMPLEMENTED IN BRANCH / EXACT-HEAD CI REVALIDATION REQUIRED / STAGING, ROLLBACK AND PRODUCTION EVIDENCE PENDING`
-
+Revalidação manual do CI solicitada em 2026-08-26 após ausência de check-runs nos eventos originados pela integração.
 Este documento descreve o delta de reprocessamento governado de Jobs da fase 026. Ele não conclui a fase e não ativa a 027.
 
 ### Nota de revalidação do CI
