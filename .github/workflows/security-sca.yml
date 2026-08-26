@@ -1,0 +1,79 @@
+name: Moventra Dependency Vulnerability Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-sca-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-vulnerability-gate:
+    name: Dependency vulnerabilities high/critical
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Generate npm audit report
+        run: |
+          set -euo pipefail
+          npm audit --json > npm-audit.json || true
+          test -s npm-audit.json || {
+            echo "::error::npm audit did not produce a report"
+            exit 1
+          }
+
+      - name: Enforce vulnerability policy
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const report = JSON.parse(fs.readFileSync('npm-audit.json', 'utf8'));
+          if (report.error) {
+            console.error('::error::npm audit returned an error and the gate fails closed');
+            process.exit(1);
+          }
+
+          const vulnerabilities = report.metadata?.vulnerabilities ?? {};
+          const critical = Number(vulnerabilities.critical ?? 0);
+          const high = Number(vulnerabilities.high ?? 0);
+          const moderate = Number(vulnerabilities.moderate ?? 0);
+          const low = Number(vulnerabilities.low ?? 0);
+
+          const summary = [
+            '## Dependency vulnerability gate',
+            '',
+            `- Critical: ${critical}`,
+            `- High: ${high}`,
+            `- Moderate: ${moderate}`,
+            `- Low: ${low}`,
+            '',
+            '**Policy:** high and critical vulnerabilities are blocking. Moderate/low findings require triage but do not fail this gate.',
+          ].join('\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+
+          if (critical + high > 0) {
+            console.error(`::error::Dependency policy violation: ${critical} critical and ${high} high vulnerabilities`);
+            process.exit(1);
+          }
+          NODE
