@@ -13,6 +13,7 @@ const outboxRepository = fs.readFileSync('src/modules/outbox/outbox-repository.j
 const ingestionRepository = fs.readFileSync('src/infrastructure/dlq/system-dlq-ingestion-repository.js', 'utf8');
 const ingestionAdapter = fs.readFileSync('src/infrastructure/dlq/rabbitmq-dlq-ingestion.js', 'utf8');
 const documentation = fs.readFileSync('docs/implementation/026-dlq.md', 'utf8');
+const messageReprocessDocumentation = fs.readFileSync('docs/implementation/026-dlq-message-reprocessing.md', 'utf8');
 
 test('026 mantém tenant e system DLQ fisicamente separados', () => {
   assert.match(migration, /CREATE TABLE dlq\.entries \(/);
@@ -82,12 +83,19 @@ test('reprocessamento de mensagem relê Outbox autoritativo e reutiliza mapper/p
   assert.doesNotMatch(reprocessSignature, /payload|routingKey|exchange|queue|eventType|tenantId/i);
 });
 
+test('reprocess_pending é retomável somente com optimistic version corrente', () => {
+  assert.match(messageReprocessor, /current\.status === 'reprocess_pending'/);
+  assert.match(messageReprocessor, /current\.version !== version/);
+  assert.match(messageReprocessor, /claimReprocess/);
+  assert.match(messageReprocessDocumentation, /retomad[ao].*versão corrente/is);
+});
+
 test('Outbox expõe somente lookup por id sob RLS para reconstrução autoritativa', () => {
   assert.match(outboxRepository, /async findById\(\{ id \}\)/);
   assert.match(outboxRepository, /FROM outbox\.events/);
   assert.match(outboxRepository, /WHERE id = \$1/);
   assert.match(runtimeAccess, /GRANT SELECT, INSERT ON outbox\.events/);
-  assert.match(migration.replaceAll('dlq', 'dlq'), /CREATE TABLE dlq\.entries/);
+  assert.match(runtimeAccess, /GRANT SELECT ON dlq\.entries/);
 });
 
 test('cooldown de reprocessamento é enforceado no SQL e não apenas na aplicação', () => {
