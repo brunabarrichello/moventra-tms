@@ -7,6 +7,8 @@ const ALGORITHMS = Object.freeze({
   EdDSA: Object.freeze({ digest: null, dsaEncoding: null }),
 });
 const DEFAULT_CLOCK_SKEW_SECONDS = 60;
+const DEFAULT_JWKS_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_JWKS_TIMEOUT_MS = 3_000;
 const MAX_TOKEN_BYTES = 16 * 1024;
 
 export class BearerJwtAssertionVerifier {
@@ -14,27 +16,51 @@ export class BearerJwtAssertionVerifier {
     providerKey,
     issuer,
     audience,
-    publicKeyPem,
+    publicKeyPem = null,
+    jwksUrl = null,
     algorithm = 'RS256',
     clock = () => Math.floor(Date.now() / 1000),
+    clockMs = () => Date.now(),
     clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS,
+    jwksCacheTtlMs = DEFAULT_JWKS_CACHE_TTL_MS,
+    jwksTimeoutMs = DEFAULT_JWKS_TIMEOUT_MS,
+    fetchImpl = globalThis.fetch,
   } = {}) {
     this.providerKey = normalizeProviderKey(providerKey);
     this.issuer = requireText(issuer, 'JWT issuer');
     this.audience = requireText(audience, 'JWT audience');
     this.algorithm = normalizeAlgorithm(algorithm);
-    this.publicKey = normalizePublicKey(publicKeyPem);
-    if (typeof clock !== 'function') {
-      throw new TypeError('BearerJwtAssertionVerifier clock must be a function');
+    this.publicKey = publicKeyPem ? normalizePublicKey(publicKeyPem) : null;
+    this.jwksUrl = normalizeOptionalJwksUrl(jwksUrl);
+    if (!this.publicKey && !this.jwksUrl) {
+      throw new TypeError('JWT verification requires publicKeyPem or jwksUrl');
+    }
+    if (this.jwksUrl && typeof fetchImpl !== 'function') {
+      throw new TypeError('JWT JWKS verification requires fetch support');
+    }
+    if (typeof clock !== 'function' || typeof clockMs !== 'function') {
+      throw new TypeError('BearerJwtAssertionVerifier clocks must be functions');
     }
     if (!Number.isInteger(clockSkewSeconds) || clockSkewSeconds < 0 || clockSkewSeconds > 300) {
       throw new TypeError('JWT clock skew must be an integer between 0 and 300 seconds');
     }
+    if (!Number.isInteger(jwksCacheTtlMs) || jwksCacheTtlMs < 1_000 || jwksCacheTtlMs > 3_600_000) {
+      throw new TypeError('JWT JWKS cache TTL must be between 1000 and 3600000 milliseconds');
+    }
+    if (!Number.isInteger(jwksTimeoutMs) || jwksTimeoutMs < 250 || jwksTimeoutMs > 10_000) {
+      throw new TypeError('JWT JWKS timeout must be between 250 and 10000 milliseconds');
+    }
     this.clock = clock;
+    this.clockMs = clockMs;
     this.clockSkewSeconds = clockSkewSeconds;
+    this.jwksCacheTtlMs = jwksCacheTtlMs;
+    this.jwksTimeoutMs = jwksTimeoutMs;
+    this.fetchImpl = fetchImpl;
+    this.jwksCache = new Map();
+    this.jwksCacheExpiresAt = 0;
   }
 
-  verifyRequest(request) {
+  async verifyRequest(request) {
     const authorization = singleHeader(readHeader(request?.headers, 'authorization'));
     if (!authorization) {
       throw new AuthenticationError({ message: 'Authorization bearer token is required' });
@@ -46,7 +72,7 @@ export class BearerJwtAssertionVerifier {
     return this.verifyToken(match[1]);
   }
 
-  verifyToken(token) {
+  async verifyToken(token) {
     if (typeof token !== 'string' || !token || Buffer.byteLength(token, 'utf8') > MAX_TOKEN_BYTES) {
       throw new AuthenticationError({ message: 'Bearer token is invalid' });
     }
@@ -64,9 +90,10 @@ export class BearerJwtAssertionVerifier {
 
     const signature = decodeBase64Url(parts[2], 'JWT signature');
     const signingInput = Buffer.from(`${parts[0]}.${parts[1]}`, 'ascii');
+    const publicKey = await this.#resolvePublicKey(header);
     if (!verifyJwtSignature({
       algorithm: this.algorithm,
-      publicKey: this.publicKey,
+      publicKey,
       signingInput,
       signature,
     })) {
@@ -86,6 +113,80 @@ export class BearerJwtAssertionVerifier {
       subject: claims.sub.trim(),
     });
   }
+
+  async #resolvePublicKey(header) {
+    if (!this.jwksUrl) {
+      return this.publicKey;
+    }
+    if (typeof header.kid !== 'string' || !header.kid.trim() || header.kid.length > 256) {
+      throw new AuthenticationError({ message: 'JWT key id is required for JWKS verification' });
+    }
+    const kid = header.kid.trim();
+    const cached = this.jwksCache.get(kid);
+    if (cached && this.clockMs() < this.jwksCacheExpiresAt) {
+      return cached;
+    }
+
+    await this.#refreshJwks();
+    const resolved = this.jwksCache.get(kid);
+    if (!resolved) {
+      throw new AuthenticationError({ message: 'JWT signing key is not trusted by the configured JWKS' });
+    }
+    return resolved;
+  }
+
+  async #refreshJwks() {
+    let response;
+    try {
+      response = await this.fetchImpl(this.jwksUrl, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(this.jwksTimeoutMs),
+        redirect: 'error',
+      });
+    } catch (cause) {
+      throw new DependencyError({
+        message: 'JWT JWKS endpoint is unavailable',
+        retryable: true,
+        retryStrategy: 'backoff',
+        cause,
+      });
+    }
+    if (!response?.ok) {
+      throw new DependencyError({
+        message: `JWT JWKS endpoint returned HTTP ${Number(response?.status) || 0}`,
+        retryable: Number(response?.status) >= 500,
+        retryStrategy: Number(response?.status) >= 500 ? 'backoff' : 'none',
+      });
+    }
+
+    let body;
+    try {
+      body = await response.json();
+    } catch (cause) {
+      throw new DependencyError({ message: 'JWT JWKS endpoint returned invalid JSON', retryable: false, cause });
+    }
+    if (!body || typeof body !== 'object' || !Array.isArray(body.keys) || body.keys.length < 1 || body.keys.length > 20) {
+      throw new DependencyError({ message: 'JWT JWKS document has an invalid key set', retryable: false });
+    }
+
+    const nextCache = new Map();
+    for (const jwk of body.keys) {
+      if (!isAcceptedPublicJwk(jwk, this.algorithm)) {
+        continue;
+      }
+      try {
+        nextCache.set(jwk.kid, createPublicKey({ key: jwk, format: 'jwk' }));
+      } catch {
+        // Invalid public keys are ignored; fail closed if no usable key remains.
+      }
+    }
+    if (nextCache.size < 1) {
+      throw new DependencyError({ message: 'JWT JWKS document contains no usable signing key', retryable: false });
+    }
+    this.jwksCache = nextCache;
+    this.jwksCacheExpiresAt = this.clockMs() + this.jwksCacheTtlMs;
+  }
 }
 
 export function createRuntimeBearerJwtAssertionVerifier(env = process.env) {
@@ -94,12 +195,13 @@ export function createRuntimeBearerJwtAssertionVerifier(env = process.env) {
       providerKey: env.MOVENTRA_AUTH_PROVIDER_KEY,
       issuer: env.MOVENTRA_AUTH_JWT_ISSUER,
       audience: env.MOVENTRA_AUTH_JWT_AUDIENCE,
-      publicKeyPem: env.MOVENTRA_AUTH_JWT_PUBLIC_KEY_PEM,
+      publicKeyPem: env.MOVENTRA_AUTH_JWT_PUBLIC_KEY_PEM || null,
+      jwksUrl: env.MOVENTRA_AUTH_JWT_JWKS_URL || null,
       algorithm: env.MOVENTRA_AUTH_JWT_ALGORITHM || 'RS256',
     });
   } catch (cause) {
     return Object.freeze({
-      verifyRequest() {
+      async verifyRequest() {
         throw new DependencyError({
           message: 'Administrative API authentication is not configured',
           retryable: false,
@@ -140,6 +242,31 @@ function validateClaims(claims, { issuer, audience, now, clockSkewSeconds }) {
   }
 }
 
+function isAcceptedPublicJwk(jwk, algorithm) {
+  if (!jwk || typeof jwk !== 'object' || Array.isArray(jwk)) {
+    return false;
+  }
+  if (typeof jwk.kid !== 'string' || !jwk.kid.trim() || jwk.kid.length > 256) {
+    return false;
+  }
+  if (jwk.use && jwk.use !== 'sig') {
+    return false;
+  }
+  if (jwk.alg && jwk.alg !== algorithm) {
+    return false;
+  }
+  if (Object.hasOwn(jwk, 'd') || Object.hasOwn(jwk, 'p') || Object.hasOwn(jwk, 'q')) {
+    return false;
+  }
+  if (algorithm === 'EdDSA') {
+    return jwk.kty === 'OKP' && ['Ed25519', 'Ed448'].includes(jwk.crv) && typeof jwk.x === 'string';
+  }
+  if (algorithm === 'ES256') {
+    return jwk.kty === 'EC' && jwk.crv === 'P-256' && typeof jwk.x === 'string' && typeof jwk.y === 'string';
+  }
+  return jwk.kty === 'RSA' && typeof jwk.n === 'string' && typeof jwk.e === 'string';
+}
+
 function parseJwtJson(segment, label) {
   const decoded = decodeBase64Url(segment, label);
   try {
@@ -171,6 +298,23 @@ function normalizePublicKey(value) {
   } catch (cause) {
     throw new TypeError(`JWT public key is invalid: ${cause instanceof Error ? cause.message : 'unknown error'}`);
   }
+}
+
+function normalizeOptionalJwksUrl(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const candidate = requireText(value, 'JWT JWKS URL');
+  let url;
+  try {
+    url = new URL(candidate);
+  } catch (cause) {
+    throw new TypeError(`JWT JWKS URL is invalid: ${cause instanceof Error ? cause.message : 'unknown error'}`);
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
+    throw new TypeError('JWT JWKS URL must be HTTPS without credentials or fragment');
+  }
+  return url.toString();
 }
 
 function normalizeAlgorithm(value) {
