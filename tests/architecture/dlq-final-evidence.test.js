@@ -80,8 +80,8 @@ test('Neon Auth staging handshake preserves managed client protocol, explicit or
 });
 
 test('managed Auth API base URL is distinct from JWT issuer while remaining same-origin and JWKS anchored', () => {
-  assert.match(authConfig, /"baseUrl": "https:\/\/[^\"]+\/neondb\/auth"/);
-  assert.match(authConfig, /"issuer": "https:\/\/[^\"]+\.neon\.tech"/);
+  assert.match(authConfig, /"baseUrl": "https:\/\/[^"]+\/neondb\/auth"/);
+  assert.match(authConfig, /"issuer": "https:\/\/[^"]+\.neon\.tech"/);
   assert.match(authResolver, /baseUrl\.origin !== issuerUrl\.origin/);
   assert.match(authResolver, /JWKS URL must be anchored to the managed Auth base URL/);
   assert.match(adminSmoke, /fetch\(`\$\{auth\.baseUrl\}\$\{path\}`/);
