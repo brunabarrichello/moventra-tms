@@ -5,6 +5,26 @@
     {
       "source": "/health",
       "destination": "/api/health"
+    },
+    {
+      "source": "/api/v1/dlq/entries/:dlq_id/reprocess",
+      "destination": "/api/dlq-admin?dlq_action=reprocess&dlq_id=:dlq_id"
+    },
+    {
+      "source": "/api/v1/dlq/entries/:dlq_id/resolve",
+      "destination": "/api/dlq-admin?dlq_action=resolve&dlq_id=:dlq_id"
+    },
+    {
+      "source": "/api/v1/dlq/entries/:dlq_id/discard",
+      "destination": "/api/dlq-admin?dlq_action=discard&dlq_id=:dlq_id"
+    },
+    {
+      "source": "/api/v1/dlq/entries/:dlq_id",
+      "destination": "/api/dlq-admin?dlq_action=detail&dlq_id=:dlq_id"
+    },
+    {
+      "source": "/api/v1/dlq/entries",
+      "destination": "/api/dlq-admin?dlq_action=list"
     }
   ]
 }

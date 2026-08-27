@@ -87,17 +87,24 @@ export class PostgresDlqRepository {
     return result.rowCount === 1 ? mapEntry(result.rows[0], this.scope) : null;
   }
 
-  async list({ status = null, sourceKind = null, limit = 50, before = null } = {}) {
+  async list({ status = null, sourceKind = null, limit = 50, before = null, beforeId = null } = {}) {
     const boundedLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
+    if ((before === null) !== (beforeId === null)) {
+      throw repositoryError('MVT_DLQ_CURSOR_INVALID', 'DLQ keyset cursor requires timestamp and id together');
+    }
     const result = await this.query(
       `SELECT *
          FROM ${this.table}
         WHERE ($1::text IS NULL OR status = $1)
           AND ($2::text IS NULL OR source_kind = $2)
-          AND ($3::timestamptz IS NULL OR quarantined_at < $3::timestamptz)
+          AND (
+            $3::timestamptz IS NULL
+            OR quarantined_at < $3::timestamptz
+            OR (quarantined_at = $3::timestamptz AND id < $4::uuid)
+          )
         ORDER BY quarantined_at DESC, id DESC
-        LIMIT $4`,
-      [status, sourceKind, before, boundedLimit],
+        LIMIT $5`,
+      [status, sourceKind, before, beforeId, boundedLimit],
     );
     return Object.freeze(result.rows.map((row) => mapEntry(row, this.scope)));
   }
@@ -192,23 +199,11 @@ export class PostgresDlqRepository {
   }
 
   async resolve({ id, expectedVersion, actorId = null, resolutionCode = 'resolved_by_operator' }) {
-    return this.#terminalDecision({
-      id,
-      expectedVersion,
-      actorId,
-      status: 'resolved',
-      resolutionCode,
-    });
+    return this.#terminalDecision({ id, expectedVersion, actorId, status: 'resolved', resolutionCode });
   }
 
   async discard({ id, expectedVersion, actorId = null, resolutionCode = 'discarded_by_operator' }) {
-    return this.#terminalDecision({
-      id,
-      expectedVersion,
-      actorId,
-      status: 'discarded',
-      resolutionCode,
-    });
+    return this.#terminalDecision({ id, expectedVersion, actorId, status: 'discarded', resolutionCode });
   }
 
   async #terminalDecision({ id, expectedVersion, actorId, status, resolutionCode }) {
