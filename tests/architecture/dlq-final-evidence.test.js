@@ -10,6 +10,8 @@ const [
   messagingSync,
   messagingSmoke,
   adminSmoke,
+  authConfig,
+  authResolver,
 ] = await Promise.all([
   read('.github/workflows/release-gate.yml'),
   read('.github/workflows/production-promotion.yml'),
@@ -18,6 +20,8 @@ const [
   read('scripts/release/sync-messaging-env-to-vercel.sh'),
   read('scripts/release/smoke-messaging.mjs'),
   read('scripts/release/smoke-dlq-admin.mjs'),
+  read('config/auth/neon-auth.json'),
+  read('scripts/release/resolve-auth-provider.mjs'),
 ]);
 
 test('final 026 contract executes real PostgreSQL DLQ concurrency', () => {
@@ -73,6 +77,15 @@ test('Neon Auth staging handshake preserves managed client protocol, explicit or
   assert.match(adminSmoke, /\/token/);
   assert.match(adminSmoke, /sanitizeDiagnostic/);
   assert.match(adminSmoke, /replaceAll\(password, '\[redacted\]'\)/);
+});
+
+test('managed Auth API base URL is distinct from JWT issuer while remaining same-origin and JWKS anchored', () => {
+  assert.match(authConfig, /"baseUrl": "https:\/\/[^\"]+\/neondb\/auth"/);
+  assert.match(authConfig, /"issuer": "https:\/\/[^\"]+\.neon\.tech"/);
+  assert.match(authResolver, /baseUrl\.origin !== issuerUrl\.origin/);
+  assert.match(authResolver, /JWKS URL must be anchored to the managed Auth base URL/);
+  assert.match(adminSmoke, /fetch\(`\$\{auth\.baseUrl\}\$\{path\}`/);
+  assert.match(adminSmoke, /subjectClaims: authConfig\.subjectClaims/);
 });
 
 test('smoke never imports signing material and stores only hashes for identity/origin evidence', () => {
