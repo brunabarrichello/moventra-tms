@@ -41,7 +41,11 @@ try {
       WHERE id = security.current_tenant_id()`,
   );
   assert.equal(tenant.rowCount, 1, 'release-smoke tenant context must resolve an existing tenant');
-  assert.equal(tenant.rows[0].code, 'staging-dlq-smoke', 'release-smoke tenant must be the dedicated staging fixture tenant');
+  assert.equal(
+    tenant.rows[0].code,
+    'staging-dlq-smoke',
+    'release-smoke tenant must be the dedicated staging fixture tenant',
+  );
 
   const schemas = ['organization', 'identity', 'security', 'audit', 'idempotency', 'outbox', 'dlq'];
   for (const schema of schemas) {
@@ -103,6 +107,7 @@ try {
     'security.membership_roles',
     'security.organizational_scopes',
     'security.role_assignment_scopes',
+    'audit.audit_events',
     'idempotency.records',
     'outbox.events',
     'dlq.entries',
