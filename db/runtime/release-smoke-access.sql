@@ -6,7 +6,7 @@
 --   psql -v release_smoke_role=<role> -v tenant_id=<uuid> -f db/runtime/release-smoke-access.sql
 --
 -- RELEASE_SMOKE_DATABASE_URL must connect as that dedicated role and establish the
--- transaction/session tenant context for the same tenant_id, while using sslmode=verify-full.
+-- session tenant context for the same tenant_id, while using sslmode=verify-full.
 
 \set ON_ERROR_STOP on
 \if :{?release_smoke_role}
@@ -20,10 +20,17 @@
   \quit 4
 \endif
 
+BEGIN;
+
+-- psql does not substitute variables inside dollar-quoted PL/pgSQL bodies. Carry the
+-- operator-supplied UUID through a transaction-local setting, then consume it safely
+-- from the guarded block below.
+SELECT set_config('moventra.bootstrap_tenant_id', :'tenant_id', true);
+
 -- The reusable fixture tenant is explicit infrastructure state, not product seed data.
 DO $fixture_tenant_guard$
 DECLARE
-  expected_id UUID := :'tenant_id'::uuid;
+  expected_id UUID := current_setting('moventra.bootstrap_tenant_id')::uuid;
   existing_id UUID;
 BEGIN
   SELECT id INTO existing_id
@@ -90,3 +97,5 @@ REVOKE EXECUTE ON FUNCTION outbox.claim_system_batch(INTEGER, BIGINT, UUID)
 FROM :"release_smoke_role";
 REVOKE EXECUTE ON FUNCTION outbox.mark_system_published(UUID, UUID)
 FROM :"release_smoke_role";
+
+COMMIT;
