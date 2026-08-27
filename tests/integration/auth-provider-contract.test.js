@@ -11,11 +11,32 @@ for (const environment of ['staging', 'production']) {
     assert.equal(config.algorithm, 'EdDSA');
     assert.equal(config[environment].issuer, config[environment].audience);
 
+    const issuerUrl = new URL(config[environment].issuer);
+    assert.equal(issuerUrl.protocol, 'https:');
+    assert.equal(issuerUrl.username, '');
+    assert.equal(issuerUrl.password, '');
+    assert.equal(issuerUrl.pathname, '/');
+    assert.equal(issuerUrl.search, '');
+    assert.equal(issuerUrl.hash, '');
+    assert.equal(config[environment].issuer, issuerUrl.origin);
+
+    const baseUrl = new URL(config[environment].baseUrl);
+    assert.equal(baseUrl.protocol, 'https:');
+    assert.equal(baseUrl.username, '');
+    assert.equal(baseUrl.password, '');
+    assert.equal(baseUrl.origin, issuerUrl.origin);
+    assert.notEqual(baseUrl.pathname, '/');
+    assert.equal(baseUrl.search, '');
+    assert.equal(baseUrl.hash, '');
+    assert.equal(baseUrl.toString().replace(/\/$/, ''), config[environment].baseUrl);
+
     const url = new URL(config[environment].jwksUrl);
     assert.equal(url.protocol, 'https:');
     assert.equal(url.username, '');
     assert.equal(url.password, '');
     assert.equal(url.hash, '');
+    assert.equal(url.origin, issuerUrl.origin);
+    assert.equal(config[environment].jwksUrl, `${config[environment].baseUrl}/.well-known/jwks.json`);
 
     const response = await fetch(url, {
       method: 'GET',

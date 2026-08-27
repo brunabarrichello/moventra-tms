@@ -17,6 +17,7 @@ if (config.algorithm !== 'EdDSA') {
 }
 for (const [name, value] of Object.entries({
   providerKey: config.providerKey,
+  baseUrl: selected.baseUrl,
   issuer: selected.issuer,
   audience: selected.audience,
   jwksUrl: selected.jwksUrl,
@@ -39,9 +40,41 @@ if (
 if (selected.issuer !== selected.audience) {
   throw new Error('Managed Better Auth issuer and audience must be identical for this provider contract');
 }
+
+const issuerUrl = new URL(selected.issuer);
+if (
+  issuerUrl.protocol !== 'https:'
+  || issuerUrl.username
+  || issuerUrl.password
+  || issuerUrl.pathname !== '/'
+  || issuerUrl.search
+  || issuerUrl.hash
+  || selected.issuer !== issuerUrl.origin
+) {
+  throw new Error('Auth provider JWT issuer must be an exact public HTTPS origin');
+}
+
+const baseUrl = new URL(selected.baseUrl);
+const normalizedBaseUrl = baseUrl.toString().replace(/\/$/, '');
+if (
+  baseUrl.protocol !== 'https:'
+  || baseUrl.username
+  || baseUrl.password
+  || baseUrl.search
+  || baseUrl.hash
+  || baseUrl.origin !== issuerUrl.origin
+  || baseUrl.pathname === '/'
+  || normalizedBaseUrl !== selected.baseUrl.replace(/\/$/, '')
+) {
+  throw new Error('Auth provider API base URL must be a canonical HTTPS path on the JWT issuer origin');
+}
+
 const jwksUrl = new URL(selected.jwksUrl);
 if (jwksUrl.protocol !== 'https:' || jwksUrl.username || jwksUrl.password || jwksUrl.hash) {
   throw new Error('Auth provider JWKS URL must be public HTTPS without credentials or fragment');
+}
+if (jwksUrl.origin !== issuerUrl.origin || selected.jwksUrl !== `${normalizedBaseUrl}/.well-known/jwks.json`) {
+  throw new Error('Auth provider JWKS URL must be rooted at the governed API base URL');
 }
 
 const response = await fetch(jwksUrl, {
@@ -82,6 +115,7 @@ const publicKeySha256 = createHash('sha256').update(publicKeyDer).digest('hex');
 process.stdout.write(JSON.stringify({
   environment,
   providerKey: config.providerKey,
+  baseUrl: normalizedBaseUrl,
   issuer: selected.issuer,
   audience: selected.audience,
   algorithm: config.algorithm,
