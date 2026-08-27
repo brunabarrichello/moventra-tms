@@ -28,6 +28,16 @@ function jwt(privateKey, claims, header = { alg: 'RS256', typ: 'JWT' }, digest =
   return `${input}.${signature}`;
 }
 
+function corruptJwtSignature(token) {
+  const parts = token.split('.');
+  assert.equal(parts.length, 3);
+  const signature = Buffer.from(parts[2], 'base64url');
+  assert.ok(signature.length > 0);
+  const corrupted = Buffer.from(signature);
+  corrupted[0] ^= 0x01;
+  return `${parts[0]}.${parts[1]}.${corrupted.toString('base64url')}`;
+}
+
 test('JWT bearer verifies static PEM signature and returns only trusted external identity tuple', async () => {
   const { privateKey, issuer, audience, now, verifier } = rsaFixture();
   const token = jwt(privateKey, { iss: issuer, aud: audience, sub: 'operator-123', iat: now - 10, exp: now + 300 });
@@ -40,7 +50,7 @@ test('JWT bearer rejects forged, expired and wrong-audience tokens', async () =>
   const { privateKey, issuer, audience, now, verifier } = rsaFixture();
   const claims = { iss: issuer, aud: audience, sub: 'operator-123', exp: now + 300 };
   const valid = jwt(privateKey, claims);
-  const forged = `${valid.slice(0, -1)}${valid.endsWith('a') ? 'b' : 'a'}`;
+  const forged = corruptJwtSignature(valid);
   await assert.rejects(verifier.verifyToken(forged), (error) => error.category === 'AUTHENTICATION');
   await assert.rejects(verifier.verifyToken(jwt(privateKey, { ...claims, exp: now - 120 })), (error) => error.category === 'AUTHENTICATION');
   await assert.rejects(verifier.verifyToken(jwt(privateKey, { ...claims, aud: 'other-api' })), (error) => error.category === 'AUTHENTICATION');
