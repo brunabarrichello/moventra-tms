@@ -54,5 +54,6 @@ psql -X --no-psqlrc -v ON_ERROR_STOP=1 \
 
 node scripts/db/validate-outbox-concurrency.mjs
 node scripts/db/validate-jobs-concurrency.mjs
+MOVENTRA_CONCURRENCY_ROLE="$APP_ROLE" node scripts/db/validate-dlq-concurrency.mjs
 
-echo "Runtime PostgreSQL access contract passed for synthetic non-owner principal ${APP_ROLE}, including Transactional Outbox, Durable Jobs and tenant-scoped DLQ lifecycle access."
+echo "Runtime PostgreSQL access contract passed for synthetic non-owner principal ${APP_ROLE}, including Transactional Outbox, Durable Jobs, tenant-scoped DLQ lifecycle access and real DLQ decision/replay concurrency."

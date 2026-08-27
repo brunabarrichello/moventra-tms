@@ -193,6 +193,14 @@ jobs:
           set -euo pipefail
           bash scripts/release/vercel-upsert-sensitive-env.sh
 
+      - name: Synchronize staging RabbitMQ runtime contract to Vercel
+        env:
+          VERCEL_PROJECT_ID: ${{ steps.vercel-project.outputs.project_id }}
+          MESSAGING_RABBITMQ_URL: ${{ secrets.MESSAGING_RABBITMQ_URL }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/sync-messaging-env-to-vercel.sh
+
       - name: Download immutable prebuilt artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -246,7 +254,7 @@ jobs:
           printf '%s\n' "$result"
           while IFS='=' read -r key value; do
             case "$key" in
-              deployment_url|commit_sha|artifact_sha256)
+              deployment_url|commit_sha|artifact_sha256|auth_provider_key|auth_algorithm|auth_kid|auth_public_key_sha256)
                 printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
                 ;;
             esac
@@ -279,6 +287,24 @@ jobs:
           MESSAGING_PUBLISH_CONFIRM_TIMEOUT_MS: 5000
         run: node scripts/release/smoke-messaging.mjs
 
+      - name: Verify authenticated DLQ Admin and Vercel RabbitMQ runtime
+        id: dlq-admin-smoke
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          MIGRATIONS_DATABASE_URL: ${{ secrets.MIGRATIONS_DATABASE_URL }}
+          MOVENTRA_AUTH_ENVIRONMENT: staging
+        run: |
+          set -euo pipefail
+          result="$(node scripts/release/smoke-dlq-admin.mjs)"
+          printf '%s\n' "$result"
+          test "$(jq -r '.status' <<< "$result")" = ok
+          test "$(jq -r '.authenticatedList' <<< "$result")" = success
+          test "$(jq -r '.tenantRbacRlsDetail' <<< "$result")" = success
+          test "$(jq -r '.governedMessageReprocess' <<< "$result")" = success
+          test "$(jq -r '.vercelRuntimeRabbitMqConfirm' <<< "$result")" = success
+          test "$(jq -r '.idempotentReplay' <<< "$result")" = success
+          printf 'auth_subject_sha256=%s\n' "$(jq -r '.authSubjectSha256' <<< "$result")" >> "$GITHUB_OUTPUT"
+
       - name: Record staging evidence
         env:
           COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
@@ -289,6 +315,11 @@ jobs:
           DATABASE_MIGRATION_MAX: ${{ steps.migration.outputs.database_migration_max }}
           DATABASE_MIGRATION_NAME: ${{ steps.migration.outputs.database_migration_name }}
           DATABASE_MIGRATION_CHECKSUM: ${{ steps.migration.outputs.database_migration_checksum }}
+          AUTH_PROVIDER_KEY: ${{ steps.deploy.outputs.auth_provider_key }}
+          AUTH_ALGORITHM: ${{ steps.deploy.outputs.auth_algorithm }}
+          AUTH_KID: ${{ steps.deploy.outputs.auth_kid }}
+          AUTH_PUBLIC_KEY_SHA256: ${{ steps.deploy.outputs.auth_public_key_sha256 }}
+          AUTH_SMOKE_SUBJECT_SHA256: ${{ steps.dlq-admin-smoke.outputs.auth_subject_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -310,9 +341,21 @@ jobs:
           vercel_project_id=${VERCEL_PROJECT_ID}
           vercel_node_version=${VERCEL_NODE_VERSION_EFFECTIVE}
           database_url_synced=true
+          messaging_url_synced=true
+          messaging_provider=rabbitmq
           application_health=success
           database_health=success
           messaging_readiness=success
+          auth_provider_key=${AUTH_PROVIDER_KEY}
+          auth_algorithm=${AUTH_ALGORITHM}
+          auth_kid=${AUTH_KID}
+          auth_public_key_sha256=${AUTH_PUBLIC_KEY_SHA256}
+          auth_smoke_subject_sha256=${AUTH_SMOKE_SUBJECT_SHA256}
+          dlq_admin_auth_e2e=success
+          dlq_tenant_rbac_rls=success
+          dlq_message_reprocess=success
+          vercel_runtime_messaging=success
+          dlq_http_idempotency=success
           deployment_url=${DEPLOYMENT_URL}
           stable_url=${STAGING_URL}
           workflow_actor=${GITHUB_ACTOR}
