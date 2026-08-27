@@ -21,6 +21,14 @@ if (!auth?.issuer || !auth?.audience || !auth?.jwksUrl) {
 const runIdentity = safeRunIdentity(process.env.GITHUB_RUN_ID || randomUUID());
 const email = `moventra-dlq-smoke-${runIdentity}@example.com`;
 const password = `Mv1!${randomBytes(24).toString('base64url')}`;
+const authClientInfo = JSON.stringify({
+  sdk: 'moventra-tms-release-smoke',
+  version: '026',
+  runtime: 'node',
+  runtimeVersion: process.versions.node,
+  platform: process.platform,
+  arch: process.arch,
+});
 const db = new Client({ connectionString: migrationsDatabaseUrl });
 let cookies = '';
 let externalSubject = null;
@@ -142,32 +150,96 @@ try {
 }
 
 async function createEphemeralJwt() {
-  const signup = await fetch(`${auth.issuer}/sign-up/email`, {
+  const signup = await authFetch('/sign-up/email', {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({ name: 'Moventra DLQ Staging Smoke', email, password }),
-    redirect: 'manual',
   });
   if (!signup.ok) {
-    throw new Error(`Neon Auth staging signup failed with HTTP ${signup.status}`);
+    throw await authHttpError('signup', signup);
   }
+
   cookies = responseCookies(signup.headers);
   if (!cookies) {
     throw new Error('Neon Auth staging signup did not establish a session cookie');
   }
 
-  const tokenResponse = await fetch(`${auth.issuer}/token`, {
+  const signupJwt = responseJwt(signup.headers);
+  if (signupJwt) {
+    return signupJwt;
+  }
+
+  const sessionResponse = await authFetch('/get-session', {
     headers: { cookie: cookies, accept: 'application/json' },
-    redirect: 'manual',
+  });
+  if (!sessionResponse.ok) {
+    throw await authHttpError('session', sessionResponse);
+  }
+  const sessionJwt = responseJwt(sessionResponse.headers);
+  if (sessionJwt) {
+    return sessionJwt;
+  }
+
+  const tokenResponse = await authFetch('/token', {
+    headers: { cookie: cookies, accept: 'application/json' },
   });
   if (!tokenResponse.ok) {
-    throw new Error(`Neon Auth staging JWT endpoint failed with HTTP ${tokenResponse.status}`);
+    throw await authHttpError('jwt', tokenResponse);
   }
   const body = await tokenResponse.json();
-  if (typeof body?.token !== 'string' || body.token.split('.').length !== 3) {
+  if (!isJwt(body?.token)) {
     throw new Error('Neon Auth staging JWT endpoint returned an invalid token contract');
   }
   return body.token;
+}
+
+async function authFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set('X-Neon-Client-Info', authClientInfo);
+  return fetch(`${auth.issuer}${path}`, {
+    ...options,
+    headers,
+    redirect: 'manual',
+  });
+}
+
+async function authHttpError(operation, response) {
+  const details = await sanitizedAuthError(response);
+  const suffix = [details.code && `code=${details.code}`, details.message && `message=${details.message}`]
+    .filter(Boolean)
+    .join(' ');
+  return new Error(`Neon Auth staging ${operation} failed with HTTP ${response.status}${suffix ? ` ${suffix}` : ''}`);
+}
+
+async function sanitizedAuthError(response) {
+  let body = null;
+  try {
+    body = await response.clone().json();
+  } catch {
+    body = null;
+  }
+  return {
+    code: sanitizeDiagnostic(body?.code, 80),
+    message: sanitizeDiagnostic(body?.message, 180),
+  };
+}
+
+function sanitizeDiagnostic(value, maxLength) {
+  if (typeof value !== 'string') return '';
+  return value
+    .replaceAll(email, '[smoke-email]')
+    .replaceAll(password, '[redacted]')
+    .replaceAll(/[\r\n\t]+/g, ' ')
+    .slice(0, maxLength);
+}
+
+function responseJwt(headers) {
+  const value = headers.get('set-auth-jwt');
+  return isJwt(value) ? value : null;
+}
+
+function isJwt(value) {
+  return typeof value === 'string' && value.split('.').length === 3;
 }
 
 async function prepareMoventraFixture({ subject }) {
@@ -368,11 +440,10 @@ async function cleanupExternalIdentity(subject) {
 }
 
 async function cleanupAuthUser() {
-  const response = await fetch(`${auth.issuer}/delete-user`, {
+  const response = await authFetch('/delete-user', {
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie: cookies, accept: 'application/json' },
     body: JSON.stringify({ password }),
-    redirect: 'manual',
   });
   return response.ok ? 'success' : `unsupported-http-${response.status}`;
 }
