@@ -16,9 +16,9 @@ concurrency:
 
 jobs:
   dlq-contract:
-    name: DLQ durable ingestion contract
+    name: DLQ final phase contract
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:18-alpine
@@ -101,16 +101,23 @@ jobs:
       - name: Apply complete migration history
         run: node scripts/db/migrate.mjs
 
-      - name: Validate DLQ schema, worker capability and terminal Job capture
+      - name: Validate complete DLQ schema and least-privilege worker boundary
         id: schema
         run: |
           set -euo pipefail
           psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0017_dlq_validation.sql
           psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0018_dlq_worker_ingestion_validation.sql
           psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0019_dlq_job_terminal_capture_validation.sql
+          psql -X --no-psqlrc -v ON_ERROR_STOP=1 -f db/validation/0020_dlq_job_reprocessing_lineage_validation.sql
           bash scripts/ci/worker-access-contract.sh
 
-      - name: Validate DLQ unit and architecture contracts
+      - name: Validate real PostgreSQL runtime and DLQ concurrency
+        id: concurrency
+        run: |
+          set -euo pipefail
+          bash scripts/ci/runtime-access-contract.sh
+
+      - name: Validate final DLQ unit and architecture contracts
         id: tests
         run: >-
           node --test
@@ -119,7 +126,16 @@ jobs:
           tests/unit/dlq-ingestion-config.test.js
           tests/unit/system-dlq-ingestion-repository.test.js
           tests/unit/rabbitmq-dlq-ingestion.test.js
+          tests/unit/dlq-message-reprocessor.test.js
+          tests/unit/dlq-job-reprocessor.test.js
+          tests/unit/jobs-reprocess-repository.test.js
+          tests/unit/dlq-admin-handler.test.js
+          tests/unit/dlq-admin-service.test.js
+          tests/unit/bearer-jwt-assertion.test.js
+          tests/unit/postgres-dlq-pagination.test.js
           tests/architecture/dlq-phase.test.js
+          tests/architecture/dlq-job-reprocessing.test.js
+          tests/architecture/auth-http-boundary.test.js
 
       - name: Validate real RabbitMQ DLX to durable PostgreSQL quarantine
         id: integration
@@ -158,10 +174,11 @@ jobs:
             exit 1
           fi
 
-      - name: Record DLQ contract evidence
+      - name: Record DLQ final contract evidence
         if: always()
         env:
           SCHEMA_OUTCOME: ${{ steps.schema.outcome }}
+          CONCURRENCY_OUTCOME: ${{ steps.concurrency.outcome }}
           TESTS_OUTCOME: ${{ steps.tests.outcome }}
           INTEGRATION_OUTCOME: ${{ steps.integration.outcome }}
           WORKER_OUTCOME: ${{ steps.worker.outcome }}
@@ -171,15 +188,25 @@ jobs:
           cat > evidence/dlq-contract.txt <<EOF
           product=Moventra TMS
           phase=026-dlq
-          batch=2-3-durable-ingestion-and-job-terminal-capture
+          contract=final-evidence-closure
           commit_sha=${GITHUB_SHA}
           workflow_run_id=${GITHUB_RUN_ID}
           workflow_run_attempt=${GITHUB_RUN_ATTEMPT}
-          postgres_schema_worker_and_job_capture=${SCHEMA_OUTCOME}
-          unit_and_architecture=${TESTS_OUTCOME}
-          rabbitmq_to_postgres_ingestion=${INTEGRATION_OUTCOME}
+          schema_0017_0020=${SCHEMA_OUTCOME}
+          durable_ingestion=${INTEGRATION_OUTCOME}
+          message_reprocessing=${TESTS_OUTCOME}
+          job_reprocessing=${TESTS_OUTCOME}
+          admin_api_auth_rbac=${TESTS_OUTCOME}
+          postgresql_runtime_and_concurrency=${CONCURRENCY_OUTCOME}
           dedicated_worker_runtime=${WORKER_OUTCOME}
           EOF
+
+          for outcome in "$SCHEMA_OUTCOME" "$CONCURRENCY_OUTCOME" "$TESTS_OUTCOME" "$INTEGRATION_OUTCOME" "$WORKER_OUTCOME"; do
+            test "$outcome" = success || {
+              echo '::error::Final DLQ contract is incomplete.'
+              exit 1
+            }
+          done
 
       - name: Upload DLQ contract evidence
         if: always()
