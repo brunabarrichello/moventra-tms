@@ -2,13 +2,13 @@
   "providerKey": "neon-auth",
   "algorithm": "EdDSA",
   "production": {
-    "issuer": "https://ep-ancient-bar-afxx0ido.neonauth.c-2.us-west-2.aws.neon.tech/neondb/auth",
-    "audience": "https://ep-ancient-bar-afxx0ido.neonauth.c-2.us-west-2.aws.neon.tech/neondb/auth",
-    "jwksUrl": "https://ep-ancient-bar-afxx0ido.neonauth.c-2.us-west-2.aws.neon.tech/neondb/auth/.well-known/jwks.json"
+    "issuer": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
+    "audience": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
+    "jwksUrl": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth/.well-known/jwks.json"
   },
   "staging": {
-    "issuer": "https://ep-dark-firefly-afly55jq.neonauth.c-2.us-west-2.aws.neon.tech/neondb/auth",
-    "audience": "https://ep-dark-firefly-afly55jq.neonauth.c-2.us-west-2.aws.neon.tech/neondb/auth",
-    "jwksUrl": "https://ep-dark-firefly-afly55jq.neonauth.c-2.us-west-2.aws.neon.tech/neondb/auth/.well-known/jwks.json"
+    "issuer": "https://ep-falling-shape-ausko3qy.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
+    "audience": "https://ep-falling-shape-ausko3qy.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
+    "jwksUrl": "https://ep-falling-shape-ausko3qy.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth/.well-known/jwks.json"
   }
 }
