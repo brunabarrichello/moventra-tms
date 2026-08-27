@@ -78,6 +78,19 @@ test('Neon Auth staging handshake uses one deterministic service JWT source and 
   assert.match(adminSmoke, /replaceAll\(password, '\[redacted\]'\)/);
 });
 
+test('release gate rejects JWT contract drift before recording staging evidence', () => {
+  assert.match(releaseGate, /MOVENTRA_AUTH_CLIENT_ORIGIN: \$\{\{ env\.STAGING_URL \}\}/);
+  assert.match(releaseGate, /\.authJwtSource[^\n]+token-endpoint/);
+  assert.match(releaseGate, /\.authIssuerMatch[^\n]+true/);
+  assert.match(releaseGate, /\.authAudienceMatch[^\n]+true/);
+  assert.match(releaseGate, /\.authAlgorithmMatch[^\n]+true/);
+  assert.match(releaseGate, /auth_jwt_source=\$\{AUTH_JWT_SOURCE\}/);
+  assert.match(releaseGate, /auth_issuer_match=\$\{AUTH_ISSUER_MATCH\}/);
+  assert.match(releaseGate, /auth_audience_match=\$\{AUTH_AUDIENCE_MATCH\}/);
+  assert.match(releaseGate, /auth_algorithm_match=\$\{AUTH_ALGORITHM_MATCH\}/);
+  assert.match(releaseGate, /auth_subject_claim=\$\{AUTH_SUBJECT_CLAIM\}/);
+});
+
 test('JWT diagnostics remain non-authoritative and expose only contract comparisons or hashes', () => {
   assert.match(adminSmoke, /inspectUntrustedJwtContract/);
   assert.match(adminSmoke, /issuerMatches/);
