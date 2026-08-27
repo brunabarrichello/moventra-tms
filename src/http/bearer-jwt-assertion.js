@@ -10,6 +10,7 @@ const DEFAULT_CLOCK_SKEW_SECONDS = 60;
 const DEFAULT_JWKS_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_JWKS_TIMEOUT_MS = 3_000;
 const MAX_TOKEN_BYTES = 16 * 1024;
+const MAX_SUBJECT_BYTES = 1024;
 
 export class BearerJwtAssertionVerifier {
   constructor({
@@ -100,7 +101,8 @@ export class BearerJwtAssertionVerifier {
       throw new AuthenticationError({ message: 'JWT signature is invalid' });
     }
 
-    validateClaims(claims, {
+    const subject = validateClaims(claims, {
+      providerKey: this.providerKey,
       issuer: this.issuer,
       audience: this.audience,
       now: this.clock(),
@@ -110,7 +112,7 @@ export class BearerJwtAssertionVerifier {
     return Object.freeze({
       providerKey: this.providerKey,
       issuer: this.issuer,
-      subject: claims.sub.trim(),
+      subject,
     });
   }
 
@@ -220,12 +222,16 @@ function verifyJwtSignature({ algorithm, publicKey, signingInput, signature }) {
   return verifySignature(contract.digest, signingInput, key, signature);
 }
 
-function validateClaims(claims, { issuer, audience, now, clockSkewSeconds }) {
+function validateClaims(claims, { providerKey, issuer, audience, now, clockSkewSeconds }) {
   if (!claims || typeof claims !== 'object' || Array.isArray(claims)) {
     throw new AuthenticationError({ message: 'JWT claims are invalid' });
   }
-  if (claims.iss !== issuer || typeof claims.sub !== 'string' || !claims.sub.trim()) {
-    throw new AuthenticationError({ message: 'JWT identity claims are invalid' });
+  if (claims.iss !== issuer) {
+    throw new AuthenticationError({ message: 'JWT issuer is invalid' });
+  }
+  const subject = resolveSubjectClaim(claims, providerKey);
+  if (!subject) {
+    throw new AuthenticationError({ message: 'JWT subject is invalid' });
   }
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (!audiences.includes(audience)) {
@@ -240,6 +246,29 @@ function validateClaims(claims, { issuer, audience, now, clockSkewSeconds }) {
   if (claims.iat !== undefined && (!Number.isInteger(claims.iat) || claims.iat > now + clockSkewSeconds)) {
     throw new AuthenticationError({ message: 'JWT issued-at claim is invalid' });
   }
+  return subject;
+}
+
+function resolveSubjectClaim(claims, providerKey) {
+  const standardSubject = normalizeSubjectClaim(claims.sub);
+  if (standardSubject) {
+    return standardSubject;
+  }
+  if (providerKey === 'neon-auth') {
+    return normalizeSubjectClaim(claims.id);
+  }
+  return null;
+}
+
+function normalizeSubjectClaim(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const subject = value.trim();
+  if (!subject || Buffer.byteLength(subject, 'utf8') > MAX_SUBJECT_BYTES) {
+    return null;
+  }
+  return subject;
 }
 
 function isAcceptedPublicJwk(jwk, algorithm) {
