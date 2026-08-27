@@ -6,6 +6,7 @@ const ALGORITHMS = Object.freeze({
   ES256: Object.freeze({ digest: 'sha256', dsaEncoding: 'ieee-p1363' }),
   EdDSA: Object.freeze({ digest: null, dsaEncoding: null }),
 });
+const SUBJECT_CLAIM_ALLOWLIST = Object.freeze(['sub', 'id']);
 const DEFAULT_CLOCK_SKEW_SECONDS = 60;
 const DEFAULT_JWKS_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_JWKS_TIMEOUT_MS = 3_000;
@@ -20,6 +21,7 @@ export class BearerJwtAssertionVerifier {
     publicKeyPem = null,
     jwksUrl = null,
     algorithm = 'RS256',
+    subjectClaims = ['sub'],
     clock = () => Math.floor(Date.now() / 1000),
     clockMs = () => Date.now(),
     clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS,
@@ -31,6 +33,7 @@ export class BearerJwtAssertionVerifier {
     this.issuer = requireText(issuer, 'JWT issuer');
     this.audience = requireText(audience, 'JWT audience');
     this.algorithm = normalizeAlgorithm(algorithm);
+    this.subjectClaims = normalizeSubjectClaims(subjectClaims);
     this.publicKey = publicKeyPem ? normalizePublicKey(publicKeyPem) : null;
     this.jwksUrl = normalizeOptionalJwksUrl(jwksUrl);
     if (!this.publicKey && !this.jwksUrl) {
@@ -102,7 +105,7 @@ export class BearerJwtAssertionVerifier {
     }
 
     const subject = validateClaims(claims, {
-      providerKey: this.providerKey,
+      subjectClaims: this.subjectClaims,
       issuer: this.issuer,
       audience: this.audience,
       now: this.clock(),
@@ -200,6 +203,7 @@ export function createRuntimeBearerJwtAssertionVerifier(env = process.env) {
       publicKeyPem: env.MOVENTRA_AUTH_JWT_PUBLIC_KEY_PEM || null,
       jwksUrl: env.MOVENTRA_AUTH_JWT_JWKS_URL || null,
       algorithm: env.MOVENTRA_AUTH_JWT_ALGORITHM || 'RS256',
+      subjectClaims: env.MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS || 'sub',
     });
   } catch (cause) {
     return Object.freeze({
@@ -222,14 +226,14 @@ function verifyJwtSignature({ algorithm, publicKey, signingInput, signature }) {
   return verifySignature(contract.digest, signingInput, key, signature);
 }
 
-function validateClaims(claims, { providerKey, issuer, audience, now, clockSkewSeconds }) {
+function validateClaims(claims, { subjectClaims, issuer, audience, now, clockSkewSeconds }) {
   if (!claims || typeof claims !== 'object' || Array.isArray(claims)) {
     throw new AuthenticationError({ message: 'JWT claims are invalid' });
   }
   if (claims.iss !== issuer) {
     throw new AuthenticationError({ message: 'JWT issuer is invalid' });
   }
-  const subject = resolveSubjectClaim(claims, providerKey);
+  const subject = resolveSubjectClaim(claims, subjectClaims);
   if (!subject) {
     throw new AuthenticationError({ message: 'JWT subject is invalid' });
   }
@@ -249,15 +253,30 @@ function validateClaims(claims, { providerKey, issuer, audience, now, clockSkewS
   return subject;
 }
 
-function resolveSubjectClaim(claims, providerKey) {
-  const standardSubject = normalizeSubjectClaim(claims.sub);
-  if (standardSubject) {
-    return standardSubject;
-  }
-  if (providerKey === 'neon-auth') {
-    return normalizeSubjectClaim(claims.id);
+function resolveSubjectClaim(claims, subjectClaims) {
+  for (const claim of subjectClaims) {
+    const subject = normalizeSubjectClaim(claims[claim]);
+    if (subject) {
+      return subject;
+    }
   }
   return null;
+}
+
+function normalizeSubjectClaims(value) {
+  const claims = typeof value === 'string'
+    ? value.split(',').map((claim) => claim.trim()).filter(Boolean)
+    : Array.isArray(value) ? value.map((claim) => String(claim).trim()).filter(Boolean) : [];
+  if (
+    claims.length < 1
+    || claims.length > SUBJECT_CLAIM_ALLOWLIST.length
+    || claims[0] !== 'sub'
+    || new Set(claims).size !== claims.length
+    || claims.some((claim) => !SUBJECT_CLAIM_ALLOWLIST.includes(claim))
+  ) {
+    throw new TypeError('JWT subject claims must be an ordered unique subset of sub,id beginning with sub');
+  }
+  return Object.freeze([...claims]);
 }
 
 function normalizeSubjectClaim(value) {
