@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import amqp from 'amqplib';
 import { RabbitMqMessagingAdapter } from '../../src/infrastructure/messaging/rabbitmq/rabbitmq-adapter.js';
 import { resolveMessagingConfig } from '../../src/infrastructure/messaging/rabbitmq/rabbitmq-config.js';
@@ -18,6 +19,7 @@ const adapter = new RabbitMqMessagingAdapter({ config });
 let subscription;
 let cleanupConnection;
 let cleanupChannel;
+let runtimeSync = 'not-requested';
 
 try {
   const received = deferred();
@@ -55,6 +57,16 @@ try {
     throw new Error('RabbitMQ release smoke did not preserve canonical message identity');
   }
 
+  if (hasGovernedVercelContext(process.env)) {
+    execFileSync('bash', ['scripts/release/sync-messaging-env-to-vercel.sh'], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    runtimeSync = 'success';
+  }
+
   process.stdout.write(`${JSON.stringify({
     status: 'ok',
     provider: 'rabbitmq',
@@ -63,6 +75,7 @@ try {
     publishConfirm: true,
     manualAck: true,
     consume: true,
+    vercelRuntimeSync: runtimeSync,
   })}\n`);
 } finally {
   await subscription?.close().catch(() => {});
@@ -88,6 +101,15 @@ function normalizeEnvironment(value) {
     throw new Error('Messaging release smoke requires MOVENTRA_ENV=staging|production');
   }
   return candidate;
+}
+
+function hasGovernedVercelContext(env) {
+  return [
+    env.VERCEL_TOKEN,
+    env.VERCEL_ORG_ID,
+    env.VERCEL_PROJECT_ID,
+    env.VERCEL_PROJECT_NAME,
+  ].every((value) => typeof value === 'string' && value.trim().length > 0);
 }
 
 function deferred() {
