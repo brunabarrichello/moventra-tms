@@ -28,6 +28,33 @@ test('resource attributes use trusted service, revision and environment values',
   );
 });
 
+test('worker release SHA has precedence over Vercel and generic application revision fallbacks', () => {
+  const resource = buildResourceAttributes({
+    MOVENTRA_RELEASE_SHA: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    APP_VERSION: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    VERCEL_GIT_COMMIT_SHA: 'cccccccccccccccccccccccccccccccccccccccc',
+    MOVENTRA_ENV: 'production',
+  });
+
+  assert.equal(resource['service.version'], 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  assert.equal(resource['deployment.environment.name'], 'production');
+
+  assert.equal(
+    buildResourceAttributes({
+      APP_VERSION: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      VERCEL_GIT_COMMIT_SHA: 'cccccccccccccccccccccccccccccccccccccccc',
+    })['service.version'],
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  );
+
+  assert.equal(
+    buildResourceAttributes({
+      VERCEL_GIT_COMMIT_SHA: 'cccccccccccccccccccccccccccccccccccccccc',
+    })['service.version'],
+    'cccccccccccccccccccccccccccccccccccccccc',
+  );
+});
+
 test('OTLP configuration is optional, validates endpoint and never requires exporter headers', () => {
   const disabled = buildOtlpConfiguration({ OTEL_SDK_DISABLED: 'true' });
   assert.equal(disabled.disabled, true);

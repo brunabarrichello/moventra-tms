@@ -24,8 +24,20 @@ test('dotenv template contains names only and no secret values', async () => {
     assert.match(assignment, /^[A-Z][A-Z0-9_]*=$/, `template assignment must be empty: ${assignment}`);
   }
 
-  assert.ok(assignments.includes('VERCEL_TOKEN='));
-  assert.ok(assignments.includes('DATABASE_URL='));
+  for (const required of [
+    'VERCEL_TOKEN=',
+    'DATABASE_URL=',
+    'MIGRATIONS_DATABASE_URL=',
+    'MESSAGING_RABBITMQ_URL=',
+    'OTEL_TRACES_EXPORTER=',
+    'OTEL_METRICS_EXPORTER=',
+    'OTEL_SDK_DISABLED=',
+  ]) {
+    assert.ok(assignments.includes(required), `.env.example is missing ${required}`);
+  }
+
+  assert.ok(!assignments.includes('VERCEL_STAGING_PROJECT_ID='));
+  assert.ok(!assignments.includes('JOBS_DEFAULT_MAX_ATTEMPTS='));
 });
 
 test('tracked files exclude dotenv secrets, private keys and credential exports', () => {
@@ -82,6 +94,8 @@ test('deployment credentials are scoped to protected GitHub environments', async
   assert.match(staging, /VERCEL_PROJECT_NAME:\s*moventra-tms-staging/);
   assert.match(staging, /VERCEL_NODE_VERSION:\s*22\.x/);
   assert.match(staging, /DATABASE_URL:\s*\$\{\{\s*secrets\.DATABASE_URL\s*\}\}/);
+  assert.match(staging, /MIGRATIONS_DATABASE_URL:\s*\$\{\{\s*secrets\.MIGRATIONS_DATABASE_URL\s*\}\}/);
+  assert.match(staging, /MESSAGING_RABBITMQ_URL:\s*\$\{\{\s*secrets\.MESSAGING_RABBITMQ_URL\s*\}\}/);
   assert.match(staging, /ensure-vercel-project\.sh/);
   assert.match(staging, /vercel-upsert-sensitive-env\.sh/);
   assert.match(staging, /smoke-database-health\.sh/);
@@ -102,6 +116,9 @@ test('deployment credentials are scoped to protected GitHub environments', async
   assert.match(production, /VERCEL_TOKEN:\s*\$\{\{\s*secrets\.VERCEL_TOKEN\s*\}\}/);
   assert.match(production, /VERCEL_ORG_ID:\s*\$\{\{\s*vars\.VERCEL_ORG_ID\s*\}\}/);
   assert.match(production, /VERCEL_PROJECT_ID:\s*\$\{\{\s*vars\.VERCEL_PRODUCTION_PROJECT_ID\s*\}\}/);
+  assert.match(production, /DATABASE_URL:\s*\$\{\{\s*secrets\.DATABASE_URL\s*\}\}/);
+  assert.match(production, /MIGRATIONS_DATABASE_URL:\s*\$\{\{\s*secrets\.MIGRATIONS_DATABASE_URL\s*\}\}/);
+  assert.match(production, /MESSAGING_RABBITMQ_URL:\s*\$\{\{\s*secrets\.MESSAGING_RABBITMQ_URL\s*\}\}/);
   assert.match(production, /VERCEL_PROJECT_NAME:\s*moventra-tms/);
   assert.match(production, /VERCEL_NODE_VERSION:\s*22\.x/);
   assert.match(production, /Converge production Vercel project/);
@@ -145,7 +162,7 @@ test('Vercel project provisioning converges policy and synchronizes staging data
   assert.match(databaseSmoke, /payload\.version !== process\.env\.EXPECTED_SHA/);
 });
 
-test('secrets policy defines segregation, rotation, audit and fail-closed controls', async () => {
+test('secrets policy defines segregation, rotation, audit and canonical migration credential', async () => {
   const policy = await read('docs/security/SECRETS-POLICY.md');
   for (const required of [
     'secrets distintos por ambiente',
@@ -155,7 +172,37 @@ test('secrets policy defines segregation, rotation, audit and fail-closed contro
     'workload identity/OIDC',
     'fail-closed',
     'DATABASE_URL',
+    'MIGRATIONS_DATABASE_URL',
+    'VARIABLES-MATRIX.md',
   ]) {
     assert.ok(policy.toLowerCase().includes(required.toLowerCase()), `policy is missing: ${required}`);
+  }
+
+  assert.ok(!policy.includes('DATABASE_MIGRATION_URL'));
+});
+
+test('master variables matrix covers the governed systems and divergence actions', async () => {
+  const matrix = await read('docs/governance/VARIABLES-MATRIX.md');
+  for (const required of [
+    'Sistema',
+    'Ambiente',
+    'Variável',
+    'Valor/default',
+    'Secret',
+    'Origem',
+    'Consumidor',
+    'Status',
+    'Divergência',
+    'Ação',
+    'GitHub',
+    'Vercel',
+    'Neon',
+    'Railway',
+    'RabbitMQ',
+    'MIGRATIONS_DATABASE_URL',
+    'MOVENTRA_RELEASE_SHA',
+    'OTEL_SDK_DISABLED',
+  ]) {
+    assert.ok(matrix.includes(required), `variables matrix is missing: ${required}`);
   }
 });
