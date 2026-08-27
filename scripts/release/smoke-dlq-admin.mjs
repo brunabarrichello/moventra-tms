@@ -7,6 +7,10 @@ import { BearerJwtAssertionVerifier } from '../../src/http/bearer-jwt-assertion.
 const { Client } = pg;
 const deploymentUrl = requiredUrl(process.env.DEPLOYMENT_URL, 'DEPLOYMENT_URL');
 const migrationsDatabaseUrl = requiredText(process.env.MIGRATIONS_DATABASE_URL, 'MIGRATIONS_DATABASE_URL');
+const authClientOrigin = requiredOrigin(
+  process.env.MOVENTRA_AUTH_CLIENT_ORIGIN || process.env.STAGING_URL,
+  'MOVENTRA_AUTH_CLIENT_ORIGIN/STAGING_URL',
+);
 const environment = process.env.MOVENTRA_AUTH_ENVIRONMENT || 'staging';
 if (environment !== 'staging') {
   throw new Error('DLQ Admin release smoke is restricted to staging');
@@ -126,6 +130,7 @@ try {
     authProvider: authConfig.providerKey,
     authAlgorithm: authConfig.algorithm,
     authSubjectSha256: sha256(externalSubject),
+    authClientOriginSha256: sha256(authClientOrigin),
     authenticatedList: 'success',
     tenantRbacRlsDetail: 'success',
     governedMessageReprocess: 'success',
@@ -153,7 +158,12 @@ async function createEphemeralJwt() {
   const signup = await authFetch('/sign-up/email', {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ name: 'Moventra DLQ Staging Smoke', email, password }),
+    body: JSON.stringify({
+      name: 'Moventra DLQ Staging Smoke',
+      email,
+      password,
+      callbackURL: authClientOrigin,
+    }),
   });
   if (!signup.ok) {
     throw await authHttpError('signup', signup);
@@ -195,6 +205,7 @@ async function createEphemeralJwt() {
 
 async function authFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
+  headers.set('Origin', authClientOrigin);
   headers.set('X-Neon-Client-Info', authClientInfo);
   return fetch(`${auth.issuer}${path}`, {
     ...options,
@@ -500,6 +511,15 @@ function requiredUrl(value, field) {
     throw new Error(`${field} must use HTTPS`);
   }
   return url.toString().replace(/\/$/, '');
+}
+
+function requiredOrigin(value, field) {
+  const candidate = requiredUrl(value, field);
+  const url = new URL(candidate);
+  if (url.pathname !== '/' || url.search || url.hash || candidate !== url.origin) {
+    throw new Error(`${field} must be an HTTPS origin without path, query or fragment`);
+  }
+  return url.origin;
 }
 
 function safeRunIdentity(value) {

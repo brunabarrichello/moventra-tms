@@ -60,9 +60,14 @@ test('staging release proves authenticated Admin API and Vercel messaging runtim
   assert.match(adminSmoke, /publisher confirm|RabbitMQ publisher confirm/i);
 });
 
-test('Neon Auth staging handshake preserves managed client protocol and sanitized diagnostics', () => {
+test('Neon Auth staging handshake preserves managed client protocol, explicit origin and sanitized diagnostics', () => {
   assert.match(adminSmoke, /X-Neon-Client-Info/);
   assert.match(adminSmoke, /moventra-tms-release-smoke/);
+  assert.match(adminSmoke, /MOVENTRA_AUTH_CLIENT_ORIGIN/);
+  assert.match(adminSmoke, /STAGING_URL/);
+  assert.match(adminSmoke, /headers\.set\('Origin', authClientOrigin\)/);
+  assert.match(adminSmoke, /callbackURL: authClientOrigin/);
+  assert.match(adminSmoke, /requiredOrigin/);
   assert.match(adminSmoke, /set-auth-jwt/);
   assert.match(adminSmoke, /\/get-session/);
   assert.match(adminSmoke, /\/token/);
@@ -70,9 +75,10 @@ test('Neon Auth staging handshake preserves managed client protocol and sanitize
   assert.match(adminSmoke, /replaceAll\(password, '\[redacted\]'\)/);
 });
 
-test('smoke never imports signing material and stores only a subject hash in evidence', () => {
+test('smoke never imports signing material and stores only hashes for identity/origin evidence', () => {
   assert.doesNotMatch(adminSmoke, /private[_-]?key/i);
   assert.match(adminSmoke, /authSubjectSha256/);
+  assert.match(adminSmoke, /authClientOriginSha256/);
   assert.match(releaseGate, /auth_smoke_subject_sha256=/);
 });
 
