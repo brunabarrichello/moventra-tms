@@ -25,6 +25,17 @@ for (const [name, value] of Object.entries({
     throw new Error(`Auth provider ${name} is required`);
   }
 }
+const allowedSubjectClaims = new Set(['sub', 'id']);
+if (
+  !Array.isArray(config.subjectClaims)
+  || config.subjectClaims.length < 1
+  || config.subjectClaims.length > 2
+  || config.subjectClaims[0] !== 'sub'
+  || new Set(config.subjectClaims).size !== config.subjectClaims.length
+  || config.subjectClaims.some((claim) => !allowedSubjectClaims.has(claim))
+) {
+  throw new Error('Auth provider subjectClaims must be an ordered unique subset of sub,id beginning with sub');
+}
 if (selected.issuer !== selected.audience) {
   throw new Error('Managed Better Auth issuer and audience must be identical for this provider contract');
 }
@@ -74,6 +85,7 @@ process.stdout.write(JSON.stringify({
   issuer: selected.issuer,
   audience: selected.audience,
   algorithm: config.algorithm,
+  subjectClaims: config.subjectClaims,
   jwksUrl: selected.jwksUrl,
   kid: key.kid,
   publicKeyPem,
