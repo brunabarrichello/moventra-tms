@@ -45,10 +45,11 @@ test('JWT bearer verifies static PEM signature and returns only trusted external
   });
 });
 
-test('Neon Auth accepts its stable Better Auth user id when standard sub is absent', async () => {
+test('configured subject fallback accepts stable provider user id when standard sub is absent', async () => {
   const { privateKey, publicKey, issuer, audience, now } = rsaFixture();
   const verifier = new BearerJwtAssertionVerifier({
-    providerKey: 'neon-auth', issuer, audience,
+    providerKey: 'managed-auth', issuer, audience,
+    subjectClaims: ['sub', 'id'],
     publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
     clock: () => now,
   });
@@ -61,16 +62,17 @@ test('Neon Auth accepts its stable Better Auth user id when standard sub is abse
   });
 
   assert.deepEqual(await verifier.verifyToken(token), {
-    providerKey: 'neon-auth',
+    providerKey: 'managed-auth',
     issuer,
     subject: '9af9cc59-b187-4975-9284-7e8856a2cdee',
   });
 });
 
-test('Neon Auth prefers standard sub over provider-specific id when both are present', async () => {
+test('configured subject claim order prefers standard sub over id when both are present', async () => {
   const { privateKey, publicKey, issuer, audience, now } = rsaFixture();
   const verifier = new BearerJwtAssertionVerifier({
-    providerKey: 'neon-auth', issuer, audience,
+    providerKey: 'managed-auth', issuer, audience,
+    subjectClaims: 'sub,id',
     publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
     clock: () => now,
   });
@@ -85,10 +87,21 @@ test('Neon Auth prefers standard sub over provider-specific id when both are pre
   assert.equal((await verifier.verifyToken(token)).subject, 'standard-subject');
 });
 
-test('non-Neon providers fail closed when sub is absent even if an id claim exists', async () => {
+test('default subject contract fails closed when sub is absent even if id exists', async () => {
   const { privateKey, issuer, audience, now, verifier } = rsaFixture();
   const token = jwt(privateKey, { iss: issuer, aud: audience, id: 'provider-id', exp: now + 300 });
   await assert.rejects(verifier.verifyToken(token), (error) => error.category === 'AUTHENTICATION');
+});
+
+test('subject claim configuration rejects nonstandard precedence and unsafe claim names', () => {
+  const { publicKey, issuer, audience } = rsaFixture();
+  const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' });
+  assert.throws(() => new BearerJwtAssertionVerifier({
+    providerKey: 'managed-auth', issuer, audience, publicKeyPem, subjectClaims: ['id'],
+  }), /beginning with sub/);
+  assert.throws(() => new BearerJwtAssertionVerifier({
+    providerKey: 'managed-auth', issuer, audience, publicKeyPem, subjectClaims: ['sub', 'email'],
+  }), /subset of sub,id/);
 });
 
 test('JWT bearer rejects forged, expired and wrong-audience tokens', async () => {
