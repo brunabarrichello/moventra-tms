@@ -84,6 +84,8 @@ jobs:
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_NAME: moventra-tms-staging
       VERCEL_NODE_VERSION: 22.x
+      NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+      NEON_STAGING_BRANCH_ID: ${{ vars.NEON_STAGING_BRANCH_ID }}
       SOURCE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.artifact_run_id }}
       SELECTED_ARTIFACT_NAME: ${{ github.event_name == 'workflow_run' && format('moventra-tms-{0}', github.event.workflow_run.head_sha) || inputs.artifact_name }}
       STAGING_URL: ${{ github.event_name == 'workflow_run' && 'https://moventra-tms-staging-alebru.vercel.app' || inputs.staging_url }}
@@ -156,6 +158,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MIGRATIONS_DATABASE_URL: ${{ secrets.MIGRATIONS_DATABASE_URL }}
+          RELEASE_SMOKE_DATABASE_URL: ${{ secrets.RELEASE_SMOKE_DATABASE_URL }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
           MESSAGING_RABBITMQ_URL: ${{ secrets.MESSAGING_RABBITMQ_URL }}
         run: |
           set -euo pipefail
@@ -164,6 +168,10 @@ jobs:
           test -n "$VERCEL_PROJECT_NAME" || { echo '::error::VERCEL_PROJECT_NAME is required'; exit 1; }
           test -n "$DATABASE_URL" || { echo '::error::DATABASE_URL is required in the protected GitHub staging environment'; exit 1; }
           test -n "$MIGRATIONS_DATABASE_URL" || { echo '::error::MIGRATIONS_DATABASE_URL is required in the protected GitHub staging environment'; exit 1; }
+          test -n "$RELEASE_SMOKE_DATABASE_URL" || { echo '::error::RELEASE_SMOKE_DATABASE_URL is required in the protected GitHub staging environment'; exit 1; }
+          test -n "$NEON_API_KEY" || { echo '::error::NEON_API_KEY is required in the protected GitHub staging environment'; exit 1; }
+          test -n "$NEON_PROJECT_ID" || { echo '::error::NEON_PROJECT_ID is required as a protected staging variable'; exit 1; }
+          test -n "$NEON_STAGING_BRANCH_ID" || { echo '::error::NEON_STAGING_BRANCH_ID is required as a protected staging variable'; exit 1; }
           test -n "$MESSAGING_RABBITMQ_URL" || { echo '::error::MESSAGING_RABBITMQ_URL is required in the protected GitHub staging environment'; exit 1; }
 
       - name: Converge staging Vercel project
@@ -246,6 +254,25 @@ jobs:
             esac
           done <<< "$result"
 
+      - name: Preflight staging release-smoke database principal
+        id: release-smoke-db
+        env:
+          RELEASE_SMOKE_DATABASE_URL: ${{ secrets.RELEASE_SMOKE_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          result="$(node scripts/release/preflight-release-smoke-db.mjs)"
+          printf '%s\n' "$result"
+          test "$(jq -r '.status' <<< "$result")" = ok
+          test "$(jq -r '.rowSecurity' <<< "$result")" = true
+          test "$(jq -r '.superuser' <<< "$result")" = false
+          test "$(jq -r '.bypassRls' <<< "$result")" = false
+          test "$(jq -r '.fixturePrivileges' <<< "$result")" = true
+          {
+            printf 'principal_sha256=%s\n' "$(jq -r '.principalSha256' <<< "$result")"
+            printf 'session_principal_sha256=%s\n' "$(jq -r '.sessionPrincipalSha256' <<< "$result")"
+            printf 'tenant_sha256=%s\n' "$(jq -r '.tenantIdSha256' <<< "$result")"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Deploy exact prebuilt artifact to staging
         id: deploy
         run: |
@@ -291,7 +318,8 @@ jobs:
         id: dlq-admin-smoke
         env:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
-          MIGRATIONS_DATABASE_URL: ${{ secrets.MIGRATIONS_DATABASE_URL }}
+          RELEASE_SMOKE_DATABASE_URL: ${{ secrets.RELEASE_SMOKE_DATABASE_URL }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
           MOVENTRA_AUTH_ENVIRONMENT: staging
           MOVENTRA_AUTH_CLIENT_ORIGIN: ${{ env.STAGING_URL }}
         run: |
@@ -305,11 +333,13 @@ jobs:
           test "$(jq -r '.authAlgorithmMatch' <<< "$result")" = true
           auth_subject_claim="$(jq -r '.authSubjectClaim // empty' <<< "$result")"
           test -n "$auth_subject_claim"
+          test "$(jq -r '.releaseSmokeDbPrincipalSha256' <<< "$result")" = '${{ steps.release-smoke-db.outputs.principal_sha256 }}'
           test "$(jq -r '.authenticatedList' <<< "$result")" = success
           test "$(jq -r '.tenantRbacRlsDetail' <<< "$result")" = success
           test "$(jq -r '.governedMessageReprocess' <<< "$result")" = success
           test "$(jq -r '.vercelRuntimeRabbitMqConfirm' <<< "$result")" = success
           test "$(jq -r '.idempotentReplay' <<< "$result")" = success
+          test "$(jq -r '.authUserCleanup' <<< "$result")" = success
           {
             printf 'auth_jwt_source=%s\n' "$(jq -r '.authJwtSource' <<< "$result")"
             printf 'auth_issuer_match=%s\n' "$(jq -r '.authIssuerMatch' <<< "$result")"
@@ -317,6 +347,7 @@ jobs:
             printf 'auth_algorithm_match=%s\n' "$(jq -r '.authAlgorithmMatch' <<< "$result")"
             printf 'auth_subject_claim=%s\n' "$auth_subject_claim"
             printf 'auth_subject_sha256=%s\n' "$(jq -r '.authSubjectSha256' <<< "$result")"
+            printf 'auth_user_cleanup=%s\n' "$(jq -r '.authUserCleanup' <<< "$result")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Record staging evidence
@@ -329,6 +360,9 @@ jobs:
           DATABASE_MIGRATION_MAX: ${{ steps.migration.outputs.database_migration_max }}
           DATABASE_MIGRATION_NAME: ${{ steps.migration.outputs.database_migration_name }}
           DATABASE_MIGRATION_CHECKSUM: ${{ steps.migration.outputs.database_migration_checksum }}
+          RELEASE_SMOKE_DB_PRINCIPAL_SHA256: ${{ steps.release-smoke-db.outputs.principal_sha256 }}
+          RELEASE_SMOKE_DB_SESSION_PRINCIPAL_SHA256: ${{ steps.release-smoke-db.outputs.session_principal_sha256 }}
+          RELEASE_SMOKE_TENANT_SHA256: ${{ steps.release-smoke-db.outputs.tenant_sha256 }}
           AUTH_PROVIDER_KEY: ${{ steps.deploy.outputs.auth_provider_key }}
           AUTH_ALGORITHM: ${{ steps.deploy.outputs.auth_algorithm }}
           AUTH_KID: ${{ steps.deploy.outputs.auth_kid }}
@@ -339,6 +373,7 @@ jobs:
           AUTH_ALGORITHM_MATCH: ${{ steps.dlq-admin-smoke.outputs.auth_algorithm_match }}
           AUTH_SUBJECT_CLAIM: ${{ steps.dlq-admin-smoke.outputs.auth_subject_claim }}
           AUTH_SMOKE_SUBJECT_SHA256: ${{ steps.dlq-admin-smoke.outputs.auth_subject_sha256 }}
+          AUTH_USER_CLEANUP: ${{ steps.dlq-admin-smoke.outputs.auth_user_cleanup }}
         run: |
           set -euo pipefail
           mkdir -p evidence
@@ -356,6 +391,11 @@ jobs:
           database_migration_name=${DATABASE_MIGRATION_NAME}
           database_migration_checksum=${DATABASE_MIGRATION_CHECKSUM}
           database_migration_promotion=success
+          release_smoke_db_preflight=success
+          release_smoke_db_principal_sha256=${RELEASE_SMOKE_DB_PRINCIPAL_SHA256}
+          release_smoke_db_session_principal_sha256=${RELEASE_SMOKE_DB_SESSION_PRINCIPAL_SHA256}
+          release_smoke_tenant_sha256=${RELEASE_SMOKE_TENANT_SHA256}
+          release_smoke_rls_bypass=false
           vercel_project_name=${VERCEL_PROJECT_NAME}
           vercel_project_id=${VERCEL_PROJECT_ID}
           vercel_node_version=${VERCEL_NODE_VERSION_EFFECTIVE}
@@ -375,6 +415,7 @@ jobs:
           auth_algorithm_match=${AUTH_ALGORITHM_MATCH}
           auth_subject_claim=${AUTH_SUBJECT_CLAIM}
           auth_smoke_subject_sha256=${AUTH_SMOKE_SUBJECT_SHA256}
+          auth_user_cleanup=${AUTH_USER_CLEANUP}
           dlq_admin_auth_e2e=success
           dlq_tenant_rbac_rls=success
           dlq_message_reprocess=success

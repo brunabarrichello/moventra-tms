@@ -6,7 +6,13 @@ import { BearerJwtAssertionVerifier } from '../../src/http/bearer-jwt-assertion.
 
 const { Client } = pg;
 const deploymentUrl = requiredUrl(process.env.DEPLOYMENT_URL, 'DEPLOYMENT_URL');
-const migrationsDatabaseUrl = requiredText(process.env.MIGRATIONS_DATABASE_URL, 'MIGRATIONS_DATABASE_URL');
+const releaseSmokeDatabaseUrl = requiredText(
+  process.env.RELEASE_SMOKE_DATABASE_URL,
+  'RELEASE_SMOKE_DATABASE_URL',
+);
+const neonApiKey = requiredText(process.env.NEON_API_KEY, 'NEON_API_KEY');
+const neonProjectId = requiredIdentifier(process.env.NEON_PROJECT_ID, 'NEON_PROJECT_ID');
+const neonBranchId = requiredIdentifier(process.env.NEON_STAGING_BRANCH_ID, 'NEON_STAGING_BRANCH_ID');
 const authClientOrigin = requiredOrigin(
   process.env.MOVENTRA_AUTH_CLIENT_ORIGIN || process.env.STAGING_URL,
   'MOVENTRA_AUTH_CLIENT_ORIGIN/STAGING_URL',
@@ -15,8 +21,11 @@ const environment = process.env.MOVENTRA_AUTH_ENVIRONMENT || 'staging';
 if (environment !== 'staging') {
   throw new Error('DLQ Admin release smoke is restricted to staging');
 }
+assertSecurePostgresUrl(releaseSmokeDatabaseUrl);
 
-const authConfig = JSON.parse(await readFile(new URL('../../config/auth/neon-auth.json', import.meta.url), 'utf8'));
+const authConfig = JSON.parse(
+  await readFile(new URL('../../config/auth/neon-auth.json', import.meta.url), 'utf8'),
+);
 const auth = authConfig[environment];
 if (!auth?.baseUrl || !auth?.issuer || !auth?.audience || !auth?.jwksUrl) {
   throw new Error('Staging Neon Auth trust contract is incomplete');
@@ -36,14 +45,19 @@ const authClientInfo = JSON.stringify({
   platform: process.platform,
   arch: process.arch,
 });
-const db = new Client({ connectionString: migrationsDatabaseUrl });
+const db = new Client({ connectionString: releaseSmokeDatabaseUrl });
 let cookies = '';
 let externalSubject = null;
+let authUserId = null;
 let fixture = null;
+let resultPayload = null;
+let primaryError = null;
+let cleanupError = null;
 let authUserCleanup = 'not-attempted';
 
 await db.connect();
 try {
+  const releaseSmokeContext = await resolveReleaseSmokeContext();
   const jwtResult = await createEphemeralJwt();
   const jwt = jwtResult.token;
   const jwtDiagnostic = inspectUntrustedJwtContract(jwt);
@@ -61,19 +75,26 @@ try {
   externalSubject = verified.subject;
   assert.ok(externalSubject);
 
-  fixture = await prepareMoventraFixture({ subject: externalSubject });
+  fixture = await prepareMoventraFixture({
+    subject: externalSubject,
+    tenantId: releaseSmokeContext.tenantId,
+  });
   const correlationBase = `dlq-smoke-${runIdentity}`.slice(0, 96);
   const commonHeaders = {
     authorization: `Bearer ${jwt}`,
     'x-moventra-tenant-id': fixture.tenantId,
   };
 
-  const list = await apiJson(`${deploymentUrl}/api/v1/dlq/entries?status=quarantined&source_kind=message&limit=20`, {
-    headers: { ...commonHeaders, 'x-correlation-id': `${correlationBase}-list` },
-  });
+  const list = await apiJson(
+    `${deploymentUrl}/api/v1/dlq/entries?status=quarantined&source_kind=message&limit=20`,
+    { headers: { ...commonHeaders, 'x-correlation-id': `${correlationBase}-list` } },
+  );
   assert.equal(list.response.status, 200, `DLQ list failed with HTTP ${list.response.status}`);
   assert.ok(Array.isArray(list.body?.items));
-  assert.ok(list.body.items.some((entry) => entry.id === fixture.dlqEntryId), 'staging list must expose the tenant fixture');
+  assert.ok(
+    list.body.items.some((entry) => entry.id === fixture.dlqEntryId),
+    'staging list must expose the tenant fixture',
+  );
 
   const detail = await apiJson(`${deploymentUrl}/api/v1/dlq/entries/${fixture.dlqEntryId}`, {
     headers: { ...commonHeaders, 'x-correlation-id': `${correlationBase}-detail` },
@@ -100,10 +121,17 @@ try {
   assert.equal(first.body?.entry?.resolutionCode, 'message_reprocessed');
   assert.equal(first.body?.result?.kind, 'message');
   assert.equal(first.body?.result?.messageId, fixture.outboxEventId);
-  assert.equal(first.body?.result?.confirmed, true, 'Vercel runtime must receive RabbitMQ publisher confirm');
+  assert.equal(
+    first.body?.result?.confirmed,
+    true,
+    'Vercel runtime must receive RabbitMQ publisher confirm',
+  );
 
   const auditAfterFirst = await countMutationAudit(mutationCorrelation);
-  assert.ok(auditAfterFirst >= 2, 'first governed mutation must produce administrative and business audit evidence');
+  assert.ok(
+    auditAfterFirst >= 2,
+    'first governed mutation must produce administrative and business audit evidence',
+  );
 
   const replay = await apiJson(`${deploymentUrl}/api/v1/dlq/entries/${fixture.dlqEntryId}/reprocess`, {
     method: 'POST',
@@ -119,7 +147,11 @@ try {
   assert.deepEqual(replay.body, first.body, 'idempotent retry must replay the exact stored response');
 
   const auditAfterReplay = await countMutationAudit(mutationCorrelation);
-  assert.equal(auditAfterReplay, auditAfterFirst, 'idempotent retry must not duplicate SUCCESS audit');
+  assert.equal(
+    auditAfterReplay,
+    auditAfterFirst,
+    'idempotent retry must not duplicate SUCCESS audit',
+  );
 
   const persisted = await db.query(
     `SELECT status, resolution_code, reprocess_count, version
@@ -130,9 +162,13 @@ try {
   assert.equal(persisted.rowCount, 1);
   assert.equal(persisted.rows[0].status, 'resolved');
   assert.equal(persisted.rows[0].resolution_code, 'message_reprocessed');
-  assert.equal(Number(persisted.rows[0].reprocess_count), 1, 'idempotent HTTP retry must not acquire a second replay claim');
+  assert.equal(
+    Number(persisted.rows[0].reprocess_count),
+    1,
+    'idempotent HTTP retry must not acquire a second replay claim',
+  );
 
-  process.stdout.write(`${JSON.stringify({
+  resultPayload = {
     status: 'ok',
     environment,
     authProvider: authConfig.providerKey,
@@ -144,6 +180,8 @@ try {
     authSubjectClaim: jwtDiagnostic.subjectClaim,
     authSubjectSha256: sha256(externalSubject),
     authClientOriginSha256: sha256(authClientOrigin),
+    releaseSmokeDbPrincipalSha256: releaseSmokeContext.principalSha256,
+    releaseSmokeTenantSha256: sha256(releaseSmokeContext.tenantId),
     authenticatedList: 'success',
     tenantRbacRlsDetail: 'success',
     governedMessageReprocess: 'success',
@@ -151,20 +189,70 @@ try {
     idempotentReplay: 'success',
     duplicateSuccessAudit: false,
     auditEventsForMutation: auditAfterFirst,
-  })}\n`);
+  };
+} catch (error) {
+  primaryError = error;
 } finally {
   if (fixture) {
-    await cleanupMoventraFixture(fixture).catch((error) => {
+    try {
+      await cleanupMoventraFixture(fixture);
+    } catch (error) {
+      cleanupError ||= error;
       process.stderr.write(`DLQ smoke fixture cleanup failed: ${safeError(error)}\n`);
-    });
+    }
   } else if (externalSubject) {
-    await cleanupExternalIdentity(externalSubject).catch(() => {});
+    try {
+      await cleanupExternalIdentity(externalSubject);
+    } catch (error) {
+      cleanupError ||= error;
+      process.stderr.write(`DLQ smoke external identity cleanup failed: ${safeError(error)}\n`);
+    }
   }
-  if (cookies) {
-    authUserCleanup = await cleanupAuthUser().catch(() => 'unsupported-or-failed');
+
+  if (authUserId) {
+    try {
+      authUserCleanup = await cleanupAuthUserViaNeonControlPlane(authUserId);
+      if (authUserCleanup !== 'success') {
+        cleanupError ||= new Error(`Neon Auth cleanup failed with status ${authUserCleanup}`);
+      }
+    } catch (error) {
+      authUserCleanup = 'failed';
+      cleanupError ||= error;
+    }
   }
+
   await db.end().catch(() => {});
   process.stderr.write(`DLQ smoke auth user cleanup=${authUserCleanup}\n`);
+}
+
+if (primaryError) throw primaryError;
+if (cleanupError) throw cleanupError;
+assert.equal(authUserCleanup, 'success', 'ephemeral Neon Auth user must be deleted by the governed control plane');
+assert.ok(resultPayload, 'DLQ Admin smoke result was not produced');
+resultPayload.authUserCleanup = authUserCleanup;
+process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+
+async function resolveReleaseSmokeContext() {
+  const context = await db.query(`
+    SELECT
+      current_user::text AS principal,
+      security.current_tenant_id()::text AS tenant_id
+  `);
+  assert.equal(context.rowCount, 1);
+  const principal = context.rows[0]?.principal;
+  const tenantId = context.rows[0]?.tenant_id;
+  assert.match(tenantId || '', /^[0-9a-f-]{36}$/i, 'release-smoke tenant context is required');
+
+  const tenant = await db.query(
+    `SELECT code
+       FROM organization.tenants
+      WHERE id = $1`,
+    [tenantId],
+  );
+  assert.equal(tenant.rowCount, 1, 'release-smoke tenant context must resolve an existing tenant');
+  assert.equal(tenant.rows[0].code, 'staging-dlq-smoke');
+
+  return Object.freeze({ tenantId, principalSha256: sha256(principal) });
 }
 
 async function createEphemeralJwt() {
@@ -182,6 +270,8 @@ async function createEphemeralJwt() {
     throw await authHttpError('signup', signup);
   }
 
+  const signupBody = await responseJsonOrNull(signup.clone());
+  authUserId = extractAuthUserId(signupBody) || authUserId;
   cookies = responseCookies(signup.headers);
   if (!cookies) {
     throw new Error('Neon Auth staging signup did not establish a session cookie');
@@ -198,14 +288,21 @@ async function createEphemeralJwt() {
   if (!sessionResponse.ok) {
     throw await authHttpError('session', sessionResponse);
   }
+  const sessionBody = await responseJsonOrNull(sessionResponse.clone());
+  const sessionUserId = extractAuthUserId(sessionBody);
+  if (sessionUserId) {
+    if (authUserId) assert.equal(sessionUserId, authUserId, 'Neon Auth session user must match signup user');
+    authUserId = sessionUserId;
+  }
+  if (!authUserId) {
+    throw new Error('Neon Auth staging session did not expose an auth user id for governed cleanup');
+  }
+
   const sessionHeaderJwt = responseJwt(sessionResponse.headers);
   if (sessionHeaderJwt) {
     emitJwtDiagnostic('session-header', inspectUntrustedJwtContract(sessionHeaderJwt));
   }
 
-  // The release gate deliberately uses one deterministic JWT source. Better Auth's
-  // JWT plugin defines /token as the explicit service-token endpoint; header JWTs
-  // remain diagnostic-only and are never selected for authorization evidence.
   const tokenResponse = await authFetch('/token', {
     headers: { cookie: cookies, accept: 'application/json' },
   });
@@ -235,20 +332,31 @@ async function authHttpError(operation, response) {
   const suffix = [details.code && `code=${details.code}`, details.message && `message=${details.message}`]
     .filter(Boolean)
     .join(' ');
-  return new Error(`Neon Auth staging ${operation} failed with HTTP ${response.status}${suffix ? ` ${suffix}` : ''}`);
+  return new Error(
+    `Neon Auth staging ${operation} failed with HTTP ${response.status}${suffix ? ` ${suffix}` : ''}`,
+  );
 }
 
 async function sanitizedAuthError(response) {
-  let body = null;
-  try {
-    body = await response.clone().json();
-  } catch {
-    body = null;
-  }
+  const body = await responseJsonOrNull(response.clone());
   return {
     code: sanitizeDiagnostic(body?.code, 80),
     message: sanitizeDiagnostic(body?.message, 180),
   };
+}
+
+async function responseJsonOrNull(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function extractAuthUserId(body) {
+  const candidates = [body?.user?.id, body?.data?.user?.id, body?.id];
+  const value = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+  return value ? value.trim() : null;
 }
 
 function sanitizeDiagnostic(value, maxLength) {
@@ -279,43 +387,57 @@ function inspectUntrustedJwtContract(token) {
   } catch {
     throw new Error('Neon Auth staging JWT diagnostic could not decode compact JWT metadata');
   }
-  if (!header || typeof header !== 'object' || Array.isArray(header) || !claims || typeof claims !== 'object' || Array.isArray(claims)) {
+  if (
+    !header ||
+    typeof header !== 'object' ||
+    Array.isArray(header) ||
+    !claims ||
+    typeof claims !== 'object' ||
+    Array.isArray(claims)
+  ) {
     throw new Error('Neon Auth staging JWT diagnostic received invalid JWT metadata');
   }
 
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  const subjectClaim = authConfig.subjectClaims.find((claim) => typeof claims[claim] === 'string' && claims[claim].trim()) || null;
+  const subjectClaim =
+    authConfig.subjectClaims.find(
+      (claim) => typeof claims[claim] === 'string' && claims[claim].trim(),
+    ) || null;
   return Object.freeze({
     issuerMatches: claims.iss === auth.issuer,
     audienceMatches: audiences.includes(auth.audience),
     algorithmMatches: header.alg === authConfig.algorithm,
     subjectClaim,
     issuerSha256: typeof claims.iss === 'string' ? sha256(claims.iss) : null,
-    audienceSha256: audiences.filter((value) => typeof value === 'string').map((value) => sha256(value)),
+    audienceSha256: audiences
+      .filter((value) => typeof value === 'string')
+      .map((value) => sha256(value)),
     kidSha256: typeof header.kid === 'string' && header.kid ? sha256(header.kid) : null,
   });
 }
 
 function emitJwtDiagnostic(source, diagnostic) {
-  process.stderr.write(`DLQ smoke JWT diagnostic=${JSON.stringify({
-    source,
-    issuerMatches: diagnostic.issuerMatches,
-    audienceMatches: diagnostic.audienceMatches,
-    algorithmMatches: diagnostic.algorithmMatches,
-    subjectClaim: diagnostic.subjectClaim,
-    issuerSha256: diagnostic.issuerSha256,
-    audienceSha256: diagnostic.audienceSha256,
-    kidSha256: diagnostic.kidSha256,
-  })}\n`);
+  process.stderr.write(
+    `DLQ smoke JWT diagnostic=${JSON.stringify({
+      source,
+      issuerMatches: diagnostic.issuerMatches,
+      audienceMatches: diagnostic.audienceMatches,
+      algorithmMatches: diagnostic.algorithmMatches,
+      subjectClaim: diagnostic.subjectClaim,
+      issuerSha256: diagnostic.issuerSha256,
+      audienceSha256: diagnostic.audienceSha256,
+      kidSha256: diagnostic.kidSha256,
+    })}\n`,
+  );
 }
 
-async function prepareMoventraFixture({ subject }) {
+async function prepareMoventraFixture({ subject, tenantId }) {
   await db.query('BEGIN');
   try {
     const tenant = await db.query(
       `INSERT INTO organization.tenants (
-         code, display_name, status, default_timezone, default_currency
-       ) VALUES ('staging-dlq-smoke', 'Staging DLQ Smoke', 'ACTIVE', 'UTC', 'USD')
+         id, code, display_name, status, default_timezone, default_currency
+       ) VALUES ($1, 'staging-dlq-smoke', 'Staging DLQ Smoke', 'ACTIVE', 'UTC', 'USD')
        ON CONFLICT (code) DO UPDATE SET
          display_name = EXCLUDED.display_name,
          status = 'ACTIVE',
@@ -324,8 +446,9 @@ async function prepareMoventraFixture({ subject }) {
          updated_at = clock_timestamp(),
          version = organization.tenants.version + 1
        RETURNING id`,
+      [tenantId],
     );
-    const tenantId = tenant.rows[0].id;
+    assert.equal(tenant.rows[0].id, tenantId, 'release-smoke tenant id must remain stable');
 
     const user = await db.query(
       `INSERT INTO identity.users (
@@ -372,7 +495,11 @@ async function prepareMoventraFixture({ subject }) {
           AND status = 'ACTIVE'`,
       [['dlq.read', 'dlq.reprocess']],
     );
-    assert.equal(permissions.rowCount, 2, 'staging permission catalog must contain DLQ read/reprocess');
+    assert.equal(
+      permissions.rowCount,
+      2,
+      'staging permission catalog must contain DLQ read/reprocess',
+    );
     for (const permission of permissions.rows) {
       await db.query(
         `INSERT INTO security.role_permissions (tenant_id, role_id, permission_id)
@@ -506,13 +633,35 @@ async function cleanupExternalIdentity(subject) {
   );
 }
 
-async function cleanupAuthUser() {
-  const response = await authFetch('/delete-user', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', cookie: cookies, accept: 'application/json' },
-    body: JSON.stringify({ password }),
-  });
-  return response.ok ? 'success' : `unsupported-http-${response.status}`;
+async function cleanupAuthUserViaNeonControlPlane(userId) {
+  const endpoint =
+    `https://console.neon.tech/api/v2/projects/${encodeURIComponent(neonProjectId)}` +
+    `/branches/${encodeURIComponent(neonBranchId)}/auth/users/${encodeURIComponent(userId)}`;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'DELETE',
+        headers: {
+          authorization: `Bearer ${neonApiKey}`,
+          accept: 'application/json',
+        },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch (error) {
+      throw new Error(`Neon Auth control-plane cleanup transport failure: ${error?.name || 'Error'}`);
+    }
+
+    if (response.status === 204) return 'success';
+    if ((response.status === 423 || response.status === 503) && attempt < 3) {
+      await delay(250 * 2 ** (attempt - 1));
+      continue;
+    }
+    return `failed-http-${response.status}`;
+  }
+  return 'failed';
 }
 
 async function countMutationAudit(correlationId) {
@@ -547,7 +696,10 @@ async function apiJson(url, options) {
 function responseCookies(headers) {
   const values = typeof headers.getSetCookie === 'function' ? headers.getSetCookie() : [];
   if (values.length > 0) {
-    return values.map((value) => value.split(';', 1)[0]).filter(Boolean).join('; ');
+    return values
+      .map((value) => value.split(';', 1)[0])
+      .filter(Boolean)
+      .join('; ');
   }
   const single = headers.get('set-cookie');
   return single ? single.split(';', 1)[0] : '';
@@ -558,6 +710,14 @@ function requiredText(value, field) {
     throw new Error(`${field} is required`);
   }
   return value.trim();
+}
+
+function requiredIdentifier(value, field) {
+  const candidate = requiredText(value, field);
+  if (!/^[A-Za-z0-9-]{1,128}$/.test(candidate)) {
+    throw new Error(`${field} has an invalid identifier format`);
+  }
+  return candidate;
 }
 
 function requiredUrl(value, field) {
@@ -578,15 +738,29 @@ function requiredOrigin(value, field) {
   return url.origin;
 }
 
+function assertSecurePostgresUrl(value) {
+  const url = new URL(value);
+  if (!['postgres:', 'postgresql:'].includes(url.protocol)) {
+    throw new Error('RELEASE_SMOKE_DATABASE_URL must use postgres/postgresql');
+  }
+  if (url.searchParams.get('sslmode') !== 'verify-full') {
+    throw new Error('RELEASE_SMOKE_DATABASE_URL must explicitly use sslmode=verify-full');
+  }
+}
+
 function safeRunIdentity(value) {
   return String(value).replaceAll(/[^A-Za-z0-9]/g, '').slice(0, 48) || randomUUID().replaceAll('-', '');
 }
 
 function sha256(value) {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
+  return createHash('sha256').update(String(value), 'utf8').digest('hex');
 }
 
 function safeError(error) {
   const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
   return `${code}:${error?.name || 'Error'}`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
