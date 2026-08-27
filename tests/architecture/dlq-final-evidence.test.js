@@ -60,6 +60,16 @@ test('staging release proves authenticated Admin API and Vercel messaging runtim
   assert.match(adminSmoke, /publisher confirm|RabbitMQ publisher confirm/i);
 });
 
+test('Neon Auth staging handshake preserves managed client protocol and sanitized diagnostics', () => {
+  assert.match(adminSmoke, /X-Neon-Client-Info/);
+  assert.match(adminSmoke, /moventra-tms-release-smoke/);
+  assert.match(adminSmoke, /set-auth-jwt/);
+  assert.match(adminSmoke, /\/get-session/);
+  assert.match(adminSmoke, /\/token/);
+  assert.match(adminSmoke, /sanitizeDiagnostic/);
+  assert.match(adminSmoke, /replaceAll\(password, '\[redacted\]'\)/);
+});
+
 test('smoke never imports signing material and stores only a subject hash in evidence', () => {
   assert.doesNotMatch(adminSmoke, /private[_-]?key/i);
   assert.match(adminSmoke, /authSubjectSha256/);
