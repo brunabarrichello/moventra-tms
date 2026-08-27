@@ -293,17 +293,31 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
           MIGRATIONS_DATABASE_URL: ${{ secrets.MIGRATIONS_DATABASE_URL }}
           MOVENTRA_AUTH_ENVIRONMENT: staging
+          MOVENTRA_AUTH_CLIENT_ORIGIN: ${{ env.STAGING_URL }}
         run: |
           set -euo pipefail
           result="$(node scripts/release/smoke-dlq-admin.mjs)"
           printf '%s\n' "$result"
           test "$(jq -r '.status' <<< "$result")" = ok
+          test "$(jq -r '.authJwtSource' <<< "$result")" = token-endpoint
+          test "$(jq -r '.authIssuerMatch' <<< "$result")" = true
+          test "$(jq -r '.authAudienceMatch' <<< "$result")" = true
+          test "$(jq -r '.authAlgorithmMatch' <<< "$result")" = true
+          auth_subject_claim="$(jq -r '.authSubjectClaim // empty' <<< "$result")"
+          test -n "$auth_subject_claim"
           test "$(jq -r '.authenticatedList' <<< "$result")" = success
           test "$(jq -r '.tenantRbacRlsDetail' <<< "$result")" = success
           test "$(jq -r '.governedMessageReprocess' <<< "$result")" = success
           test "$(jq -r '.vercelRuntimeRabbitMqConfirm' <<< "$result")" = success
           test "$(jq -r '.idempotentReplay' <<< "$result")" = success
-          printf 'auth_subject_sha256=%s\n' "$(jq -r '.authSubjectSha256' <<< "$result")" >> "$GITHUB_OUTPUT"
+          {
+            printf 'auth_jwt_source=%s\n' "$(jq -r '.authJwtSource' <<< "$result")"
+            printf 'auth_issuer_match=%s\n' "$(jq -r '.authIssuerMatch' <<< "$result")"
+            printf 'auth_audience_match=%s\n' "$(jq -r '.authAudienceMatch' <<< "$result")"
+            printf 'auth_algorithm_match=%s\n' "$(jq -r '.authAlgorithmMatch' <<< "$result")"
+            printf 'auth_subject_claim=%s\n' "$auth_subject_claim"
+            printf 'auth_subject_sha256=%s\n' "$(jq -r '.authSubjectSha256' <<< "$result")"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Record staging evidence
         env:
@@ -319,6 +333,11 @@ jobs:
           AUTH_ALGORITHM: ${{ steps.deploy.outputs.auth_algorithm }}
           AUTH_KID: ${{ steps.deploy.outputs.auth_kid }}
           AUTH_PUBLIC_KEY_SHA256: ${{ steps.deploy.outputs.auth_public_key_sha256 }}
+          AUTH_JWT_SOURCE: ${{ steps.dlq-admin-smoke.outputs.auth_jwt_source }}
+          AUTH_ISSUER_MATCH: ${{ steps.dlq-admin-smoke.outputs.auth_issuer_match }}
+          AUTH_AUDIENCE_MATCH: ${{ steps.dlq-admin-smoke.outputs.auth_audience_match }}
+          AUTH_ALGORITHM_MATCH: ${{ steps.dlq-admin-smoke.outputs.auth_algorithm_match }}
+          AUTH_SUBJECT_CLAIM: ${{ steps.dlq-admin-smoke.outputs.auth_subject_claim }}
           AUTH_SMOKE_SUBJECT_SHA256: ${{ steps.dlq-admin-smoke.outputs.auth_subject_sha256 }}
         run: |
           set -euo pipefail
@@ -350,6 +369,11 @@ jobs:
           auth_algorithm=${AUTH_ALGORITHM}
           auth_kid=${AUTH_KID}
           auth_public_key_sha256=${AUTH_PUBLIC_KEY_SHA256}
+          auth_jwt_source=${AUTH_JWT_SOURCE}
+          auth_issuer_match=${AUTH_ISSUER_MATCH}
+          auth_audience_match=${AUTH_AUDIENCE_MATCH}
+          auth_algorithm_match=${AUTH_ALGORITHM_MATCH}
+          auth_subject_claim=${AUTH_SUBJECT_CLAIM}
           auth_smoke_subject_sha256=${AUTH_SMOKE_SUBJECT_SHA256}
           dlq_admin_auth_e2e=success
           dlq_tenant_rbac_rls=success
