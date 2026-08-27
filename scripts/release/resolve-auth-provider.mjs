@@ -17,6 +17,7 @@ if (config.algorithm !== 'EdDSA') {
 }
 for (const [name, value] of Object.entries({
   providerKey: config.providerKey,
+  baseUrl: selected.baseUrl,
   issuer: selected.issuer,
   audience: selected.audience,
   jwksUrl: selected.jwksUrl,
@@ -36,12 +37,26 @@ if (
 ) {
   throw new Error('Auth provider subjectClaims must be an ordered unique subset of sub,id beginning with sub');
 }
+
+const baseUrl = strictHttpsUrl(selected.baseUrl, 'Auth provider base URL');
+const issuerUrl = strictHttpsUrl(selected.issuer, 'Auth provider issuer');
+if (issuerUrl.toString().replace(/\/$/, '') !== issuerUrl.origin) {
+  throw new Error('Managed Better Auth JWT issuer must be an HTTPS origin');
+}
 if (selected.issuer !== selected.audience) {
   throw new Error('Managed Better Auth issuer and audience must be identical for this provider contract');
 }
-const jwksUrl = new URL(selected.jwksUrl);
-if (jwksUrl.protocol !== 'https:' || jwksUrl.username || jwksUrl.password || jwksUrl.hash) {
-  throw new Error('Auth provider JWKS URL must be public HTTPS without credentials or fragment');
+if (baseUrl.origin !== issuerUrl.origin) {
+  throw new Error('Managed Better Auth service base URL and JWT issuer must share the same trusted origin');
+}
+if (baseUrl.pathname === '/' || baseUrl.search || baseUrl.hash) {
+  throw new Error('Managed Neon Auth base URL must include its branch/database auth path without query or fragment');
+}
+
+const jwksUrl = strictHttpsUrl(selected.jwksUrl, 'Auth provider JWKS URL');
+const expectedJwksUrl = `${selected.baseUrl.replace(/\/$/, '')}/.well-known/jwks.json`;
+if (jwksUrl.toString().replace(/\/$/, '') !== expectedJwksUrl) {
+  throw new Error('Auth provider JWKS URL must be anchored to the managed Auth base URL');
 }
 
 const response = await fetch(jwksUrl, {
@@ -82,6 +97,7 @@ const publicKeySha256 = createHash('sha256').update(publicKeyDer).digest('hex');
 process.stdout.write(JSON.stringify({
   environment,
   providerKey: config.providerKey,
+  baseUrl: selected.baseUrl,
   issuer: selected.issuer,
   audience: selected.audience,
   algorithm: config.algorithm,
@@ -91,3 +107,16 @@ process.stdout.write(JSON.stringify({
   publicKeyPem,
   publicKeySha256,
 }));
+
+function strictHttpsUrl(value, label) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch (cause) {
+    throw new Error(`${label} is invalid`, { cause });
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
+    throw new Error(`${label} must be public HTTPS without credentials or fragment`);
+  }
+  return url;
+}

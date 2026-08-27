@@ -18,7 +18,7 @@ if (environment !== 'staging') {
 
 const authConfig = JSON.parse(await readFile(new URL('../../config/auth/neon-auth.json', import.meta.url), 'utf8'));
 const auth = authConfig[environment];
-if (!auth?.issuer || !auth?.audience || !auth?.jwksUrl) {
+if (!auth?.baseUrl || !auth?.issuer || !auth?.audience || !auth?.jwksUrl) {
   throw new Error('Staging Neon Auth trust contract is incomplete');
 }
 
@@ -48,6 +48,7 @@ try {
     audience: auth.audience,
     jwksUrl: auth.jwksUrl,
     algorithm: authConfig.algorithm,
+    subjectClaims: authConfig.subjectClaims,
   });
   const verified = await verifier.verifyToken(jwt);
   externalSubject = verified.subject;
@@ -207,7 +208,7 @@ async function authFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set('Origin', authClientOrigin);
   headers.set('X-Neon-Client-Info', authClientInfo);
-  return fetch(`${auth.issuer}${path}`, {
+  return fetch(`${auth.baseUrl}${path}`, {
     ...options,
     headers,
     redirect: 'manual',
