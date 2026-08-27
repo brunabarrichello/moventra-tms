@@ -3,13 +3,15 @@
   "algorithm": "EdDSA",
   "subjectClaims": ["sub", "id"],
   "production": {
-    "issuer": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
-    "audience": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
+    "baseUrl": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
+    "issuer": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech",
+    "audience": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech",
     "jwksUrl": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth/.well-known/jwks.json"
   },
   "staging": {
-    "issuer": "https://ep-falling-shape-ausko3qy.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
-    "audience": "https://ep-falling-shape-ausko3qy.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
+    "baseUrl": "https://ep-falling-shape-ausko3qy.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
+    "issuer": "https://ep-falling-shape-ausko3qy.neonauth.c-10.us-east-1.aws.neon.tech",
+    "audience": "https://ep-falling-shape-ausko3qy.neonauth.c-10.us-east-1.aws.neon.tech",
     "jwksUrl": "https://ep-falling-shape-ausko3qy.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth/.well-known/jwks.json"
   }
 }
