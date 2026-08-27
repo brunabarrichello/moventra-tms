@@ -136,6 +136,7 @@ jobs:
           tests/architecture/dlq-phase.test.js
           tests/architecture/dlq-job-reprocessing.test.js
           tests/architecture/auth-http-boundary.test.js
+          tests/architecture/dlq-final-evidence.test.js
 
       - name: Validate real RabbitMQ DLX to durable PostgreSQL quarantine
         id: integration
