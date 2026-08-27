@@ -53,6 +53,12 @@ for (const environment of ['staging', 'production']) {
         .digest('hex');
       assert.match(pem, /^-----BEGIN PUBLIC KEY-----/);
       assert.match(fingerprint, /^[0-9a-f]{64}$/);
+      process.stdout.write(`MOVENTRA_AUTH_PUBLIC_EVIDENCE=${JSON.stringify({
+        environment,
+        kid: key.kid,
+        publicKeyPem: pem,
+        publicKeySha256: fingerprint,
+      })}\n`);
     }
   });
 }
