@@ -29,6 +29,7 @@ test('dotenv template contains names only and no secret values', async () => {
     'DATABASE_URL=',
     'MIGRATIONS_DATABASE_URL=',
     'MESSAGING_RABBITMQ_URL=',
+    'MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS=',
     'OTEL_TRACES_EXPORTER=',
     'OTEL_METRICS_EXPORTER=',
     'OTEL_SDK_DISABLED=',
@@ -200,6 +201,7 @@ test('master variables matrix covers the governed systems and divergence actions
     'Railway',
     'RabbitMQ',
     'MIGRATIONS_DATABASE_URL',
+    'MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS',
     'MOVENTRA_RELEASE_SHA',
     'OTEL_SDK_DISABLED',
   ]) {

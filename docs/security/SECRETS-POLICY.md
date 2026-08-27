@@ -32,7 +32,7 @@ Aplica-se a GitHub Actions/Environments, Neon/PostgreSQL, Vercel, Railway, Rabbi
 | Secret | senhas, tokens, connection strings com credenciais, client secrets | não | secret store do ambiente |
 | Private key | chaves privadas, certificados PKCS#12/PFX | não | secret store/KMS apropriado |
 | Sensitive config | identificadores internos sensíveis, endpoints privados | não por padrão | secret/secure config store |
-| Public config | IDs de projeto sem privilégio, URLs públicas, issuer/audience/JWKS públicos | sim, quando necessário | vars/config |
+| Public config | IDs de projeto sem privilégio, URLs públicas, issuer/audience/JWKS públicos, algoritmo e ordem de subject claims JWT | sim, quando necessário | vars/config |
 | Public key | chave pública de validação/assinatura | sim, quando não contiver material privado | config ou fonte pública governada |
 | Ephemeral credential | `GITHUB_TOKEN` emitido por job | não persistir | plataforma emissora |
 
@@ -89,7 +89,8 @@ Vercel mantém apenas secrets/configurações necessárias ao runtime das Functi
 - `MESSAGING_RABBITMQ_URL`: secret do broker;
 - `MESSAGING_PROVIDER`: configuração não secreta, explicitamente `rabbitmq` em Staging/Production governados;
 - `MOVENTRA_ENV`: configuração não secreta de ambiente;
-- `MOVENTRA_AUTH_PROVIDER_KEY`, `MOVENTRA_AUTH_JWT_ISSUER`, `MOVENTRA_AUTH_JWT_AUDIENCE`, `MOVENTRA_AUTH_JWT_ALGORITHM`, `MOVENTRA_AUTH_JWT_JWKS_URL`: trust material público/configuracional;
+- `MOVENTRA_AUTH_PROVIDER_KEY`, `MOVENTRA_AUTH_JWT_ISSUER`, `MOVENTRA_AUTH_JWT_AUDIENCE`, `MOVENTRA_AUTH_JWT_ALGORITHM`, `MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS`, `MOVENTRA_AUTH_JWT_JWKS_URL`: trust material público/configuracional;
+- `MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS`: lista ordenada não secreta de claims aceitas para resolução do subject; contrato atual `sub,id`; deve ser sincronizada e validada de forma explícita e fail-closed;
 - `MOVENTRA_AUTH_JWT_PUBLIC_KEY_PEM`: snapshot de chave **pública**; nunca deve conter chave privada;
 - `MIGRATIONS_DATABASE_URL`: proibida no runtime Vercel da aplicação.
 
@@ -165,6 +166,7 @@ Controles mínimos:
 - distinção formal entre `secrets` e `vars`;
 - `DATABASE_URL` e `MIGRATIONS_DATABASE_URL` segregadas;
 - nenhum `VERCEL_STAGING_PROJECT_ID` estático requerido pelo release de Staging;
+- trust material JWT público, incluindo `MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS`, sincronizado sem chave privada e coerente com a Matriz Mestre;
 - revisão periódica de acessos e rotação;
 - inventário lógico sincronizado com `docs/governance/VARIABLES-MATRIX.md` e `.env.example`.
 

@@ -100,6 +100,7 @@ Ela complementa:
 | Vercel | staging | `MOVENTRA_AUTH_JWT_ISSUER` | public URL | Neon Auth Staging issuer | não | config canônica → release sync | JWT validation | ✅ OK por contrato | gate autenticado deve permanecer verde | manter smoke |
 | Vercel | production/staging | `MOVENTRA_AUTH_JWT_AUDIENCE` | public URL | igual ao issuer no adapter atual | não | config canônica → release sync | JWT validation | ✅ OK | nenhuma estrutural | manter provider-neutral no boundary |
 | Vercel | production/staging | `MOVENTRA_AUTH_JWT_ALGORITHM` | enum | `EdDSA` | não | config canônica → release sync | JWT validation | ✅ OK | nenhuma | manter allowlist estrita |
+| Vercel | production/staging | `MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS` | lista ordenada/string | `sub,id` | não | `config/auth/neon-auth.json` → release sync | resolução de subject no bearer JWT boundary e release smoke | ✅ OK após correção | era consumida/sincronizada pelo runtime, mas faltava no `.env.example` e nesta matriz; smoke local também não propagava o contrato | manter ordem canônica `sub,id`, allowlist explícita e fail-closed |
 | Vercel | production/staging | `MOVENTRA_AUTH_JWT_PUBLIC_KEY_PEM` | public key | snapshot PEM público | não | JWKS → release sync | JWT fallback/trust | ✅ OK | nunca pode conter private key | manter validação anti-private-key |
 | Vercel | production/staging | `MOVENTRA_AUTH_JWT_JWKS_URL` | public HTTPS URL | endpoint Neon Auth do ambiente | não | config canônica → release sync | JWT validation/rotation | ✅ OK | nenhuma | manter HTTPS e rotação por `kid` |
 
@@ -242,6 +243,7 @@ Estas variáveis podem existir no processo, mas **não pertencem ao contrato de 
 | P1 | `MIGRATIONS_DATABASE_URL` usado pelos workflows, mas ausente do `.env.example` | nome canônico = `MIGRATIONS_DATABASE_URL` | corrigido |
 | P1 | política mencionava nomenclatura de migration divergente | usar exclusivamente `MIGRATIONS_DATABASE_URL` | corrigido |
 | P1 | OTEL `service.version` do Worker não priorizava `MOVENTRA_RELEASE_SHA` | prioridade: `MOVENTRA_RELEASE_SHA` → `APP_VERSION` → `VERCEL_GIT_COMMIT_SHA` → `development` | corrigido em código + teste |
+| P1 | `MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS` já era consumida/sincronizada, mas estava ausente do `.env.example` e da Matriz; o smoke local não propagava a ordem canônica | contrato canônico = `sub,id`; smoke deve usar a mesma ordem e fonte JWT determinística | corrigido no forward-fix do Release Gate #99 |
 | P2 | `.env.example` documentava default `MESSAGING_PROVIDER=rabbitmq`, mas código default é `disabled` | default seguro = `disabled`; Staging/Production explicitam `rabbitmq` | corrigido |
 | P2 | `VERCEL_STAGING_PROJECT_ID` ainda aparecia no contrato de env | Staging resolve projeto pelo nome canônico | removido do contrato ativo |
 | P2 | `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER`, `OTEL_SDK_DISABLED` eram consumidos pelo código sem constar no template | declarar nomes no `.env.example`, sempre vazios | corrigido |
