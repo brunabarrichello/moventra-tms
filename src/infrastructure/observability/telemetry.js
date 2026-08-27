@@ -185,7 +185,10 @@ function signalEndpoint(endpoint, signal) {
 }
 
 function runtimeVersion(environment) {
-  return environment.APP_VERSION?.trim() || environment.VERCEL_GIT_COMMIT_SHA?.trim() || 'development';
+  return environment.MOVENTRA_RELEASE_SHA?.trim()
+    || environment.APP_VERSION?.trim()
+    || environment.VERCEL_GIT_COMMIT_SHA?.trim()
+    || 'development';
 }
 
 function runtimeEnvironment(environment) {
