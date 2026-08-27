@@ -17,7 +17,7 @@ function rsaFixture() {
     publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
     clock: () => now,
   });
-  return { privateKey, issuer, audience, now, verifier };
+  return { privateKey, publicKey, issuer, audience, now, verifier };
 }
 
 function jwt(privateKey, claims, header = { alg: 'RS256', typ: 'JWT' }, digest = 'RSA-SHA256') {
@@ -43,6 +43,52 @@ test('JWT bearer verifies static PEM signature and returns only trusted external
   assert.deepEqual(await verifier.verifyRequest({ headers: { authorization: `Bearer ${token}` } }), {
     providerKey: 'test-idp', issuer, subject: 'operator-123',
   });
+});
+
+test('Neon Auth accepts its stable Better Auth user id when standard sub is absent', async () => {
+  const { privateKey, publicKey, issuer, audience, now } = rsaFixture();
+  const verifier = new BearerJwtAssertionVerifier({
+    providerKey: 'neon-auth', issuer, audience,
+    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
+    clock: () => now,
+  });
+  const token = jwt(privateKey, {
+    iss: issuer,
+    aud: audience,
+    id: '9af9cc59-b187-4975-9284-7e8856a2cdee',
+    email: 'must-not-be-used-as-subject@example.test',
+    exp: now + 300,
+  });
+
+  assert.deepEqual(await verifier.verifyToken(token), {
+    providerKey: 'neon-auth',
+    issuer,
+    subject: '9af9cc59-b187-4975-9284-7e8856a2cdee',
+  });
+});
+
+test('Neon Auth prefers standard sub over provider-specific id when both are present', async () => {
+  const { privateKey, publicKey, issuer, audience, now } = rsaFixture();
+  const verifier = new BearerJwtAssertionVerifier({
+    providerKey: 'neon-auth', issuer, audience,
+    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
+    clock: () => now,
+  });
+  const token = jwt(privateKey, {
+    iss: issuer,
+    aud: audience,
+    sub: 'standard-subject',
+    id: 'provider-id',
+    exp: now + 300,
+  });
+
+  assert.equal((await verifier.verifyToken(token)).subject, 'standard-subject');
+});
+
+test('non-Neon providers fail closed when sub is absent even if an id claim exists', async () => {
+  const { privateKey, issuer, audience, now, verifier } = rsaFixture();
+  const token = jwt(privateKey, { iss: issuer, aud: audience, id: 'provider-id', exp: now + 300 });
+  await assert.rejects(verifier.verifyToken(token), (error) => error.category === 'AUTHENTICATION');
 });
 
 test('JWT bearer rejects forged, expired and wrong-audience tokens', async () => {
