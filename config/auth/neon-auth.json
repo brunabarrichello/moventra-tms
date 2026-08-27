@@ -1,6 +1,7 @@
 {
   "providerKey": "neon-auth",
   "algorithm": "EdDSA",
+  "subjectClaims": ["sub", "id"],
   "production": {
     "issuer": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",
     "audience": "https://ep-steep-star-aup99qwb.neonauth.c-10.us-east-1.aws.neon.tech/neondb/auth",

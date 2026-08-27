@@ -14,7 +14,8 @@ const runtimeAndRelease = [verifier, handler, config, resolver, sync, deploy].jo
 test('HTTP auth boundary accepts only a cryptographically verified provider tuple', () => {
   assert.match(verifier, /providerKey: this\.providerKey/);
   assert.match(verifier, /issuer: this\.issuer/);
-  assert.match(verifier, /subject: claims\.sub\.trim\(\)/);
+  assert.match(verifier, /subjectClaims: this\.subjectClaims/);
+  assert.match(verifier, /subject,/);
   assert.match(verifier, /verifyJwtSignature/);
   assert.match(verifier, /validateClaims/);
   assert.match(handler, /await assertionVerifier\.verifyRequest\(request\)/);
@@ -39,7 +40,10 @@ test('managed IdP is an adapter configuration, while verification code remains p
   assert.doesNotMatch(verifier, /Neon|Better Auth|Auth0|Clerk|Okta/i);
   assert.doesNotMatch(handler, /Neon|Better Auth|Auth0|Clerk|Okta/i);
   assert.match(config, /"providerKey": "neon-auth"/);
+  assert.match(config, /"subjectClaims": \["sub", "id"\]/);
+  assert.match(resolver, /subjectClaims: config\.subjectClaims/);
   assert.match(sync, /MOVENTRA_AUTH_PROVIDER_KEY/);
+  assert.match(sync, /MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS/);
   assert.match(sync, /MOVENTRA_AUTH_JWT_PUBLIC_KEY_PEM/);
   assert.match(sync, /MOVENTRA_AUTH_JWT_JWKS_URL/);
   assert.match(deploy, /sync-auth-env-to-vercel\.sh/);

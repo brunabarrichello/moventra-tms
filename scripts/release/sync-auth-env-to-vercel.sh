@@ -28,6 +28,7 @@ provider_key="$(jq -r '.providerKey' <<< "$auth_json")"
 issuer="$(jq -r '.issuer' <<< "$auth_json")"
 audience="$(jq -r '.audience' <<< "$auth_json")"
 algorithm="$(jq -r '.algorithm' <<< "$auth_json")"
+subject_claims="$(jq -r '.subjectClaims | join(",")' <<< "$auth_json")"
 jwks_url="$(jq -r '.jwksUrl' <<< "$auth_json")"
 public_key_pem="$(jq -r '.publicKeyPem' <<< "$auth_json")"
 kid="$(jq -r '.kid' <<< "$auth_json")"
@@ -37,6 +38,7 @@ upsert MOVENTRA_AUTH_PROVIDER_KEY "$provider_key"
 upsert MOVENTRA_AUTH_JWT_ISSUER "$issuer"
 upsert MOVENTRA_AUTH_JWT_AUDIENCE "$audience"
 upsert MOVENTRA_AUTH_JWT_ALGORITHM "$algorithm"
+upsert MOVENTRA_AUTH_JWT_SUBJECT_CLAIMS "$subject_claims"
 upsert MOVENTRA_AUTH_JWT_PUBLIC_KEY_PEM "$public_key_pem"
 upsert MOVENTRA_AUTH_JWT_JWKS_URL "$jwks_url"
 
@@ -45,6 +47,7 @@ provider_key=${provider_key}
 issuer=${issuer}
 audience=${audience}
 algorithm=${algorithm}
+subject_claims=${subject_claims}
 jwks_url=${jwks_url}
 kid=${kid}
 public_key_sha256=${public_key_sha256}

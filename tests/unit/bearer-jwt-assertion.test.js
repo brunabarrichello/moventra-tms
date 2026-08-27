@@ -17,7 +17,7 @@ function rsaFixture() {
     publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
     clock: () => now,
   });
-  return { privateKey, issuer, audience, now, verifier };
+  return { privateKey, publicKey, issuer, audience, now, verifier };
 }
 
 function jwt(privateKey, claims, header = { alg: 'RS256', typ: 'JWT' }, digest = 'RSA-SHA256') {
@@ -43,6 +43,65 @@ test('JWT bearer verifies static PEM signature and returns only trusted external
   assert.deepEqual(await verifier.verifyRequest({ headers: { authorization: `Bearer ${token}` } }), {
     providerKey: 'test-idp', issuer, subject: 'operator-123',
   });
+});
+
+test('configured subject fallback accepts stable provider user id when standard sub is absent', async () => {
+  const { privateKey, publicKey, issuer, audience, now } = rsaFixture();
+  const verifier = new BearerJwtAssertionVerifier({
+    providerKey: 'managed-auth', issuer, audience,
+    subjectClaims: ['sub', 'id'],
+    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
+    clock: () => now,
+  });
+  const token = jwt(privateKey, {
+    iss: issuer,
+    aud: audience,
+    id: '9af9cc59-b187-4975-9284-7e8856a2cdee',
+    email: 'must-not-be-used-as-subject@example.test',
+    exp: now + 300,
+  });
+
+  assert.deepEqual(await verifier.verifyToken(token), {
+    providerKey: 'managed-auth',
+    issuer,
+    subject: '9af9cc59-b187-4975-9284-7e8856a2cdee',
+  });
+});
+
+test('configured subject claim order prefers standard sub over id when both are present', async () => {
+  const { privateKey, publicKey, issuer, audience, now } = rsaFixture();
+  const verifier = new BearerJwtAssertionVerifier({
+    providerKey: 'managed-auth', issuer, audience,
+    subjectClaims: 'sub,id',
+    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
+    clock: () => now,
+  });
+  const token = jwt(privateKey, {
+    iss: issuer,
+    aud: audience,
+    sub: 'standard-subject',
+    id: 'provider-id',
+    exp: now + 300,
+  });
+
+  assert.equal((await verifier.verifyToken(token)).subject, 'standard-subject');
+});
+
+test('default subject contract fails closed when sub is absent even if id exists', async () => {
+  const { privateKey, issuer, audience, now, verifier } = rsaFixture();
+  const token = jwt(privateKey, { iss: issuer, aud: audience, id: 'provider-id', exp: now + 300 });
+  await assert.rejects(verifier.verifyToken(token), (error) => error.category === 'AUTHENTICATION');
+});
+
+test('subject claim configuration rejects nonstandard precedence and unsafe claim names', () => {
+  const { publicKey, issuer, audience } = rsaFixture();
+  const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' });
+  assert.throws(() => new BearerJwtAssertionVerifier({
+    providerKey: 'managed-auth', issuer, audience, publicKeyPem, subjectClaims: ['id'],
+  }), /beginning with sub/);
+  assert.throws(() => new BearerJwtAssertionVerifier({
+    providerKey: 'managed-auth', issuer, audience, publicKeyPem, subjectClaims: ['sub', 'email'],
+  }), /subset of sub,id/);
 });
 
 test('JWT bearer rejects forged, expired and wrong-audience tokens', async () => {
