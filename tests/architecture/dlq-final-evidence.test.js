@@ -60,7 +60,7 @@ test('staging release proves authenticated Admin API and Vercel messaging runtim
   assert.match(adminSmoke, /publisher confirm|RabbitMQ publisher confirm/i);
 });
 
-test('Neon Auth staging handshake preserves managed client protocol, explicit origin and sanitized diagnostics', () => {
+test('Neon Auth staging handshake uses one deterministic service JWT source and the canonical subject contract', () => {
   assert.match(adminSmoke, /X-Neon-Client-Info/);
   assert.match(adminSmoke, /moventra-tms-release-smoke/);
   assert.match(adminSmoke, /MOVENTRA_AUTH_CLIENT_ORIGIN/);
@@ -71,8 +71,22 @@ test('Neon Auth staging handshake preserves managed client protocol, explicit or
   assert.match(adminSmoke, /set-auth-jwt/);
   assert.match(adminSmoke, /\/get-session/);
   assert.match(adminSmoke, /\/token/);
+  assert.match(adminSmoke, /source: 'token-endpoint'/);
+  assert.match(adminSmoke, /subjectClaims: authConfig\.subjectClaims/);
+  assert.doesNotMatch(adminSmoke, /return signupJwt|return sessionJwt/);
   assert.match(adminSmoke, /sanitizeDiagnostic/);
   assert.match(adminSmoke, /replaceAll\(password, '\[redacted\]'\)/);
+});
+
+test('JWT diagnostics remain non-authoritative and expose only contract comparisons or hashes', () => {
+  assert.match(adminSmoke, /inspectUntrustedJwtContract/);
+  assert.match(adminSmoke, /issuerMatches/);
+  assert.match(adminSmoke, /audienceMatches/);
+  assert.match(adminSmoke, /algorithmMatches/);
+  assert.match(adminSmoke, /issuerSha256/);
+  assert.match(adminSmoke, /audienceSha256/);
+  assert.match(adminSmoke, /kidSha256/);
+  assert.doesNotMatch(adminSmoke, /console\.log\([^\n]*jwt|process\.stdout\.write\([^\n]*token/i);
 });
 
 test('smoke never imports signing material and stores only hashes for identity/origin evidence', () => {
