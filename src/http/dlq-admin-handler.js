@@ -35,7 +35,7 @@ export function createDlqAdminHttpHandler({ service, assertionVerifier }) {
             throw new MethodNotAllowedError({ message: `Method ${method} is not allowed on this DLQ route` });
           }
           const tenantId = requireHeader(request, 'x-moventra-tenant-id', 'Tenant header is required');
-          const verifiedAssertion = assertionVerifier.verifyRequest(request);
+          const verifiedAssertion = await assertionVerifier.verifyRequest(request);
           const context = getRequestContext();
           const common = {
             tenantId,
