@@ -21,6 +21,9 @@ const auth = authConfig[environment];
 if (!auth?.issuer || !auth?.audience || !auth?.jwksUrl) {
   throw new Error('Staging Neon Auth trust contract is incomplete');
 }
+if (!Array.isArray(authConfig.subjectClaims) || authConfig.subjectClaims.length < 1) {
+  throw new Error('Staging Neon Auth subject claim contract is incomplete');
+}
 
 const runIdentity = safeRunIdentity(process.env.GITHUB_RUN_ID || randomUUID());
 const email = `moventra-dlq-smoke-${runIdentity}@example.com`;
@@ -41,13 +44,18 @@ let authUserCleanup = 'not-attempted';
 
 await db.connect();
 try {
-  const jwt = await createEphemeralJwt();
+  const jwtResult = await createEphemeralJwt();
+  const jwt = jwtResult.token;
+  const jwtDiagnostic = inspectUntrustedJwtContract(jwt);
+  emitJwtDiagnostic(jwtResult.source, jwtDiagnostic);
+
   const verifier = new BearerJwtAssertionVerifier({
     providerKey: authConfig.providerKey,
     issuer: auth.issuer,
     audience: auth.audience,
     jwksUrl: auth.jwksUrl,
     algorithm: authConfig.algorithm,
+    subjectClaims: authConfig.subjectClaims,
   });
   const verified = await verifier.verifyToken(jwt);
   externalSubject = verified.subject;
@@ -129,6 +137,11 @@ try {
     environment,
     authProvider: authConfig.providerKey,
     authAlgorithm: authConfig.algorithm,
+    authJwtSource: jwtResult.source,
+    authIssuerMatch: jwtDiagnostic.issuerMatches,
+    authAudienceMatch: jwtDiagnostic.audienceMatches,
+    authAlgorithmMatch: jwtDiagnostic.algorithmMatches,
+    authSubjectClaim: jwtDiagnostic.subjectClaim,
     authSubjectSha256: sha256(externalSubject),
     authClientOriginSha256: sha256(authClientOrigin),
     authenticatedList: 'success',
@@ -174,9 +187,9 @@ async function createEphemeralJwt() {
     throw new Error('Neon Auth staging signup did not establish a session cookie');
   }
 
-  const signupJwt = responseJwt(signup.headers);
-  if (signupJwt) {
-    return signupJwt;
+  const signupHeaderJwt = responseJwt(signup.headers);
+  if (signupHeaderJwt) {
+    emitJwtDiagnostic('signup-header', inspectUntrustedJwtContract(signupHeaderJwt));
   }
 
   const sessionResponse = await authFetch('/get-session', {
@@ -185,11 +198,14 @@ async function createEphemeralJwt() {
   if (!sessionResponse.ok) {
     throw await authHttpError('session', sessionResponse);
   }
-  const sessionJwt = responseJwt(sessionResponse.headers);
-  if (sessionJwt) {
-    return sessionJwt;
+  const sessionHeaderJwt = responseJwt(sessionResponse.headers);
+  if (sessionHeaderJwt) {
+    emitJwtDiagnostic('session-header', inspectUntrustedJwtContract(sessionHeaderJwt));
   }
 
+  // The release gate deliberately uses one deterministic JWT source. Better Auth's
+  // JWT plugin defines /token as the explicit service-token endpoint; header JWTs
+  // remain diagnostic-only and are never selected for authorization evidence.
   const tokenResponse = await authFetch('/token', {
     headers: { cookie: cookies, accept: 'application/json' },
   });
@@ -200,7 +216,7 @@ async function createEphemeralJwt() {
   if (!isJwt(body?.token)) {
     throw new Error('Neon Auth staging JWT endpoint returned an invalid token contract');
   }
-  return body.token;
+  return { token: body.token, source: 'token-endpoint' };
 }
 
 async function authFetch(path, options = {}) {
@@ -251,6 +267,46 @@ function responseJwt(headers) {
 
 function isJwt(value) {
   return typeof value === 'string' && value.split('.').length === 3;
+}
+
+function inspectUntrustedJwtContract(token) {
+  const [headerPart, claimsPart] = token.split('.');
+  let header;
+  let claims;
+  try {
+    header = JSON.parse(Buffer.from(headerPart, 'base64url').toString('utf8'));
+    claims = JSON.parse(Buffer.from(claimsPart, 'base64url').toString('utf8'));
+  } catch {
+    throw new Error('Neon Auth staging JWT diagnostic could not decode compact JWT metadata');
+  }
+  if (!header || typeof header !== 'object' || Array.isArray(header) || !claims || typeof claims !== 'object' || Array.isArray(claims)) {
+    throw new Error('Neon Auth staging JWT diagnostic received invalid JWT metadata');
+  }
+
+  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  const subjectClaim = authConfig.subjectClaims.find((claim) => typeof claims[claim] === 'string' && claims[claim].trim()) || null;
+  return Object.freeze({
+    issuerMatches: claims.iss === auth.issuer,
+    audienceMatches: audiences.includes(auth.audience),
+    algorithmMatches: header.alg === authConfig.algorithm,
+    subjectClaim,
+    issuerSha256: typeof claims.iss === 'string' ? sha256(claims.iss) : null,
+    audienceSha256: audiences.filter((value) => typeof value === 'string').map((value) => sha256(value)),
+    kidSha256: typeof header.kid === 'string' && header.kid ? sha256(header.kid) : null,
+  });
+}
+
+function emitJwtDiagnostic(source, diagnostic) {
+  process.stderr.write(`DLQ smoke JWT diagnostic=${JSON.stringify({
+    source,
+    issuerMatches: diagnostic.issuerMatches,
+    audienceMatches: diagnostic.audienceMatches,
+    algorithmMatches: diagnostic.algorithmMatches,
+    subjectClaim: diagnostic.subjectClaim,
+    issuerSha256: diagnostic.issuerSha256,
+    audienceSha256: diagnostic.audienceSha256,
+    kidSha256: diagnostic.kidSha256,
+  })}\n`);
 }
 
 async function prepareMoventraFixture({ subject }) {
